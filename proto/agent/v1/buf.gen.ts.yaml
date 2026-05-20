@@ -1,16 +1,7 @@
 ﻿version: v2
 plugins:
-  # Node.js IO 层 (B 层)
-  - remote: buf.build/connectrpc/es
-    out: ../../nodejs-io/src/gen
-    opt:
-      - target=ts
-  - remote: buf.build/connectrpc/connect-es
-    out: ../../nodejs-io/src/gen
-    opt:
-      - target=ts
-  # 前端 (C 层) — 仅消费 WS 事件类型定义, 使用 @connectrpc/connect-web
-  - remote: buf.build/connectrpc/es
-    out: ../../frontend/src/gen
+  # Node.js IO 层 (B 层) — protoc-gen-es v2 同时生成消息类型和 Service 定义
+  - local: [node, nodejs-io/node_modules/@bufbuild/protoc-gen-es/bin/protoc-gen-es]
+    out: nodejs-io/src/gen
     opt:
       - target=ts
