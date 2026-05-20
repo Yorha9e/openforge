@@ -1,0 +1,22 @@
+# enterprise.yaml — multi-region K8s, large enterprise
+profile: enterprise
+security_tier: regulated
+
+secret_store: vault-ha
+container_runtime: k8s-pod
+object_store: minio-cluster
+task_queue: redis-cluster-streams
+event_bus: redis-cluster-pubsub
+cache: redis-cluster
+telemetry: otel-collector
+service_registry: k8s-service
+disaster_recovery: multi-region
+load_balancer: k8s-ingress
+notifier: multi-channel
+
+database:
+  host: of-pg-primary.internal
+  port: 5432
+  user: openforge
+  dbname: openforge
+  sslmode: require

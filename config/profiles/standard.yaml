@@ -1,0 +1,22 @@
+# standard.yaml — single-AZ K8s, 50-200 person team
+profile: standard
+security_tier: prod
+
+secret_store: vault-sidecar
+container_runtime: docker-api
+object_store: minio-single
+task_queue: redis-streams
+event_bus: redis-pubsub
+cache: redis-single
+telemetry: prometheus
+service_registry: dns-srv
+disaster_recovery: pg-standby
+load_balancer: nginx
+notifier: feishu-webhook
+
+database:
+  host: of-pg-primary.internal
+  port: 5432
+  user: openforge
+  dbname: openforge
+  sslmode: require

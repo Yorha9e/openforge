@@ -1,0 +1,31 @@
+# minimal.yaml — single-machine dev / small team (<10 people)
+profile: minimal
+security_tier: dev
+
+secret_store: envfile
+container_runtime: docker
+object_store: localfs
+task_queue: pg-skip-locked
+event_bus: goroutine-chan
+cache: memory
+telemetry: stdout
+service_registry: static
+disaster_recovery: local-backup
+load_balancer: none
+notifier: stdout
+
+database:
+  host: localhost
+  port: 5432
+  user: openforge
+  password: openforge_dev
+  dbname: openforge
+  sslmode: disable
+
+llm:
+  default_provider: anthropic
+  default_model: claude-sonnet-4-6
+
+grpc:
+  nodejs_io_addr: localhost:50051
+  coordinator_addr: localhost:50052
