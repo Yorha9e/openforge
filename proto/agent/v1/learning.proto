@@ -1,0 +1,226 @@
+﻿syntax = "proto3";
+
+package agent.v1;
+
+option go_package = "openforge/proto/agent/v1;agentv1";
+
+// ============================================================
+// Learning Engine Service — Go 协调层 → Node.js Learning Engine
+// ============================================================
+
+service LearningEngineService {
+  // 知识回写
+  rpc WriteKnowledge(WriteKnowledgeRequest) returns (WriteKnowledgeResponse);
+
+  // 知识查询
+  rpc QueryKnowledge(QueryKnowledgeRequest) returns (QueryKnowledgeResponse);
+
+  // 偏好更新 (L2 反馈闭环)
+  rpc UpdatePreferences(UpdatePreferencesRequest) returns (UpdatePreferencesResponse);
+
+  // 轨迹记录 (L3 轨迹学习)
+  rpc RecordTrajectory(RecordTrajectoryRequest) returns (RecordTrajectoryResponse);
+
+  // 嵌入匹配 (L4)
+  rpc MatchTrajectory(MatchTrajectoryRequest) returns (MatchTrajectoryResponse);
+
+  // 快照管理
+  rpc CreateSnapshot(CreateSnapshotRequest) returns (CreateSnapshotResponse);
+  rpc RollbackSnapshot(RollbackSnapshotRequest) returns (RollbackSnapshotResponse);
+  rpc ListSnapshots(ListSnapshotsRequest) returns (ListSnapshotsResponse);
+
+  // A/B 实验
+  rpc CreateExperiment(CreateExperimentRequest) returns (CreateExperimentResponse);
+  rpc AssignCohort(AssignCohortRequest) returns (AssignCohortResponse);
+  rpc CompleteExperiment(CompleteExperimentRequest) returns (CompleteExperimentResponse);
+}
+
+// -----------------------------------------------------------
+// Knowledge Write
+// -----------------------------------------------------------
+
+message WriteKnowledgeRequest {
+  string project_id = 1;
+  string pipeline_id = 2;
+  KnowledgeEntry entry = 3;
+}
+
+message KnowledgeEntry {
+  string type = 1;                           // "preference" | "pattern" | "anti_pattern" | "module_map"
+  string category = 2;                       // "code_style" | "architecture" | "testing" | "dependency"
+  string description = 3;
+  double confidence = 4;                     // 0.0 - 1.0
+  bytes data = 5;                            // structured payload
+  string source = 6;                         // "pipeline_review" | "ab_experiment" | "manual"
+}
+
+message WriteKnowledgeResponse {
+  bool success = 1;
+  string knowledge_id = 2;
+  bool created_ab_experiment = 3;            // 是否需要 A/B 验证
+}
+
+// -----------------------------------------------------------
+// Knowledge Query
+// -----------------------------------------------------------
+
+message QueryKnowledgeRequest {
+  string project_id = 1;
+  string query = 2;
+  int32 top_k = 3;
+  repeated string categories = 4;
+  bool exclude_untrusted = 5;                // true = 仅返回 trusted + 已验证
+}
+
+message QueryKnowledgeResponse {
+  repeated KnowledgeMatch matches = 1;
+}
+
+message KnowledgeMatch {
+  KnowledgeEntry entry = 1;
+  double similarity_score = 2;
+  string knowledge_id = 3;
+  string trust_level = 4;                    // "trusted" | "verified" | "experimental" | "discarded"
+}
+
+// -----------------------------------------------------------
+// Preferences (L2)
+// -----------------------------------------------------------
+
+message UpdatePreferencesRequest {
+  string project_id = 1;
+  string pipeline_id = 2;
+  repeated PreferenceDelta deltas = 3;
+}
+
+message PreferenceDelta {
+  string key = 1;                            // "auth_validation" | "error_handling" | "naming"
+  string value = 2;                          // "zod" | "try-catch" | "camelCase"
+  double weight_delta = 3;                   // +3 or -2
+  string reason = 4;                         // "code_review_feedback" | "auto_detected"
+}
+
+message UpdatePreferencesResponse {
+  bool success = 1;
+  int32 total_preferences = 2;
+}
+
+// -----------------------------------------------------------
+// Trajectory (L3)
+// -----------------------------------------------------------
+
+message RecordTrajectoryRequest {
+  string project_id = 1;
+  string pipeline_id = 2;
+  Trajectory trajectory = 3;
+}
+
+message Trajectory {
+  repeated string stage_sequence = 1;
+  int32 total_chat_rounds = 2;
+  int64 total_tokens = 3;
+  int32 backtrack_count = 4;
+  int32 rejection_count = 5;
+  repeated string failure_codes = 6;
+  repeated string successful_patterns = 7;
+  bytes embedding = 8;                       // 轨迹嵌入向量
+}
+
+message RecordTrajectoryResponse {
+  bool success = 1;
+}
+
+message MatchTrajectoryRequest {
+  string project_id = 1;
+  string current_requirement = 2;
+  int32 top_k = 3;
+}
+
+message MatchTrajectoryResponse {
+  repeated TrajectoryMatch matches = 1;
+}
+
+message TrajectoryMatch {
+  Trajectory trajectory = 1;
+  double similarity_score = 2;
+  string pipeline_id = 3;
+  string requirement_summary = 4;
+}
+
+// -----------------------------------------------------------
+// Snapshots
+// -----------------------------------------------------------
+
+message CreateSnapshotRequest {
+  string project_id = 1;
+  string description = 2;
+  string triggered_by = 3;                   // "auto_weekly" | "manual" | "pre_migration"
+}
+
+message CreateSnapshotResponse {
+  bool success = 1;
+  int32 version = 2;
+  string signature = 3;                      // Ed25519
+}
+
+message RollbackSnapshotRequest {
+  string project_id = 1;
+  int32 target_version = 2;
+  string reason = 3;
+}
+
+message RollbackSnapshotResponse {
+  bool success = 1;
+  int32 current_version = 2;
+}
+
+message ListSnapshotsRequest {
+  string project_id = 1;
+}
+
+message ListSnapshotsResponse {
+  repeated SnapshotInfo snapshots = 1;
+}
+
+message SnapshotInfo {
+  int32 version = 1;
+  string description = 2;
+  bool is_health_baseline = 3;
+  double code_acceptance_rate = 4;
+  int64 created_at_unix = 5;
+}
+
+// -----------------------------------------------------------
+// A/B Experiment
+// -----------------------------------------------------------
+
+message CreateExperimentRequest {
+  string knowledge_id = 1;
+  double cohort_a_ratio = 2;
+}
+
+message CreateExperimentResponse {
+  bool success = 1;
+  string experiment_id = 2;
+}
+
+message AssignCohortRequest {
+  string experiment_id = 1;
+  string pipeline_id = 2;
+}
+
+message AssignCohortResponse {
+  string cohort = 1;                         // "A" or "B"
+  bool should_apply_knowledge = 2;
+}
+
+message CompleteExperimentRequest {
+  string experiment_id = 1;
+  string verdict = 2;                        // "promoted" | "invalid" | "harmful"
+  double p_value = 3;
+  double effect_size = 4;
+}
+
+message CompleteExperimentResponse {
+  bool success = 1;
+}

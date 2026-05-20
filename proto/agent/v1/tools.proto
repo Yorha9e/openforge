@@ -1,0 +1,133 @@
+﻿syntax = "proto3";
+
+package agent.v1;
+
+option go_package = "openforge/proto/agent/v1;agentv1";
+
+// ============================================================
+// Tool Registry Service — Go 协调层 → Node.js Dynamic Tool Hub
+// ============================================================
+
+service ToolRegistryService {
+  // Tool 检索 (嵌入匹配)
+  rpc SearchTools(SearchToolsRequest) returns (SearchToolsResponse);
+
+  // Tool 调用代理
+  rpc CallTool(CallToolRequest) returns (CallToolResponse);
+  rpc CallToolStream(CallToolRequest) returns (stream CallToolStreamChunk);
+
+  // Tool 注册/注销 (管理员)
+  rpc RegisterTool(RegisterToolRequest) returns (RegisterToolResponse);
+  rpc UnregisterTool(UnregisterToolRequest) returns (UnregisterToolResponse);
+  rpc ListAllTools(ListAllToolsRequest) returns (ListAllToolsResponse);
+
+  // 嵌入索引管理
+  rpc RebuildIndex(RebuildIndexRequest) returns (RebuildIndexResponse);
+  rpc GetIndexStatus(GetIndexStatusRequest) returns (GetIndexStatusResponse);
+}
+
+// -----------------------------------------------------------
+// Tool Search (嵌入匹配)
+// -----------------------------------------------------------
+
+message SearchToolsRequest {
+  string query = 1;                          // 自然语言查询
+  int32 top_k = 2;                           // 返回 top-k 匹配 (默认 3)
+  repeated string filter_categories = 3;     // 可选: 按 category 过滤
+}
+
+message SearchToolsResponse {
+  repeated ToolMatch matches = 1;
+}
+
+message ToolMatch {
+  ToolDefinition tool = 1;
+  double similarity_score = 2;
+}
+
+message ToolDefinition {
+  string name = 1;
+  string description = 2;
+  string category = 3;                       // "file" | "git" | "shell" | "lsp" | "sandbox" | "mcp"
+  bytes input_schema = 4;                    // JSON Schema
+  bool is_dynamic = 5;                       // MCP 动态 tool vs 静态内置 tool
+  string mcp_server_id = 6;                  // 仅 MCP tool 有值
+}
+
+// -----------------------------------------------------------
+// Tool Call
+// -----------------------------------------------------------
+
+message CallToolRequest {
+  string pipeline_id = 1;
+  string tool_name = 2;
+  bytes input = 3;                           // JSON input
+  int32 timeout_ms = 4;
+}
+
+message CallToolResponse {
+  string tool_name = 1;
+  bytes output = 2;                          // JSON output
+  bool is_error = 3;
+  string error_message = 4;
+  int64 duration_ms = 5;
+}
+
+message CallToolStreamChunk {
+  string event_type = 1;                     // "stdout" | "stderr" | "done" | "error"
+  string text = 2;
+  bool is_done = 3;
+}
+
+// -----------------------------------------------------------
+// Tool Management
+// -----------------------------------------------------------
+
+message RegisterToolRequest {
+  ToolDefinition tool = 1;
+}
+
+message RegisterToolResponse {
+  bool success = 1;
+  string tool_name = 2;
+}
+
+message UnregisterToolRequest {
+  string tool_name = 1;
+}
+
+message UnregisterToolResponse {
+  bool success = 1;
+}
+
+message ListAllToolsRequest {}
+
+message ListAllToolsResponse {
+  repeated ToolDefinition tools = 1;
+  int32 total_count = 2;
+}
+
+// -----------------------------------------------------------
+// Index Management
+// -----------------------------------------------------------
+
+message RebuildIndexRequest {
+  string reason = 1;                         // "model_switched" | "manual" | "scheduled"
+  string embedding_model = 2;                // 可选: 切换嵌入模型
+}
+
+message RebuildIndexResponse {
+  bool success = 1;
+  string status = 2;                         // "queued" | "building" | "done" | "failed"
+  int64 estimated_duration_ms = 3;
+}
+
+message GetIndexStatusRequest {}
+
+message GetIndexStatusResponse {
+  string status = 1;                         // "ready" | "building" | "error"
+  int64 total_entries = 2;
+  int64 delta_entries = 3;
+  int64 last_rebuild_at_unix = 4;
+  string active_embedding_model = 5;
+}

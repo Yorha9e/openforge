@@ -1,0 +1,56 @@
+﻿syntax = "proto3";
+
+package agent.v1;
+
+option go_package = "openforge/proto/agent/v1;agentv1";
+
+// ============================================================
+// Terminal Service — BFF → Go 协调层 → Sandbox
+// ============================================================
+
+service TerminalService {
+  rpc Open(OpenTerminalRequest) returns (stream TerminalOutput);
+  rpc Input(TerminalInputRequest) returns (TerminalInputResponse);
+  rpc Close(CloseTerminalRequest) returns (CloseTerminalResponse);
+}
+
+message OpenTerminalRequest {
+  string pipeline_id = 1;
+  string container_id = 2;
+  TerminalMode mode = 3;                     // 6.2 节: read_only vs debug
+  string actor = 4;
+  optional string second_factor = 5;         // debug 模式二次确认码
+}
+
+enum TerminalMode {
+  TERMINAL_MODE_UNSPECIFIED = 0;
+  TERMINAL_MODE_READ_ONLY = 1;              // 只读观察, 所有用户可用
+  TERMINAL_MODE_DEBUG = 2;                   // 调试终端, 仅 Dev+Tech Lead+2FA
+}
+
+message TerminalOutput {
+  string stream = 1;                         // "stdout" | "stderr"
+  bytes data = 2;
+  bool is_done = 3;
+  optional int32 exit_code = 4;
+}
+
+message TerminalInputRequest {
+  string pipeline_id = 1;
+  string container_id = 2;
+  bytes input = 3;
+}
+
+message TerminalInputResponse {
+  bool success = 1;
+  optional string error_message = 2;         // read_only 模式拒绝输入时返回
+}
+
+message CloseTerminalRequest {
+  string pipeline_id = 1;
+  string container_id = 2;
+}
+
+message CloseTerminalResponse {
+  bool success = 1;
+}

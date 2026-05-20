@@ -1,0 +1,872 @@
+﻿openapi: "3.1.0"
+info:
+  title: OpenForge BFF API
+  version: "1.0.0"
+  description: |
+    OpenForge BFF 层 REST API 契约。所有端点前缀 `/api`。
+    WebSocket 协议见设计文档 5.5.4 节。gRPC 协议见 proto/agent/v1/ 目录。
+
+    Gate 审批流规范: 所有 Gate 操作由 BFF 调用 gRPC GateService (gate.proto), 不直写 DB。
+
+    BFF auto-inject headers: X-Authenticated-User (SSO email), X-User-Roles。
+
+    Pagination: 统一 page_token (opaque string) / next_page_token。message 端点用 cursor (int)。
+    Error: 统一 { error: string, code: string, detail?: string }。
+    Idempotency: 写操作带 Idempotency-Key header (Phase 3+)。
+    Line numbers: 1-based (editor convention)。
+
+servers:
+  - url: https://of-api.corp.internal/api
+    description: 内网生产 (Phase 4+)
+  - url: http://localhost:8080/api
+    description: 本地开发 (Phase 1-3)
+
+security:
+  - bearerAuth: []
+
+paths:
+  # ============================================================
+  # 项目管理
+  # ============================================================
+  /projects:
+    get:
+      summary: 项目列表
+      operationId: listProjects
+      x-permission: read
+      parameters:
+        - name: page_size
+          in: query
+          schema: { type: integer, default: 20 }
+        - name: page_token
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Project" } }
+                  next_page_token: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /projects/{project_id}:
+    get:
+      summary: 项目详情 + Pipeline 列表
+      operationId: getProject
+      x-permission: read
+      parameters:
+        - { name: project_id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Project"
+                  - type: object
+                    properties:
+                      pipelines: { type: array, items: { $ref: "#/components/schemas/PipelineSummary" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /projects/{project_id}/pipelines:
+    post:
+      summary: 创建 Pipeline
+      operationId: createPipeline
+      x-permission: execute
+      parameters:
+        - { name: project_id, in: path, required: true, schema: { type: string } }
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema: { type: string }
+          description: "幂等创建 (Phase 3+), UUID v7"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, requirement]
+              properties:
+                title:       { type: string, maxLength: 512, example: "给文章增加标签过滤功能" }
+                requirement: { type: string, description: "自然语言需求描述" }
+                level:       { type: string, enum: [L1, L2, L3, L4], description: "可选, 默认 Agent 自动判定" }
+                parent_pipeline_id: { type: string }
+                config:      { $ref: "#/components/schemas/PipelineConfig" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Pipeline" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  /projects/{project_id}/token-usage:
+    get:
+      summary: Token 消耗 (按模型/时间)
+      operationId: getTokenUsage
+      x-permission: read
+      parameters:
+        - { name: project_id, in: path, required: true, schema: { type: string } }
+        - { name: start_date, in: query, schema: { type: string, format: date } }
+        - { name: end_date,   in: query, schema: { type: string, format: date } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  period_start:  { type: string, format: date }
+                  period_end:    { type: string, format: date }
+                  total_tokens:  { type: integer, format: int64 }
+                  total_cost:    { type: number, format: double }
+                  by_model:      { type: array, items: { $ref: "#/components/schemas/ModelUsage" } }
+                  daily:         { type: array, items: { $ref: "#/components/schemas/DailyUsage" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /projects/{project_id}/token-quota:
+    get:
+      summary: Token 配额余量
+      operationId: getTokenQuota
+      x-permission: read
+      parameters:
+        - { name: project_id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  month:       { type: string, example: "2026-05" }
+                  token_limit: { type: integer, format: int64 }
+                  token_used:  { type: integer, format: int64 }
+                  remaining:   { type: integer, format: int64 }
+                  status:      { type: string, enum: [active, exceeded, special_approved] }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  # ============================================================
+  # Pipeline 操作
+  # ============================================================
+  /pipelines/{pipeline_id}:
+    parameters:
+      - { name: pipeline_id, in: path, required: true, schema: { type: string } }
+    get:
+      summary: Pipeline 详情
+      operationId: getPipeline
+      x-permission: read
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Pipeline" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /pipelines/{pipeline_id}/cancel:
+    post:
+      summary: 取消 Pipeline
+      operationId: cancelPipeline
+      x-permission: execute
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  final_status: { type: string }
+                  artifact_summary: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /pipelines/{pipeline_id}/modify:
+    post:
+      summary: 修改需求 (触发回溯)
+      operationId: modifyPipeline
+      x-permission: execute
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [new_requirement]
+              properties:
+                new_requirement: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  backtrack_triggered: { type: boolean }
+                  backtrack_to_stage: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /pipelines/{pipeline_id}/messages:
+    get:
+      summary: 消息历史
+      operationId: listMessages
+      x-permission: read
+      parameters:
+        - { name: pipeline_id, in: path, required: true, schema: { type: string } }
+        - { name: branch_id, in: query, schema: { type: string, default: "main" } }
+        - { name: page_size, in: query, schema: { type: integer, default: 50 } }
+        - { name: cursor, in: query, schema: { type: integer }, description: "返回 msg_seq < cursor 的消息" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  messages:  { type: array, items: { $ref: "#/components/schemas/ChatMessage" } }
+                  has_more: { type: boolean }
+                  next_cursor: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /pipelines/{pipeline_id}/messages/retry:
+    post:
+      summary: 从指定消息起重新生成
+      operationId: retryMessages
+      x-permission: execute
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [from_msg_seq]
+              properties:
+                from_msg_seq: { type: integer }
+                branch_id: { type: string, default: "main" }
+      responses:
+        "200":
+          description: 重试已触发, WS 返回新消息流
+          content:
+            application/json:
+              schema: { type: object, properties: { accepted: { type: boolean } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /pipelines/{pipeline_id}/branches:
+    get:
+      summary: 对话分支列表
+      operationId: listBranches
+      x-permission: read
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  branches: { type: array, items: { $ref: "#/components/schemas/Branch" } }
+
+  /pipelines/{pipeline_id}/models:
+    get:
+      summary: 可用模型列表
+      operationId: listModels
+      x-permission: read
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  models: { type: array, items: { $ref: "#/components/schemas/ModelInfo" } }
+
+  /pipelines/{pipeline_id}/model/switch:
+    post:
+      summary: 切换模型
+      operationId: switchModel
+      x-permission: execute
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [provider, model]
+              properties:
+                provider: { type: string }
+                model:    { type: string }
+      responses:
+        "200":
+          description: 切换成功 (当前流完成后下轮生效)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  active_provider: { type: string }
+                  active_model: { type: string }
+                  message: { type: string }
+
+  /pipelines/{pipeline_id}/artifacts:
+    get:
+      summary: 产物列表
+      operationId: listArtifacts
+      x-permission: read
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  artifacts: { type: array, items: { $ref: "#/components/schemas/Artifact" } }
+
+  /pipelines/{pipeline_id}/artifacts/{artifact_id}/download:
+    get:
+      summary: 下载产物
+      operationId: downloadArtifact
+      x-permission: read
+      parameters:
+        - { name: pipeline_id,  in: path, required: true, schema: { type: string } }
+        - { name: artifact_id,  in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Binary download
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+
+  # ============================================================
+  # Gate 审批 (BFF → gRPC GateService, 不直写 DB)
+  # ============================================================
+  /review-inbox:
+    get:
+      summary: 审批收件箱 (跨项目聚合)
+      operationId: getReviewInbox
+      x-permission: approve | review
+      parameters:
+        - { name: page_size, in: query, schema: { type: integer, default: 20 } }
+        - { name: page_token, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:         { type: array, items: { $ref: "#/components/schemas/ReviewInboxItem" } }
+                  total_pending: { type: integer }
+                  next_page_token: { type: string }
+
+  /pipelines/{pipeline_id}/gate/{stage}:
+    parameters:
+      - { name: pipeline_id, in: path, required: true, schema: { type: string } }
+      - { name: stage, in: path, required: true, schema: { type: string, enum: [decompose, impl, test, deploy, verify] }, description: "clarify 阶段无 Gate (无代码变更, 不需要审批)" }
+    post:
+      summary: 审批通过
+      operationId: approveGate
+      x-permission: approve
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [checklist]
+              properties:
+                checklist:
+                  type: object
+                  required: [code_reviewed, security_checked, license_cleared, coding_standard_met]
+                  properties:
+                    code_reviewed:        { type: boolean }
+                    security_checked:     { type: boolean }
+                    license_cleared:      { type: boolean }
+                    coding_standard_met:  { type: boolean }
+      responses:
+        "200": { description: "审批通过, 阶段流转已触发" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /pipelines/{pipeline_id}/gate/{stage}/reject:
+    post:
+      summary: 驳回
+      operationId: rejectGate
+      x-permission: approve
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [summary_feedback]
+              properties:
+                summary_feedback: { type: string }
+                line_comments:
+                  type: array
+                  items:
+                    type: object
+                    required: [file_path, line, comment]
+                    properties:
+                      file_path: { type: string }
+                      line:      { type: integer, description: "1-based 行号" }
+                      comment:   { type: string }
+                      mark:      { type: string, enum: [accept, needs_revision, needs_discussion], default: needs_revision }
+      responses:
+        "200": { description: 驳回已记录, Agent 仅修正标记 needs_revision 的文件" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /pipelines/{pipeline_id}/gate/{stage}/claim:
+    post:
+      summary: 认领审批 (防止两人同时审批)
+      operationId: claimGate
+      x-permission: approve
+      description: |
+        认领锁: 认领后其他人无法审批。TTL 30min (活动续期), 超时自动释放。
+        续期: 客户端每 10min 重放 claim 请求续期。
+        释放: DELETE 主动释放 (可选)。
+      responses:
+        "200": { description: 认领成功" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict", description: "已被他人认领" }
+    delete:
+      summary: 释放认领锁
+      operationId: releaseGateClaim
+      x-permission: approve
+      responses:
+        "200": { description: 释放成功" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ============================================================
+  # 用户设置
+  # ============================================================
+  /user/settings:
+    get:
+      summary: 获取设置
+      operationId: getUserSettings
+      x-permission: self
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserSettings" }
+    put:
+      summary: 更新设置
+      operationId: updateUserSettings
+      x-permission: self
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UserSettings" }
+      responses:
+        "200": { description: Updated }
+
+  /user/layout:
+    get:
+      summary: 获取面板布局
+      operationId: getUserLayout
+      x-permission: self
+      parameters:
+        - { name: project_id, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  layout_json: { type: object }
+    put:
+      summary: 持久化布局
+      operationId: updateUserLayout
+      x-permission: self
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                project_id:  { type: string }
+                layout_json: { type: object }
+      responses:
+        "200": { description: Saved }
+
+  # ============================================================
+  # 通知
+  # ============================================================
+  /notifications:
+    get:
+      summary: 通知列表
+      operationId: listNotifications
+      x-permission: self
+      parameters:
+        - { name: unread_only, in: query, schema: { type: boolean } }
+        - { name: page_size, in: query, schema: { type: integer, default: 20 } }
+        - { name: page_token, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:       { type: array, items: { $ref: "#/components/schemas/Notification" } }
+                  unread_count: { type: integer }
+                  next_page_token: { type: string }
+
+  /notifications/read-all:
+    post:
+      summary: 全部已读
+      operationId: readAllNotifications
+      x-permission: self
+      responses:
+        "200": { description: OK }
+
+  # ============================================================
+  # 管理后台
+  # ============================================================
+  /admin/flags:
+    get:
+      summary: Feature Flags 列表
+      operationId: listFeatureFlags
+      x-permission: admin
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  flags: { type: array, items: { $ref: "#/components/schemas/FeatureFlag" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /admin/projects/{project_id}/module-ownership:
+    get:
+      summary: 模块注册表
+      operationId: getModuleOwnership
+      x-permission: admin
+      parameters:
+        - { name: project_id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  modules: { type: array, items: { $ref: "#/components/schemas/ModuleOwnership" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+# ============================================================
+# Components
+# ============================================================
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: "BFF 签发的 JWT (8h 滑动续期)"
+
+  responses:
+    BadRequest:
+      description: 请求体验证失败
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ApiError" }
+    Unauthorized:
+      description: JWT 过期/无效
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ApiError" }
+    Forbidden:
+      description: 权限不足
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ApiError" }
+    NotFound:
+      description: 资源不存在
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ApiError" }
+    Conflict:
+      description: 资源冲突 (如已被他人认领)
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/ApiError"
+              - type: object
+                properties: { claimed_by: { type: string } }
+    TooManyRequests:
+      description: 限流/系统繁忙
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/ApiError"
+              - type: object
+                properties: { retry_after_seconds: { type: integer } }
+    InternalError:
+      description: 服务器内部错误
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/ApiError"
+              - type: object
+                properties: { error_id: { type: string, description: "运维排障用" } }
+    ServiceUnavailable:
+      description: LLM 不可用/资源耗尽
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/ApiError"
+              - type: object
+                properties: { est_recovery_seconds: { type: integer } }
+
+  schemas:
+    ApiError:
+      type: object
+      required: [error, code]
+      properties:
+        error:  { type: string, example: "权限不足" }
+        code:   { type: string, example: "FORBIDDEN" }
+        detail: { type: string, example: "用户 alice@corp 对 proj-B 无 approve 权限" }
+
+    # ---- Project ----
+    Project:
+      type: object
+      required: [id, name, git_url]
+      properties:
+        id:         { type: string, example: "proj-A" }
+        name:       { type: string, example: "Conduit" }
+        git_url:    { type: string }
+        repo_type:  { type: string, example: "monorepo-node-react" }
+        config:     { type: object }
+        created_at: { type: string, format: date-time }
+        pipeline_count:         { type: integer }
+        token_used_this_month:  { type: integer, format: int64 }
+
+    # ---- Pipeline ----
+    Pipeline:
+      allOf:
+        - $ref: "#/components/schemas/PipelineSummary"
+        - type: object
+          properties:
+            stages:
+              type: array
+              items:
+                type: object
+                properties:
+                  stage:        { type: string }
+                  status:       { type: string }
+                  started_at:   { type: string, format: date-time }
+                  completed_at: { type: string, format: date-time }
+                  summary:      { type: string }
+
+    PipelineSummary:
+      type: object
+      properties:
+        id:              { type: string, example: "pipe-42" }
+        project_id:      { type: string }
+        title:           { type: string }
+        level:           { type: string, enum: [L1, L2, L3, L4] }
+        status:          { type: string, enum: [pending, running, paused, awaiting_review, completed, rejected, token_exceeded, cancelled, dormant] }
+        current_stage:   { type: string }
+        created_by:      { type: string }
+        parent_pipeline_id: { type: string }
+        backtrack_count: { type: integer }
+        created_at:      { type: string, format: date-time }
+        updated_at:      { type: string, format: date-time }
+        config:          { $ref: "#/components/schemas/PipelineConfig" }
+
+    PipelineConfig:
+      type: object
+      properties:
+        token_limit:  { type: integer, format: int64, example: 200000 }
+        model:        { type: string, example: "claude-sonnet" }
+        provider:     { type: string, example: "anthropic" }
+
+    # ---- Chat ----
+    ChatMessage:
+      type: object
+      properties:
+        msg_seq:     { type: integer }
+        branch_id:   { type: string }
+        role:        { type: string, enum: [user, agent, system] }
+        msg_type:    { type: string, enum: [text, code_card, topo_card, gate_card, error_card] }
+        content:     { type: string }
+        token_count: { type: integer }
+        reply_to_seq: { type: integer }
+        deleted_at:  { type: string, format: date-time }
+        created_at:  { type: string, format: date-time }
+
+    Branch:
+      type: object
+      properties:
+        id:            { type: string }
+        parent_branch: { type: string }
+        fork_msg_seq:  { type: integer }
+        status:        { type: string, enum: [active, merged, abandoned] }
+        created_by:    { type: string }
+        created_at:    { type: string, format: date-time }
+
+    # ---- Gate ----
+    ReviewInboxItem:
+      type: object
+      properties:
+        pipeline_id:      { type: string }
+        project_id:       { type: string }
+        project_name:     { type: string }
+        title:            { type: string }
+        level:            { type: string }
+        stage:            { type: string }
+        event:            { type: string, description: "当前 gate_event 事件 (awaiting)" }
+        awaiting_since:   { type: string, format: date-time }
+        claimed_by:       { type: string }
+        is_primary_reviewer: { type: boolean }
+        changed_files:    { type: array, items: { type: string } }
+        artifact_hash:    { type: string, description: "审批时 Artifact SHA256" }
+        prev_hash:        { type: string, description: "哈希链上行" }
+        content_hash:     { type: string, description: "本条哈希" }
+
+    # ---- Artifact ----
+    Artifact:
+      type: object
+      properties:
+        id:            { type: string }
+        name:          { type: string }
+        stage:         { type: string }
+        artifact_ref:  { type: string, description: "MinIO object key" }
+        artifact_hash: { type: string, description: "SHA256" }
+        size_bytes:    { type: integer }
+        created_at:    { type: string, format: date-time }
+
+    # ---- Model ----
+    ModelInfo:
+      type: object
+      properties:
+        provider:            { type: string }
+        model_id:            { type: string }
+        display_name:        { type: string }
+        context_window:      { type: integer }
+        supports_tool_use:   { type: boolean }
+        supports_streaming:  { type: boolean }
+
+    ModelUsage:
+      type: object
+      properties:
+        provider:       { type: string }
+        model:          { type: string }
+        input_tokens:   { type: integer, format: int64 }
+        output_tokens:  { type: integer, format: int64 }
+        cost:           { type: number, format: double }
+
+    DailyUsage:
+      type: object
+      properties:
+        date:   { type: string, format: date }
+        tokens: { type: integer, format: int64 }
+
+    # ---- 设置 ----
+    UserSettings:
+      type: object
+      properties:
+        notifications:
+          type: object
+          properties:
+            feishu_pipeline_approval: { type: boolean }
+            feishu_timeout:           { type: boolean }
+            feishu_token_alert:       { type: boolean }
+            feishu_weekly_summary:    { type: boolean }
+            email_all:                { type: boolean }
+            browser_all:              { type: boolean }
+        layout:
+          type: object
+          properties:
+            default_mode:           { type: string, enum: [simple, pro] }
+            auto_switch_on_review:  { type: boolean }
+            editor_font:            { type: string }
+            editor_font_size:       { type: integer }
+            theme:                  { type: string, enum: [light, dark, high_contrast, system] }
+        locale: { type: string, example: "zh-CN" }
+
+    # ---- 通知 ----
+    Notification:
+      type: object
+      properties:
+        id:         { type: string }
+        level:      { type: string, enum: [info, warning, critical] }
+        title:      { type: string }
+        body:       { type: string }
+        action_url: { type: string }
+        is_read:    { type: boolean }
+        created_at: { type: string, format: date-time }
+
+    # ---- 管理 ----
+    FeatureFlag:
+      type: object
+      properties:
+        name:            { type: string }
+        owner:           { type: string }
+        status:          { type: string, enum: [experimental, beta, stable, deprecated] }
+        rollout_percent: { type: integer }
+        description:     { type: string }
+        created_at:      { type: string, format: date-time }
+        expires_at:      { type: string, format: date-time }
+
+    ModuleOwnership:
+      type: object
+      properties:
+        module_name:        { type: string }
+        paths:              { type: array, items: { type: string } }
+        team_name:          { type: string }
+        reviewers:          { type: array, items: { type: string } }
+        fallback_reviewer:  { type: string }

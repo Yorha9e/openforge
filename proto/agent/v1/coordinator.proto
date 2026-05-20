@@ -1,0 +1,382 @@
+﻿syntax = "proto3";
+
+package agent.v1;
+
+option go_package = "openforge/proto/agent/v1;agentv1";
+
+import "agent/v1/llm.proto";
+
+// ============================================================
+// RPC 版本协商: 所有 RPC 的 gRPC metadata 必须携带:
+//   x-of-api-version: agent.v1 (跟随 proto package 名, 非硬编码字符串)
+//   x-of-coordinator-build: <git-sha>
+// 服务端响应头返回自身 build SHA, 客户端比较差异决定是否降级重试
+// ============================================================
+
+// ============================================================
+// BFF gRPC→WS Bridge 路由规则 (下行事件拆分):
+//   ChatEvent.msg_seq + event_type=DELTA → WS chat.stream {msg_seq, delta_text, is_done: false}
+//   ChatEvent.msg_seq + event_type=CARD  → WS msg.card {msg_seq, card_type, card_data}
+//   ChatEvent.msg_seq + event_type=DONE  → WS chat.stream_done {msg_seq, full_text, token_count}
+//   ChatEvent.msg_seq + event_type=ERROR → WS 通知 + C 层 error_card
+//
+//   ExecuteStageEvent.result.status=BACKTRACK_REQUESTED
+//     → WS pipeline.stage_change {from: current_stage, to: backtrack.target_stage, reason}
+//
+//   EditMessageResponse.new_branch_id
+//     → WS chat.branch_created {branch_id, parent_msg_seq}
+//
+//   PushTokenUsage → Go 侧判断超限 → WS pipeline.token_warning / pipeline.finished(token_exceeded)
+// ============================================================
+
+// ============================================================
+// Coordinator Service — Go 协调层 ↔ Node.js IO 层
+// ============================================================
+
+service CoordinatorService {
+  // Agent 生命周期
+  rpc CreateAgent(CreateAgentRequest) returns (CreateAgentResponse);
+  rpc DestroyAgent(DestroyAgentRequest) returns (DestroyAgentResponse);
+
+  // Pipeline 阶段执行
+  rpc ExecuteStage(ExecuteStageRequest) returns (stream ExecuteStageEvent);
+
+  // 对话 (完整生命周期)
+  rpc Chat(ChatRequest) returns (stream ChatEvent);
+  rpc EditMessage(EditMessageRequest) returns (EditMessageResponse);
+  rpc StopGeneration(StopGenerationRequest) returns (StopGenerationResponse);
+  rpc PauseGeneration(PauseGenerationRequest) returns (PauseGenerationResponse);
+  rpc ResumeGeneration(ResumeGenerationRequest) returns (stream ChatEvent);
+  rpc RegenerateFrom(RegenerateFromRequest) returns (stream ChatEvent);
+
+  // Pipeline 管控 (BFF → Go 协调层, 不绕道直写 DB)
+  rpc GetPipeline(GetPipelineRequest) returns (GetPipelineResponse);
+  rpc CancelPipeline(CancelPipelineRequest) returns (CancelPipelineResponse);
+  rpc ModifyPipelineScope(ModifyPipelineScopeRequest) returns (ModifyPipelineScopeResponse);
+
+  // Token 用量推送 (Node → Go, streaming callback)
+  rpc PushTokenUsage(stream TokenUsageEvent) returns (TokenUsageAck);
+
+  // 健康
+  rpc Health(HealthRequest) returns (HealthResponse);
+}
+
+// -----------------------------------------------------------
+// Failure Classification (3.14 节)
+// -----------------------------------------------------------
+
+enum FailureCode {
+  FAILURE_CODE_UNSPECIFIED = 0;
+  FAILURE_CODE_MODEL_HALLUCINATION = 1;
+  FAILURE_CODE_PROMPT_WEAKNESS = 2;
+  FAILURE_CODE_DEPENDENCY_CONFLICT = 3;
+  FAILURE_CODE_SANDBOX_TIMEOUT = 4;
+  FAILURE_CODE_REPO_BUG = 5;
+  FAILURE_CODE_CONTEXT_OVERFLOW = 6;
+  FAILURE_CODE_TOKEN_QUOTA_EXCEEDED = 7;
+  FAILURE_CODE_UNKNOWN = 8;
+  reserved 9 to 19;                          // 预留新失败分类
+}
+
+// -----------------------------------------------------------
+// Agent 生命周期
+// -----------------------------------------------------------
+
+message CreateAgentRequest {
+  string agent_id = 1;
+  string pipeline_id = 2;
+  string project_id = 3;
+  AgentRole role = 4;
+  LLMConfig llm_config = 5;
+  map<string, string> metadata = 6;
+}
+
+enum AgentRole {
+  AGENT_ROLE_UNSPECIFIED = 0;
+  AGENT_ROLE_PLANNER = 1;
+  AGENT_ROLE_WORKER = 2;
+  AGENT_ROLE_REVIEWER = 3;
+}
+
+message CreateAgentResponse {
+  string agent_id = 1;
+  string status = 2;
+  optional string error_message = 3;
+}
+
+message DestroyAgentRequest {
+  string agent_id = 1;
+}
+
+message DestroyAgentResponse {
+  bool success = 1;
+}
+
+// -----------------------------------------------------------
+// Pipeline 阶段执行
+// -----------------------------------------------------------
+
+message ExecuteStageRequest {
+  string pipeline_id = 1;
+  StageType stage = 2;
+  StageContext context = 3;
+}
+
+enum StageType {
+  STAGE_TYPE_UNSPECIFIED = 0;
+  STAGE_TYPE_CLARIFY = 1;                    // 需求澄清
+  STAGE_TYPE_DECOMPOSE = 2;                  // 方案拆解 (对齐设计文档 3.1)
+  STAGE_TYPE_IMPL = 3;                       // 实现 (定位+生成合并)
+  STAGE_TYPE_TEST = 4;                       // 自动化测试
+  STAGE_TYPE_DEPLOY = 5;                     // 代码部署
+  STAGE_TYPE_VERIFY = 6;                     // 验证反馈
+}
+
+message StageContext {
+  string requirement_summary = 1;
+  repeated string constraints = 2;
+  string project_preference_profile = 3;
+  string module_index_subset = 4;
+  bytes artifact = 5;
+  optional int32 checkpoint_seq = 6;         // 0=新执行, nil=未指定
+}
+
+message ExecuteStageEvent {
+  string event_type = 1;
+  optional string message = 2;
+  optional bytes artifact = 3;
+  optional int32 checkpoint_seq = 4;
+  optional StageResult result = 5;
+}
+
+message StageResult {
+  StageResultStatus status = 1;
+  string summary = 2;
+  optional bytes artifact = 3;
+  optional BacktrackRequest backtrack = 4;
+}
+
+enum StageResultStatus {
+  STAGE_RESULT_STATUS_UNSPECIFIED = 0;
+  STAGE_RESULT_STATUS_PASSED = 1;
+  STAGE_RESULT_STATUS_FAILED = 2;
+  STAGE_RESULT_STATUS_BACKTRACK_REQUESTED = 3;
+}
+
+message BacktrackRequest {
+  StageType target_stage = 1;
+  string reason = 2;
+  optional bytes evidence = 3;
+}
+
+// -----------------------------------------------------------
+// 对话
+// -----------------------------------------------------------
+
+message ChatRequest {
+  string pipeline_id = 1;
+  string branch_id = 2;
+  optional string parent_branch = 3;          // 分支来源 (5.5.10 review #9)
+  optional int32 parent_msg_seq = 4;          // 编辑哪条消息产生分支
+  repeated ChatMessage messages = 5;
+  optional LLMConfig llm_config = 6;          // nil=沿用默认
+  optional int32 max_tokens = 7;
+  optional double temperature = 8;
+}
+
+message ChatMessage {
+  ChatRole role = 1;                         // 对齐 DB CHECK (role IN ('user','agent','system'))
+  string content = 2;
+  int32 msg_seq = 3;
+  optional int32 reply_to_seq = 4;            // 回复的目标消息序号
+}
+
+enum ChatRole {
+  CHAT_ROLE_UNSPECIFIED = 0;
+  CHAT_ROLE_USER = 1;
+  CHAT_ROLE_AGENT = 2;                       // Proto "agent" = DB CHECK 'agent'
+  CHAT_ROLE_SYSTEM = 3;
+}
+
+message ChatEvent {
+  int32 msg_seq = 1;                          // 消息序号 (BFF 桥接 gRPC→WS 用)
+  ChatEventType event_type = 2;
+  optional string delta_text = 3;
+  optional Card card = 4;
+  optional string full_text = 5;
+  optional int32 token_count = 6;
+  bool is_done = 7;
+  optional FailureCode error_code = 8;        // 结构化失败码 (3.14 节)
+  optional string error_message = 9;
+}
+
+enum ChatEventType {
+  CHAT_EVENT_TYPE_UNSPECIFIED = 0;
+  CHAT_EVENT_TYPE_DELTA = 1;
+  CHAT_EVENT_TYPE_CARD = 2;
+  CHAT_EVENT_TYPE_DONE = 3;
+  CHAT_EVENT_TYPE_ERROR = 4;
+}
+
+message Card {
+  CardType card_type = 1;
+  bytes card_data = 2;
+  optional string title = 3;                 // WS 协议无此字段, gRPC 透传
+}
+
+enum CardType {
+  CARD_TYPE_UNSPECIFIED = 0;
+  CARD_TYPE_CODE_DIFF = 1;
+  CARD_TYPE_TOPOLOGY = 2;
+  CARD_TYPE_GATE = 3;
+  CARD_TYPE_ERROR = 4;
+  CARD_TYPE_TEST_REPORT = 5;
+}
+
+// 编辑消息 (对齐 WS chat.edit)
+// 并发语义: 编辑时如有活跃 ChatStream → 自动 StopGeneration → WriteCheckpoint → 处理编辑
+message EditMessageRequest {
+  string pipeline_id = 1;
+  string branch_id = 2;
+  int32 msg_seq = 3;
+  string new_text = 4;
+}
+
+message EditMessageResponse {
+  bool success = 1;
+  string new_branch_id = 2;                  // 编辑触发新分支
+}
+
+// 重试 (对齐 WS chat.retry)
+message RegenerateFromRequest {
+  string pipeline_id = 1;
+  string branch_id = 2;
+  int32 from_msg_seq = 3;                    // 从哪条消息起重新生成
+}
+
+// 流控
+message StopGenerationRequest {
+  string pipeline_id = 1;
+  string branch_id = 2;
+}
+
+message StopGenerationResponse {
+  bool success = 1;
+  optional string truncated_text = 2;        // nil=无内容被截断
+}
+
+message PauseGenerationRequest {
+  string pipeline_id = 1;
+  string branch_id = 2;
+}
+
+message PauseGenerationResponse {
+  bool success = 1;
+  int32 checkpoint_seq = 2;
+}
+
+message ResumeGenerationRequest {
+  string pipeline_id = 1;
+  string branch_id = 2;
+  int32 checkpoint_seq = 3;
+}
+
+// -----------------------------------------------------------
+// Pipeline 管控 (BFF → Go 协调层)
+// -----------------------------------------------------------
+
+message GetPipelineRequest {
+  string pipeline_id = 1;
+}
+
+message GetPipelineResponse {
+  string pipeline_id = 1;
+  string project_id = 2;
+  string title = 3;
+  string level = 4;
+  PipelineStatus status = 5;
+  optional StageType current_stage = 6;
+  repeated StageProgress stages = 7;
+}
+
+message StageProgress {
+  StageType stage = 1;
+  string status = 2;
+  optional int64 started_at_unix = 3;
+  optional int64 completed_at_unix = 4;
+}
+
+message CancelPipelineRequest {
+  string pipeline_id = 1;
+  string reason = 2;
+  string initiated_by = 3;                   // SSO email
+}
+
+message CancelPipelineResponse {
+  bool success = 1;
+  PipelineStatus final_status = 2;           // "cancelled"
+  optional string artifact_summary = 3;      // 半成品摘要
+}
+
+message ModifyPipelineScopeRequest {
+  string pipeline_id = 1;
+  string new_requirement = 2;
+  string initiated_by = 3;
+}
+
+message ModifyPipelineScopeResponse {
+  bool success = 1;
+  bool backtrack_triggered = 2;
+  optional StageType backtrack_to_stage = 3;
+}
+
+enum PipelineStatus {
+  PIPELINE_STATUS_UNSPECIFIED = 0;
+  PIPELINE_STATUS_PENDING = 1;
+  PIPELINE_STATUS_RUNNING = 2;
+  PIPELINE_STATUS_PAUSED = 3;
+  PIPELINE_STATUS_AWAITING_REVIEW = 4;
+  PIPELINE_STATUS_COMPLETED = 5;
+  PIPELINE_STATUS_REJECTED = 6;
+  PIPELINE_STATUS_TOKEN_EXCEEDED = 7;
+  PIPELINE_STATUS_CANCELLED = 8;
+  PIPELINE_STATUS_DORMANT = 9;
+}
+
+// -----------------------------------------------------------
+// Token 用量推送 (Node → Go, streaming)
+// -----------------------------------------------------------
+
+message TokenUsageEvent {
+  string pipeline_id = 1;
+  string project_id = 2;
+  string provider = 3;
+  string model = 4;
+  int64 prompt_tokens = 5;
+  int64 completion_tokens = 6;
+  double estimated_cost = 7;
+}
+
+message TokenUsageAck {
+  bool success = 1;
+  bool threshold_exceeded = 2;               // Go 侧判断超限 → Node 停止
+  optional int64 current_total = 3;
+  optional int64 limit = 4;
+}
+
+// -----------------------------------------------------------
+// 健康
+// -----------------------------------------------------------
+
+message HealthRequest {}
+
+message HealthResponse {
+  bool serving = 1;
+  map<string, DependencyStatus> dependencies = 2;
+}
+
+message DependencyStatus {
+  bool healthy = 1;
+  optional string message = 2;
+  optional int64 latency_ms = 3;
+}

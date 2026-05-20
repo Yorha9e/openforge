@@ -1,0 +1,99 @@
+﻿syntax = "proto3";
+
+package agent.v1;
+
+option go_package = "openforge/proto/agent/v1;agentv1";
+
+import "agent/v1/coordinator.proto";
+
+// ============================================================
+// Gate Service — BFF → Go 协调层 (Gate 审批不绕道 DB)
+// ============================================================
+
+service GateService {
+  rpc Approve(GateApproveRequest) returns (GateApproveResponse);
+  rpc Reject(GateRejectRequest) returns (GateRejectResponse);
+  rpc Claim(GateClaimRequest) returns (GateClaimResponse);
+  rpc GetInbox(GateGetInboxRequest) returns (GateGetInboxResponse);
+}
+
+message GateApproveRequest {
+  string pipeline_id = 1;
+  StageType stage = 2;
+  string actor = 3;                          // SSO email
+  GateChecklist checklist = 4;
+}
+
+message GateChecklist {
+  bool code_reviewed = 1;
+  bool security_checked = 2;
+  bool license_cleared = 3;
+  bool coding_standard_met = 4;
+}
+
+message GateApproveResponse {
+  bool success = 1;
+  PipelineStatus next_status = 2;
+  optional string message = 3;
+}
+
+message GateRejectRequest {
+  string pipeline_id = 1;
+  StageType stage = 2;
+  string actor = 3;
+  repeated LineComment line_comments = 4;
+  string summary_feedback = 5;
+}
+
+message LineComment {
+  string file_path = 1;
+  int32 line = 2;
+  string comment = 3;
+  FileMark mark = 4;                         // accept | needs_revision | needs_discussion
+}
+
+enum FileMark {
+  FILE_MARK_UNSPECIFIED = 0;
+  FILE_MARK_ACCEPT = 1;
+  FILE_MARK_NEEDS_REVISION = 2;
+  FILE_MARK_NEEDS_DISCUSSION = 3;
+}
+
+message GateRejectResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message GateClaimRequest {
+  string pipeline_id = 1;
+  StageType stage = 2;
+  string actor = 3;
+}
+
+message GateClaimResponse {
+  bool success = 1;
+  optional string message = 2;               // 已被他人认领时返回冲突信息
+}
+
+message GateGetInboxRequest {
+  string actor = 1;
+  int32 page_size = 2;
+  optional string page_token = 3;
+}
+
+message GateGetInboxResponse {
+  repeated GateInboxItem items = 1;
+  optional string next_page_token = 2;
+}
+
+message GateInboxItem {
+  string pipeline_id = 1;
+  string project_id = 2;
+  StageType stage = 3;
+  string level = 4;                          // "L1" | "L2" | "L3" | "L4"
+  string title = 5;
+  bool is_primary_reviewer = 6;              // 主审 vs 知情者
+  optional string claimed_by = 7;
+  int64 awaiting_since_unix = 8;             // 等待时长
+  repeated string changed_files = 9;
+}

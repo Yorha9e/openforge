@@ -1,0 +1,11 @@
+﻿version: v2
+modules:
+  - path: proto
+lint:
+  use:
+    - DEFAULT
+  except:
+    - PACKAGE_VERSION_SUFFIX
+breaking:
+  use:
+    - FILE              # C4: 文件级检测 — 新增字段/方法允许, 删除/重命名字段拒绝

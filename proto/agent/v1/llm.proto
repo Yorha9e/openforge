@@ -1,0 +1,166 @@
+﻿syntax = "proto3";
+
+package agent.v1;
+
+option go_package = "openforge/proto/agent/v1;agentv1";
+
+// ============================================================
+// LLM Router Service — Go 协调层 → Node.js LLM Router
+// ============================================================
+
+service LLMRouterService {
+  rpc Chat(LLMChatRequest) returns (LLMChatResponse);
+  rpc ChatStream(LLMChatRequest) returns (stream LLMChatStreamChunk);
+  rpc ListModels(ListModelsRequest) returns (ListModelsResponse);
+  rpc SwitchModel(SwitchModelRequest) returns (SwitchModelResponse);
+  rpc GetTokenUsage(GetTokenUsageRequest) returns (GetTokenUsageResponse);
+}
+
+// -----------------------------------------------------------
+// LLM 配置
+// -----------------------------------------------------------
+
+message LLMConfig {
+  string provider = 1;
+  string model = 2;
+  string api_endpoint = 3;
+  string api_key = 4;                        // Vault 注入, wire 传输后调用方应清零
+  optional double temperature = 5;
+  optional int32 max_tokens = 6;
+  repeated string stop_sequences = 7;
+  reserved 8 to 15;
+}
+
+// -----------------------------------------------------------
+// Chat
+// -----------------------------------------------------------
+
+message LLMChatRequest {
+  string pipeline_id = 1;
+  repeated LLMMessage messages = 2;
+  LLMConfig config = 3;
+  repeated LLMTool tools = 4;
+  optional string tool_choice = 5;
+}
+
+message LLMMessage {
+  string role = 1;
+  repeated LLMContentBlock content = 2;
+}
+
+message LLMContentBlock {
+  string type = 1;
+  optional string text = 2;
+  optional LLMToolUse tool_use = 3;
+  optional LLMToolResult tool_result = 4;
+}
+
+message LLMTool {
+  string name = 1;
+  string description = 2;
+  bytes input_schema = 3;                    // JSON Schema
+}
+
+message LLMToolUse {
+  string id = 1;
+  string name = 2;
+  bytes input = 3;                           // JSON input
+}
+
+message LLMToolResult {
+  string tool_use_id = 1;
+  string content = 2;
+  optional bool is_error = 3;
+}
+
+message LLMChatResponse {
+  string id = 1;
+  repeated LLMContentBlock content = 2;
+  string stop_reason = 3;
+  LLMUsage usage = 4;
+}
+
+message LLMChatStreamChunk {
+  string event_type = 1;
+  optional int32 content_block_index = 2;
+  optional LLMContentBlock delta = 3;
+  optional LLMUsageDelta usage = 4;
+}
+
+// -----------------------------------------------------------
+// Usage / Token
+// -----------------------------------------------------------
+
+message LLMUsage {
+  int64 input_tokens = 1;
+  int64 output_tokens = 2;
+  optional double estimated_cost = 3;        // nil=按当前默认费率计算
+}
+
+message LLMUsageDelta {
+  optional int64 input_tokens = 1;
+  optional int64 output_tokens = 2;
+}
+
+message GetTokenUsageRequest {
+  string pipeline_id = 1;
+  string project_id = 2;
+  optional TimeRange time_range = 3;
+}
+
+message TimeRange {
+  string start_iso8601 = 1;
+  string end_iso8601 = 2;
+}
+
+message GetTokenUsageResponse {
+  int64 total_input_tokens = 1;
+  int64 total_output_tokens = 2;
+  double total_cost = 3;
+  repeated ProviderUsage by_provider = 4;
+}
+
+message ProviderUsage {
+  string provider = 1;
+  string model = 2;
+  int64 input_tokens = 3;
+  int64 output_tokens = 4;
+  double cost = 5;
+}
+
+// -----------------------------------------------------------
+// Model Management
+// -----------------------------------------------------------
+
+message ListModelsRequest {}
+
+message ListModelsResponse {
+  repeated ModelInfo models = 1;
+}
+
+message ModelInfo {
+  string provider = 1;
+  string model_id = 2;
+  string display_name = 3;
+  int64 context_window = 4;
+  double input_cost_per_1k = 5;
+  double output_cost_per_1k = 6;
+  bool supports_tool_use = 7;
+  bool supports_streaming = 8;
+}
+
+message SwitchModelRequest {
+  string pipeline_id = 1;
+  LLMConfig new_config = 2;
+}
+
+message SwitchModelResponse {
+  bool success = 1;
+  LLMConfig active_config = 2;
+  optional string message = 3;               // "模型将在当前流式输出完成后下一轮对话生效"
+}
+
+// 流式输出中 SwitchModel 语义:
+//   SwitchModel 是 promise-style: 当前 ChatStream 不受影响, 下一轮 Chat/ChatStream 自动使用新模型
+//   如需立即生效 → client 应先 StopGeneration → SwitchModel → ResumeGeneration
+
