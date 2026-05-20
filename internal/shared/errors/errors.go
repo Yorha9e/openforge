@@ -30,6 +30,10 @@ func (e *Error) Error() string {
 	return fmt.Sprintf("[%s] %s", e.Code, e.Message)
 }
 
+func (e *Error) Unwrap() error {
+	return e.Cause
+}
+
 // New creates a new Error with the given code and message.
 func New(code Code, msg string) *Error {
 	return &Error{Code: code, Message: msg}

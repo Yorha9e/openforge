@@ -32,8 +32,13 @@ func TestPipelineStatusIsTerminal(t *testing.T) {
 	}{
 		{"completed is terminal", StatusCompleted, true},
 		{"rejected is terminal", StatusRejected, true},
+		{"token_exceeded is terminal", StatusTokenExceeded, true},
+		{"cancelled is terminal", StatusCancelled, true},
 		{"running is not terminal", StatusRunning, false},
 		{"pending is not terminal", StatusPending, false},
+		{"paused is not terminal", StatusPaused, false},
+		{"awaiting_review is not terminal", StatusAwaitingReview, false},
+		{"dormant is not terminal", StatusDormant, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
