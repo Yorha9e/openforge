@@ -12,6 +12,11 @@ import { AnthropicProvider } from "./llm/providers/anthropic.js";
 import { TokenMeter } from "./llm/token_meter.js";
 import { ModelSelector } from "./llm/domain/model_selector.js";
 
+/** Strip "[Nm]" / "[Nk]" suffix from a model name before sending to the API. */
+function stripSuffix(model: string): string {
+  return model.replace(/\[\d+[mk]\]$/i, "");
+}
+
 // Generated proto types and service descriptor (protoc-gen-es v2 GenService)
 import {
   LLMRouterService,
@@ -76,7 +81,7 @@ const handler = connectNodeAdapter({
           content: m.content.map((b: any) => b.text ?? "").join(""),
         }));
 
-        const model = req.config?.model || defaultModel;
+        const model = stripSuffix(req.config?.model || defaultModel);
 
         const result = await anthropic.chat({
           messages,
@@ -122,7 +127,7 @@ const handler = connectNodeAdapter({
           content: m.content.map((b: any) => b.text ?? "").join(""),
         }));
 
-        const model = req.config?.model || defaultModel;
+        const model = stripSuffix(req.config?.model || defaultModel);
 
         for await (const delta of anthropic.chatStream({
           messages,
