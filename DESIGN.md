@@ -344,6 +344,45 @@ Pipeline 失败时自动分类，避免学到噪声:
   → 人工确认/修正分类 → 回写规则引擎
 ```
 
+### 3.15 多层自动错误恢复链 `[Phase 2 — v4 新增]`
+
+> 采纳自 Claude Code 源码分析: 分类之后怎么做? 先走自动恢复链, 全失败再升级人工。
+
+```
+恢复链 (依次尝试, 任一成功即停止):
+
+  Layer 1: TRANSIENT — 瞬时故障, 自动重试
+    触发: API_TIMEOUT / RATE_LIMITED / OVERLOADED
+    动作: 指数退避重试 (1s→2s→4s, max 30s, 最多 3 次)
+    成功: 继续执行 → 不通知人工
+    失败: 进入 Layer 2
+
+  Layer 2: DEGRADABLE — 可降级恢复
+    触发: CONTEXT_OVERFLOW / TOKEN_QUOTA_EXCEEDED
+    动作:
+      CONTEXT_OVERFLOW → 压缩上下文 (保留最近 5 轮 + 需求摘要) → 重试
+      TOKEN_QUOTA_EXCEEDED → 降级模型 (Opus→Sonnet, Sonnet→DeepSeek) → 重试
+    成功: 继续执行 → 通知 PM (信息: "已自动降级, 质量可能略降")
+    失败: 进入 Layer 3
+
+  Layer 3: RECOVERABLE — 需 Agent 自修复
+    触发: MODEL_HALLUCINATION / PROMPT_WEAKNESS / DEPENDENCY_CONFLICT
+    动作:
+      HALLUCINATION → Agent 回退到仓库现有代码作为参考 → 重新生成
+      PROMPT_WEAKNESS → Agent 自检需求 → 向 PM 发起澄清对话
+      DEPENDENCY_CONFLICT → Agent 锁定版本 → 重新生成
+    成功: 继续执行 → 记录反模式到自学习
+    失败: → 升级人工 Gate
+
+  Layer 4: FATAL — 不可自动恢复
+    触发: SANDBOX_TIMEOUT(3次后) / REPO_BUG / UNKNOWN
+    动作: 保存完整上下文 → Pipeline 暂停 → 通知人工 + Debug Trace 自动开启
+
+恢复链实现 (~100行 Go):
+  位置: internal/agent/domain/error_recovery.go
+  模式: Chain of Responsibility
+```
+
 ---
 
 ## 四、B层: Agent Swarm 运行时
