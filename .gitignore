@@ -1,2 +1,4 @@
 gen/
 nodejs-io/src/gen/
+node_modules/
+dist/
