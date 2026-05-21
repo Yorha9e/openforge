@@ -64,10 +64,28 @@ func Bootstrap(cfg *Config) (*OpenForge, error) {
 // ---------------------------------------------------------------------------
 
 // --- SecretStore -----------------------------------------------------------
+// ChainSecretStore tries each store in order and returns the first successful
+// result. If all stores fail, the last error is returned. This enables the
+// "Vault primary, env fallback" coexistence model without changing the
+// SecretStore interface.
+
+type chainSecretStore struct {
+	stores []kernel.SecretStore
+}
+
+func (c *chainSecretStore) Get(ctx context.Context, key string) ([]byte, error) {
+	var lastErr error
+	for _, s := range c.stores {
+		val, err := s.Get(ctx, key)
+		if err == nil {
+			return val, nil
+		}
+		lastErr = err
+	}
+	return nil, fmt.Errorf("chain: all %d stores failed for %q: %w", len(c.stores), key, lastErr)
+}
 
 type envfileSecretStore struct{}
-
-func newSecretStore(cfg *Config) kernel.SecretStore { return &envfileSecretStore{} }
 
 func (s *envfileSecretStore) Get(_ context.Context, key string) ([]byte, error) {
 	val := os.Getenv(key)
@@ -75,6 +93,27 @@ func (s *envfileSecretStore) Get(_ context.Context, key string) ([]byte, error) 
 		return nil, fmt.Errorf("env var %q not set", key)
 	}
 	return []byte(val), nil
+}
+
+func newSecretStore(cfg *Config) kernel.SecretStore {
+	var stores []kernel.SecretStore
+	// Phase 1: envfile only. Phase 5+: prepend Vault Sidecar / Vault HA
+	// implementation so it takes priority over env.
+	switch cfg.SecretStore {
+	case "envfile":
+		stores = []kernel.SecretStore{&envfileSecretStore{}}
+	case "vault-sidecar", "vault-ha":
+		// Future: primary = Vault, fallback = env for local dev convenience.
+		stores = []kernel.SecretStore{
+			&envfileSecretStore{}, // fallback only until real Vault adapter exists
+		}
+	default:
+		stores = []kernel.SecretStore{&envfileSecretStore{}}
+	}
+	if len(stores) == 1 {
+		return stores[0]
+	}
+	return &chainSecretStore{stores: stores}
 }
 
 // --- ContainerRuntime ------------------------------------------------------

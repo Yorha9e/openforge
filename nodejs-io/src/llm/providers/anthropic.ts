@@ -6,8 +6,8 @@ import type { LLMProvider, ChatRequest, ChatResponse } from "../../kernel/interf
 export class AnthropicProvider implements LLMProvider {
   private client: Anthropic;
 
-  constructor(apiKey: string) {
-    this.client = new Anthropic({ apiKey });
+  constructor(apiKey: string, baseURL?: string) {
+    this.client = new Anthropic({ apiKey, baseURL });
   }
 
   async chat(req: ChatRequest): Promise<ChatResponse> {

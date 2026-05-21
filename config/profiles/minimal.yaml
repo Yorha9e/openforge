@@ -24,8 +24,8 @@ database:
 
 llm:
   default_provider: anthropic
-  default_model: claude-sonnet-4-6
+  default_model: mimo-v2.5-pro
 
 grpc:
-  nodejs_io_addr: localhost:50051
-  coordinator_addr: localhost:50052
+  nodejs_io_addr: 127.0.0.1:50051
+  coordinator_addr: 127.0.0.1:50052

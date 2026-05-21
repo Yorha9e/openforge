@@ -1,8 +1,8 @@
 // server.ts — gRPC server entry point (Node.js IO layer)
 //
 // Uses @connectrpc/connect v2 with plain Node.js http module.
-// Service descriptor comes from protoc-gen-es v2 (llm_pb.ts), NOT from
-// llm_connect.ts (generated for connect v1, incompatible with v2 runtime).
+// Model names and capabilities are read from environment variables;
+// context-window suffixes like "[1m]" are parsed automatically.
 
 import { createServer } from "node:http";
 import { connectNodeAdapter } from "@connectrpc/connect-node";
@@ -10,6 +10,7 @@ import { create } from "@bufbuild/protobuf";
 
 import { AnthropicProvider } from "./llm/providers/anthropic.js";
 import { TokenMeter } from "./llm/token_meter.js";
+import { ModelSelector } from "./llm/domain/model_selector.js";
 
 // Generated proto types and service descriptor (protoc-gen-es v2 GenService)
 import {
@@ -28,15 +29,35 @@ import {
 // Bootstrap
 // ---------------------------------------------------------------------------
 
-const apiKey = process.env.ANTHROPIC_API_KEY;
+const apiKey = process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN;
 if (!apiKey) {
-  console.error("FATAL: ANTHROPIC_API_KEY environment variable not set");
+  console.error("FATAL: ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN must be set");
   process.exit(1);
 }
 
-const anthropic = new AnthropicProvider(apiKey);
+const baseURL = process.env.ANTHROPIC_BASE_URL;
+if (baseURL) {
+  console.log(`Base URL: ${baseURL}`);
+}
+
+const anthropic = new AnthropicProvider(apiKey, baseURL);
 const tokenMeter = new TokenMeter();
 tokenMeter.start();
+
+// Model selection from env vars (see model_selector.ts for suffix parsing).
+// Env vars follow the Anthropic-compatible template:
+//   ANTHROPIC_MODEL                — default model
+//   ANTHROPIC_DEFAULT_SONNET_MODEL — Sonnet-tier model (priority 0)
+//   ANTHROPIC_DEFAULT_OPUS_MODEL   — Opus-tier model   (priority 1)
+//   ANTHROPIC_DEFAULT_HAIKU_MODEL  — Haiku-tier model  (priority 2)
+//
+// Each model name may carry a context-window suffix: "mimo-v2.5-pro[1m]".
+const modelSelector = new ModelSelector();
+const defaultModel = process.env.ANTHROPIC_MODEL || modelSelector.select()!.model;
+const defaultModelCtx = modelSelector.select(defaultModel)?.contextWindow ?? 200_000;
+
+console.log(`Models: ${modelSelector.list().map((m) => `${m.model}[${m.contextWindow.toLocaleString()}]`).join(", ")}`);
+console.log(`Default: ${defaultModel} (${defaultModelCtx.toLocaleString()} ctx)`);
 
 // ---------------------------------------------------------------------------
 // Router + HTTP server
@@ -46,8 +67,6 @@ const port = parseInt(process.env.PORT || "50051", 10);
 
 const handler = connectNodeAdapter({
   routes(router) {
-    // GenService<...> is structurally compatible with DescService;
-    // the branded brandv2 fields differ only at the type level.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     router.service(LLMRouterService as any, {
       // ---- Chat (unary) ----------------------------------------------------
@@ -57,11 +76,13 @@ const handler = connectNodeAdapter({
           content: m.content.map((b: any) => b.text ?? "").join(""),
         }));
 
+        const model = req.config?.model || defaultModel;
+
         const result = await anthropic.chat({
           messages,
           config: {
             provider: req.config?.provider ?? "anthropic",
-            model: req.config?.model ?? "claude-sonnet-4-6",
+            model,
             apiKey,
             maxTokens: req.config?.maxTokens ?? 4096,
             temperature: req.config?.temperature,
@@ -72,7 +93,7 @@ const handler = connectNodeAdapter({
           pipelineId: req.pipelineId,
           projectId: "",
           provider: "anthropic",
-          model: req.config?.model ?? "claude-sonnet-4-6",
+          model,
           inputTokens: result.usage.inputTokens,
           outputTokens: result.usage.outputTokens,
           timestamp: new Date(),
@@ -101,11 +122,13 @@ const handler = connectNodeAdapter({
           content: m.content.map((b: any) => b.text ?? "").join(""),
         }));
 
+        const model = req.config?.model || defaultModel;
+
         for await (const delta of anthropic.chatStream({
           messages,
           config: {
             provider: req.config?.provider ?? "anthropic",
-            model: req.config?.model ?? "claude-sonnet-4-6",
+            model,
             apiKey,
             maxTokens: req.config?.maxTokens ?? 4096,
             temperature: req.config?.temperature,
@@ -125,31 +148,22 @@ const handler = connectNodeAdapter({
         });
       },
 
-      // ---- ListModels (unary) ----------------------------------------------
+      // ---- ListModels (unary) — dynamic from env vars ----------------------
       listModels: async () => {
+        const entries = modelSelector.list();
         return create(ListModelsResponseSchema, {
-          models: [
+          models: entries.map((e) =>
             create(ModelInfoSchema, {
-              provider: "anthropic",
-              modelId: "claude-sonnet-4-6",
-              displayName: "Claude Sonnet 4.6",
-              contextWindow: BigInt(200000),
-              inputCostPer1k: 3.0,
-              outputCostPer1k: 15.0,
+              provider: e.provider,
+              modelId: e.model,
+              displayName: `${e.provider}/${e.model}`,
+              contextWindow: BigInt(e.contextWindow),
+              inputCostPer1k: 0,
+              outputCostPer1k: 0,
               supportsToolUse: true,
               supportsStreaming: true,
             }),
-            create(ModelInfoSchema, {
-              provider: "anthropic",
-              modelId: "claude-haiku-4-5-20251001",
-              displayName: "Claude Haiku 4.5",
-              contextWindow: BigInt(200000),
-              inputCostPer1k: 0.8,
-              outputCostPer1k: 4.0,
-              supportsToolUse: true,
-              supportsStreaming: true,
-            }),
-          ],
+          ),
         });
       },
 
@@ -179,5 +193,4 @@ const server = createServer(handler);
 
 server.listen(port, "0.0.0.0", () => {
   console.log(`OpenForge Node.js IO layer listening on :${port}`);
-  console.log(`Provider: anthropic | Model: claude-sonnet-4-6`);
 });

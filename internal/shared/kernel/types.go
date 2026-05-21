@@ -76,3 +76,55 @@ const (
 	RoleWorker   AgentRole = "worker"
 	RoleReviewer AgentRole = "reviewer"
 )
+
+// ParseContextWindow extracts the context window size from a model name suffix.
+// Recognised suffixes: [Nm] (million), [Nk] (thousand). Example:
+//
+//	"deepseek-v4-pro[1m]"   → 1_048_576
+//	"claude-sonnet[200k]"   → 204_800
+//	"mimo-v2.5-pro"         → 0, false (no suffix)
+//
+// The suffix is stripped from the returned model name.
+func ParseContextWindow(model string) (cleanName string, contextWindow int) {
+	n := len(model)
+	// Suffix must end with ']' and contain '['.
+	if n < 3 || model[n-1] != ']' {
+		return model, 0
+	}
+	// Find the matching '[' — it must be the character before the suffix content.
+	brace := -1
+	for i := n - 2; i >= 0; i-- {
+		if model[i] == '[' {
+			brace = i
+			break
+		}
+	}
+	if brace == -1 {
+		return model, 0
+	}
+	suffix := model[brace+1 : n-1]
+	if len(suffix) < 2 {
+		return model, 0
+	}
+	multiplier := 1
+	switch suffix[len(suffix)-1] {
+	case 'm', 'M':
+		multiplier = 1_048_576
+	case 'k', 'K':
+		multiplier = 1_024
+	default:
+		return model, 0
+	}
+	numStr := suffix[:len(suffix)-1]
+	val := 0
+	for _, ch := range numStr {
+		if ch < '0' || ch > '9' {
+			return model, 0
+		}
+		val = val*10 + int(ch-'0')
+	}
+	if val <= 0 {
+		return model, 0
+	}
+	return model[:brace], val * multiplier
+}

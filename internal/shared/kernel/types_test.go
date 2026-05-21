@@ -48,3 +48,33 @@ func TestPipelineStatusIsTerminal(t *testing.T) {
 		})
 	}
 }
+
+func TestParseContextWindow(t *testing.T) {
+	tests := []struct {
+		name       string
+		model      string
+		wantClean  string
+		wantWindow int
+	}{
+		{"1m suffix", "deepseek-v4-pro[1m]", "deepseek-v4-pro", 1_048_576},
+		{"200k suffix", "claude-sonnet[200k]", "claude-sonnet", 204_800},
+		{"128k suffix", "gpt-4[128k]", "gpt-4", 131_072},
+		{"uppercase M", "model[2M]", "model", 2_097_152},
+		{"uppercase K", "model[16K]", "model", 16_384},
+		{"no suffix", "mimo-v2.5-pro", "mimo-v2.5-pro", 0},
+		{"bracket in middle", "foo[bar]baz", "foo[bar]baz", 0},
+		{"empty num", "model[k]", "model[k]", 0},
+		{"zero", "model[0k]", "model[0k]", 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotClean, gotWindow := ParseContextWindow(tt.model)
+			if gotClean != tt.wantClean {
+				t.Errorf("ParseContextWindow(%q) name = %q, want %q", tt.model, gotClean, tt.wantClean)
+			}
+			if gotWindow != tt.wantWindow {
+				t.Errorf("ParseContextWindow(%q) window = %d, want %d", tt.model, gotWindow, tt.wantWindow)
+			}
+		})
+	}
+}

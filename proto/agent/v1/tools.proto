@@ -2,7 +2,7 @@
 
 package agent.v1;
 
-option go_package = "openforge/proto/agent/v1;agentv1";
+option go_package = "openforge/gen/go/agent/v1;agentv1";
 
 // ============================================================
 // Tool Registry Service — Go 协调层 → Node.js Dynamic Tool Hub

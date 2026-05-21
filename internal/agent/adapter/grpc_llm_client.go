@@ -3,61 +3,55 @@ package adapter
 import (
 	"context"
 	"fmt"
-	"io"
+	"net/http"
 
 	agentv1 "openforge/gen/go/agent/v1"
+	"openforge/gen/go/agent/v1/agentv1connect"
 	"openforge/internal/agent/port"
 
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
+	"connectrpc.com/connect"
 )
 
-// LLMClient implements port.LLMRouterClient via gRPC to the Node.js LLM Router.
+// LLMClient implements port.LLMRouterClient via ConnectRPC to the Node.js LLM Router.
 type LLMClient struct {
-	conn   *grpc.ClientConn
-	client agentv1.LLMRouterServiceClient
+	httpClient *http.Client
+	client     agentv1connect.LLMRouterServiceClient
 }
 
-// NewLLMClient dials addr (e.g. "localhost:50051") and returns a ready client.
+// NewLLMClient creates a ConnectRPC client targeting addr (e.g. "http://127.0.0.1:50051").
 func NewLLMClient(addr string) (*LLMClient, error) {
-	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		return nil, fmt.Errorf("grpc dial %s: %w", addr, err)
-	}
+	baseURL := fmt.Sprintf("http://%s", addr)
+	httpClient := &http.Client{}
 	return &LLMClient{
-		conn:   conn,
-		client: agentv1.NewLLMRouterServiceClient(conn),
+		httpClient: httpClient,
+		client:     agentv1connect.NewLLMRouterServiceClient(httpClient, baseURL),
 	}, nil
 }
 
 // Chat sends a unary Chat request and returns the aggregated response.
 func (c *LLMClient) Chat(ctx context.Context, req port.ChatRequest) (*port.ChatResponse, error) {
 	pbReq := toProtoRequest(req)
-	pbResp, err := c.client.Chat(ctx, pbReq)
+	connectReq := connect.NewRequest(pbReq)
+	pbResp, err := c.client.Chat(ctx, connectReq)
 	if err != nil {
-		return nil, fmt.Errorf("grpc chat: %w", err)
+		return nil, fmt.Errorf("connect chat: %w", err)
 	}
-	return fromProtoResponse(pbResp), nil
+	return fromProtoResponse(pbResp.Msg), nil
 }
 
-// ChatStream sends a streaming Chat request and returns a channel of text deltas.
+// ChatStream sends a server-streaming Chat request and returns a channel of text deltas.
 func (c *LLMClient) ChatStream(ctx context.Context, req port.ChatRequest) (<-chan string, error) {
 	pbReq := toProtoRequest(req)
-	stream, err := c.client.ChatStream(ctx, pbReq)
+	connectReq := connect.NewRequest(pbReq)
+	stream, err := c.client.ChatStream(ctx, connectReq)
 	if err != nil {
-		return nil, fmt.Errorf("grpc chat stream: %w", err)
+		return nil, fmt.Errorf("connect chat stream: %w", err)
 	}
 	ch := make(chan string, 64)
 	go func() {
 		defer close(ch)
-		for {
-			msg, err := stream.Recv()
-			if err == io.EOF {
-				return
-			}
-			if err != nil {
-				return
-			}
+		for stream.Receive() {
+			msg := stream.Msg()
 			if msg.Delta != nil && msg.Delta.Text != nil {
 				ch <- *msg.Delta.Text
 			}
@@ -66,9 +60,10 @@ func (c *LLMClient) ChatStream(ctx context.Context, req port.ChatRequest) (<-cha
 	return ch, nil
 }
 
-// Close tears down the underlying gRPC connection.
+// Close releases idle HTTP connections.
 func (c *LLMClient) Close() error {
-	return c.conn.Close()
+	c.httpClient.CloseIdleConnections()
+	return nil
 }
 
 // ---------------------------------------------------------------------------
