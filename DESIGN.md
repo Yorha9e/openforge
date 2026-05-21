@@ -1,6 +1,6 @@
 ﻿# OpenForge (原 SuperAgent) — AI 工程工具 设计文档
 
-> 日期: 2026-05-18 | 比赛: Agent 辅助全栈挑战赛 | 题目: 题一「AI工程工具」 | 版本: v3 (rebrand + 评审闭环)
+> 日期: 2026-05-21 | 比赛: Agent 辅助全栈挑战赛 | 题目: 题一「AI工程工具」 | 版本: v4 (Claude Code 源码对比采纳 + Phase 1 审计闭环)
 
 ---
 
@@ -210,6 +210,7 @@ L4 (架构变更): 澄清 → 拆解 → 实现 → 测试 → 部署 → 验证
         即时检查点写入内存缓冲 → 异步 flush PG
   ```
 - CSP Channel WAL: 跨 Agent 消息先写 WAL → 再投递 → crash 后回放去重
+- 背压保护: 通道满时 → 消息写入 WAL 暂存 (非丢弃) → 等待消费 → 消费后从 WAL 移除。WAL 自身 CRC32 校验
 
 ### 3.5 文件锁
 
@@ -354,7 +355,107 @@ Pipeline 失败时自动分类，避免学到噪声:
 - **Goroutine Pool** (ants): 全局上限 ~8000，按 Pipeline L1-L4 分级配额
 - **进程守护**: `os/exec` + `cmd.Wait()` 自动重启 Node.js IO 层
 
-### 4.2 Node.js IO 层
+### 4.2 Query Engine (对话生命周期管理) `[Phase 1.5 — v4 新增]`
+
+> 采纳自 Claude Code 源码分析对比: OpenForge Phase 1 的聊天循环散落在 CLI → CSP channel → gRPC 链路中, Phase 2 Web 对话无法复用。
+
+Query Engine 管理单次对话(Pipeline 内一个 Stage)的完整生命周期:
+
+```
+Query Loop:
+  用户输入 → 规范化 → 写入 transcript → LLM 推理 → Tool 调用 → 结果注入 → 循环
+
+状态机:
+  IDLE → AWAITING_LLM → AWAITING_TOOLS → AWAITING_USER → IDLE
+
+内部持有:
+  ├── LLMClient (port): 调用 LLM Router 的抽象
+  ├── ToolRegistry (port): 可用工具索引
+  ├── MessageHistory: 当前对话消息列表 (支持分支)
+  ├── TokenBudget: 剩余 Token 预算
+  └── AbortController: 取消传播 (StopGeneration → cancel LLM + cancel tools)
+```
+
+**核心方法**: `SubmitMessage(ctx, msg) → (<-chan StreamEvent, error)`
+**流式管道**: `LLM Stream → Transform(CSP token) → Filter(cache hit) → Accumulate(message) → ToolDispatch → UI`
+
+```
+Go 实现 (~300行):
+  internal/agent/domain/query_engine.go      # QueryEngine 核心循环 + 状态机
+  internal/agent/domain/query_engine_test.go  # Table-driven 测试全部 4 状态转换
+```
+
+### 4.3 Tool 接口标准化 `[Phase 1.5 — v4 新增]`
+
+> 采纳自 Claude Code: 当前 OpenForge 工具仅在 Proto 层定义 RPC, Go 侧无 Tool 泛型接口, 每加一个 Tool 都是一次性代码。
+
+```go
+// internal/agent/port/tool.go
+
+// Tool 泛型接口 — 所有工具的基础契约
+type Tool[Input any, Output any] interface {
+    Name()             string
+    Description()      string
+    InputSchema()      []byte                         // JSON Schema
+    IsConcurrencySafe() bool                           // true=可并行, false=必须串行
+    IsReadOnly()       bool                           // true=只读(plan模式自动放行)
+    Execute(ctx context.Context, input Input) (Output, error)
+}
+
+// StreamingTool — 支持流式产出的工具 (如 Bash, Test Runner)
+type StreamingTool[Input any, Output any] interface {
+    Tool[Input, Output]
+    ExecuteStream(ctx context.Context, input Input) (<-chan StreamChunk[Output], error)
+}
+
+// ToolRegistry — 工具注册表 (嵌入索引匹配)
+type ToolRegistry interface {
+    Register(tool Tool[any, any]) error
+    Search(ctx context.Context, query string, topK int) ([]ToolMatch, error)
+    Get(name string) (Tool[any, any], error)
+}
+
+// 工具状态机: QUEUED → EXECUTING → COMPLETED | YIELDED | FAILED
+```
+
+**并发规则**: `IsConcurrencySafe()==true` 的工具可并行执行（如 Read, Grep）；`==false` 必须串行（如 Write, Edit, Bash 写入操作）。级联中止: Bash 错误触发兄弟工具中止, 只读工具不受影响。
+
+### 4.4 权限模式（四级）`[Phase 1.5 — v4 新增]`
+
+> 采纳自 Claude Code 的 default/plan/auto/bypass 四级权限, 适配 OpenForge 的 PM Pipeline + Gate 场景。
+
+```
+PermissionMode (按 Pipeline Stage 自动选择, PM 可手动升级):
+
+  ┌────────────┬──────────────────────────────────────────────┐
+  │ bypass     │ 管理员特权通道, 全部操作自动允许               │
+  │            │ 使用条件: Admin 角色 + 仅紧急回溯/生产修复     │
+  │            │ 全程审计 (WORM), 事后强制 Review              │
+  ├────────────┼──────────────────────────────────────────────┤
+  │ auto       │ 规则引擎自动判定 (只读放行, 写入需 Gate)       │
+  │            │ 适用于: L1/L2 原子变更 (typo/文案/配置)       │
+  │            │ 文件锁范围内自动允许                           │
+  ├────────────┼──────────────────────────────────────────────┤
+  │ plan       │ 仅允许只读操作 (文件读取/LSP/Grep/拓扑分析)   │
+  │            │ 适用于: 需求澄清阶段 → Agent 分析仓库         │
+  │            │ PM 可见操作日志, 不可写代码                    │
+  ├────────────┼──────────────────────────────────────────────┤
+  │ default    │ 所有操作需 Gate 审批                          │
+  │            │ 适用于: L3/L4 功能开发+架构变更               │
+  │            │ 写入操作全部阻断, 等待审批人通过                │
+  └────────────┴──────────────────────────────────────────────┘
+
+权限判定链 (per tool call):
+  1. PermissionMode 判定 → bypass → 直接放行
+  2. tool.IsReadOnly() + plan 模式 → 自动放行
+  3. auto 规则引擎 → 文件锁/白名单内 → 放行
+  4. 触发 Gate 审批 → 审批人确认 → 放行/拒绝
+  5. 所有决策记录审计: {who, what, mode, decision, timestamp}
+```
+
+**与 RBAC 的关系**: RBAC 控制"谁能审批/谁能创建 Pipeline"，PermissionMode 控制"Agent 单次操作需要什么级别的许可"。两者正交。
+
+### 4.5 Node.js IO 层
 
 - **Dynamic Tool Hub**: 嵌入索引 (all-MiniLM) → 按需匹配 top-3 tool → 0 schema 进上下文
 - **Skill Loader**: 扫描 SKILL.md → YAML 解析 → 语义匹配 → 注入上下文
