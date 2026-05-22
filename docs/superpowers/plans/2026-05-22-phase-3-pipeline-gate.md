@@ -12,10 +12,13 @@
 
 **Phase 3 关键约束：**
 - Pipeline 最多 3 次 backtrack，需 Gate 审批
-- L1/L2 Gate 可 auto-timeout (30min)，L3/L4 必须人工审批
+- Gate 判定使用 §4.4 PermissionMode (替代硬编码 L3/L4: bypass 全部放行, auto/plan 只读放行, default 需 Gate)
+- Gate 超时 5min 自动拒绝 (§4.2.4)，不区分 L1/L2/L3/L4
 - Verify stage 永远不 auto-close
 - Gate 审批含行级评论 + 总结反馈 + checklist
 - 审批驳回仅重做标记为 needs_revision 的文件
+- Gate 挂起/恢复走 §4.2: Submit() → pending_gate → Resume(GateResult)
+- gate_request 表 (审批挂起持久化) 与 gate_event 表 (审计历史) 分离
 
 ---
 ## File Map
@@ -47,8 +50,15 @@ openforge/
 │       └── bootstrap.go                # MODIFY: 注入 Repository
 ├── config/profiles/
 │   └── minimal.yaml                    # MODIFY: 增加 database DSN
+├── internal/
+│   └── agent/
+│       ├── port/
+│       │   └── gate_repository.go          # NEW: §4.2.5 GateRepository 接口
+│       └── adapter/
+│           └── pg_gate_repository.go       # NEW: PG 实现
 ├── migrations/
-│   └── 001_init.up.sql                 # [EXISTS] 16 tables
+│   ├── 001_init.up.sql                    # [EXISTS] 16 tables
+│   └── 003_gate_request.up.sql            # NEW: gate_request 表 (§4.2.5)
 └── frontend/src/
     ├── shared/
     │   └── api.ts                       # MODIFY: 增加 gate/pipeline API
@@ -634,7 +644,11 @@ func (s *PipelineService) Cancel(ctx context.Context, id string) error {
 }
 ```
 
-- [ ] **Step 2: 实现 GateService**
+- [ ] **Step 2: 实现 GateService (含 gate_request 持久化)**
+
+> v5 对齐: `gate_request` 表用于审批挂起持久化 (§4.2.5), `gate_event` 表用于审计历史 (已有)。GateService 的 approve/reject 先写 gate_request (更新 status+result)，再写 gate_event (审计记录)，最后触发 QueryEngine.Resume()。
+
+Create `internal/pipeline/service/gate_service.go`:
 
 Create `internal/pipeline/service/gate_service.go`:
 ```go
@@ -907,16 +921,58 @@ import (
 	of.GateSvc = pipesvc.NewGateService(of.PipelineRepo, of.PipelineRepo)
 ```
 
-- [ ] **Step 4: 编译验证**
+- [ ] **Step 4: 实现 Gate-pause 桥接 (QueryEngine ↔ GateService)**
+
+> v5 对齐: REST approve/reject 收到后 → 查找 pending GateRequest → 更新 gate_request 状态 + 写 gate_event 审计 → Resume QueryEngine
+
+在 `routes.go` 的 `handleApproveGate` 中:
+```go
+func handleApproveGate(of *profile.OpenForge) http.HandlerFunc {
+    return func(w http.ResponseWriter, r *http.Request) {
+        pipelineID := r.PathValue("id")
+        stage := r.PathValue("stage")
+        actor := UserIDFromContext(r.Context())
+
+        var req struct {
+            Checklist domain.GateChecklist `json:"checklist"`
+            Summary   string               `json:"summary_feedback"`
+        }
+        json.NewDecoder(r.Body).Decode(&req)
+
+        // 1. 查找 pending gate_request (来自 QueryEngine.handleGatePause)
+        pending, err := of.GateRepo.GetByPipeline(ctx, pipelineID, stage)
+        if err != nil { writeError(w, 404, "no pending gate"); return }
+
+        // 2. 更新 gate_request 状态
+        gr := domain.GateResult{Approved: true, ApprovedBy: actor, ApprovedAt: time.Now()}
+        of.GateRepo.UpdateResult(ctx, pending.PendingID, gr)
+
+        // 3. 写 gate_event 审计 (已有逻辑)
+        of.GateSvc.RecordApprove(ctx, pipelineID, stage, actor, req.Checklist, req.Summary)
+
+        // 4. Resume QueryEngine (通过 WS connection manager 找到对应连接)
+        of.WSManager.ResumeQueryEngine(ctx, pipelineID, gr)
+
+        writeJSON(w, 200, map[string]string{"status": "approved"})
+    }
+}
+```
+
+- [ ] **Step 5: 实现 GateRepository + gate_request DDL**
+
+Create `internal/agent/adapter/pg_gate_repository.go` (PG 实现 — Create/Get/UpdateResult/UpdateStatus/ListPending/GetByPipeline).
+Create `migrations/003_gate_request.up.sql` (§4.2.5 DDL).
+
+- [ ] **Step 6: 编译验证**
 
 Run: `go build ./cmd/server/`
-Expected: 编译通过（如缺少 DSN 方法，添加 `func (d DatabaseConfig) DSN() string` 到 loader.go）
+Expected: 编译通过
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add internal/server/routes.go internal/shared/profile/bootstrap.go internal/shared/profile/loader.go go.mod go.sum
-git commit -m "feat(server): wire pipeline + gate REST endpoints, PG repository, real handlers"
+git add internal/server/routes.go internal/agent/adapter/pg_gate_repository.go migrations/003_gate_request.up.sql internal/shared/profile/bootstrap.go
+git commit -m "feat(server): wire pipeline + gate REST endpoints, GateRepository, gate_request DDL, QueryEngine Resume bridge"
 ```
 
 ---
