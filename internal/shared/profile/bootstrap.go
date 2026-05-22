@@ -2,11 +2,19 @@ package profile
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"io"
 	"os"
+	"sync"
 	"time"
 
+	_ "github.com/lib/pq"
+
+	"openforge/internal/adapter"
+	"openforge/internal/llm"
+	pipelineadapter "openforge/internal/pipeline/adapter"
+	"openforge/internal/pipeline/service"
 	"openforge/internal/shared/kernel"
 )
 
@@ -14,18 +22,26 @@ import (
 // constructed by Bootstrap and provides ready-to-use implementations of
 // every interface declared in kernel/interfaces.go.
 type OpenForge struct {
-	Secrets   kernel.SecretStore
-	Container kernel.ContainerRuntime
-	Object    kernel.ObjectStore
-	TaskQ     kernel.TaskQueue
-	Events    kernel.EventBus
-	Cache     kernel.Cache
-	Telemetry kernel.Telemetry
-	Registry  kernel.ServiceRegistry
-	DR        kernel.DisasterRecovery
-	LB        kernel.LoadBalancer
-	Notifier  kernel.Notifier
-	Config    *Config
+	Secrets      kernel.SecretStore
+	Container    kernel.ContainerRuntime
+	Object       kernel.ObjectStore
+	TaskQ        kernel.TaskQueue
+	Events       kernel.EventBus
+	Cache        kernel.Cache
+	Telemetry    kernel.Telemetry
+	Registry     kernel.ServiceRegistry
+	DR           kernel.DisasterRecovery
+	LB           kernel.LoadBalancer
+	Notifier     kernel.Notifier
+	CommandExec  kernel.CommandExecutor
+	LLMRouter    *llm.Router
+	LLMRegistry  *llm.Registry
+	Config       *Config
+
+	PipelineRepo *pipelineadapter.PGRepository
+	PipelineSvc  *service.PipelineService
+	GateSvc      *service.GateService
+	DB           *sql.DB
 }
 
 // Bootstrap creates a new OpenForge composition root from the given profile
@@ -56,6 +72,19 @@ func Bootstrap(cfg *Config) (*OpenForge, error) {
 	of.DR = newDisasterRecovery(cfg)
 	of.LB = newLoadBalancer(cfg)
 	of.Notifier = newNotifier(cfg)
+	of.CommandExec = newCommandExecutor(cfg)
+	llmRegistry := llm.NewRegistry()
+	of.LLMRegistry = llmRegistry
+	of.LLMRouter = llm.NewRouter(llmRegistry, of.Secrets)
+
+	db, err := sql.Open("postgres", cfg.Database.DSN())
+	if err != nil {
+		return nil, fmt.Errorf("db: %w", err)
+	}
+	of.DB = db
+	of.PipelineRepo = pipelineadapter.NewPGRepository(db)
+	of.PipelineSvc = service.NewPipelineService(of.PipelineRepo)
+	of.GateSvc = service.NewGateService(of.PipelineRepo, of.PipelineRepo)
 	return of, nil
 }
 
@@ -170,6 +199,7 @@ func (q *noopTaskQueue) Ack(_ context.Context, topic string, msgID string) error
 // --- EventBus --------------------------------------------------------------
 
 type goroutineEventBus struct {
+	mu   sync.RWMutex
 	subs map[string][]chan kernel.Event
 }
 
@@ -178,6 +208,8 @@ func newEventBus(cfg *Config) kernel.EventBus {
 }
 
 func (b *goroutineEventBus) Publish(_ context.Context, topic string, event kernel.Event) error {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
 	for _, ch := range b.subs[topic] {
 		select {
 		case ch <- event:
@@ -188,6 +220,8 @@ func (b *goroutineEventBus) Publish(_ context.Context, topic string, event kerne
 }
 
 func (b *goroutineEventBus) Subscribe(_ context.Context, topic string) (<-chan kernel.Event, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	ch := make(chan kernel.Event, 64)
 	b.subs[topic] = append(b.subs[topic], ch)
 	return ch, nil
@@ -196,12 +230,15 @@ func (b *goroutineEventBus) Subscribe(_ context.Context, topic string) (<-chan k
 // --- Cache ----------------------------------------------------------------
 
 type memoryCache struct {
+	mu   sync.RWMutex
 	data map[string]any
 }
 
 func newCache(cfg *Config) kernel.Cache { return &memoryCache{data: make(map[string]any)} }
 
 func (c *memoryCache) Get(_ context.Context, key string) (any, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	v, ok := c.data[key]
 	if !ok {
 		return nil, fmt.Errorf("key %q not found", key)
@@ -209,10 +246,14 @@ func (c *memoryCache) Get(_ context.Context, key string) (any, error) {
 	return v, nil
 }
 func (c *memoryCache) Set(_ context.Context, key string, val any, _ time.Duration) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.data[key] = val
 	return nil
 }
 func (c *memoryCache) Del(_ context.Context, key string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	delete(c.data, key)
 	return nil
 }
@@ -239,6 +280,7 @@ func (s *noopSpan) AddEvent(name string, attrs map[string]string) {}
 // --- ServiceRegistry -------------------------------------------------------
 
 type staticServiceRegistry struct {
+	mu       sync.RWMutex
 	services map[string][]string
 }
 
@@ -257,15 +299,21 @@ func newServiceRegistry(cfg *Config) kernel.ServiceRegistry {
 }
 
 func (r *staticServiceRegistry) Register(_ context.Context, name string, addr string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.services[name] = append(r.services[name], addr)
 	return nil
 }
 func (r *staticServiceRegistry) Discover(_ context.Context, name string) ([]string, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	addrs, ok := r.services[name]
 	if !ok {
 		return nil, fmt.Errorf("service %q not found", name)
 	}
-	return addrs, nil
+	copied := make([]string, len(addrs))
+	copy(copied, addrs)
+	return copied, nil
 }
 func (r *staticServiceRegistry) Watch(_ context.Context, name string) (<-chan kernel.Event, error) {
 	return nil, fmt.Errorf("watch not supported in static registry")
@@ -307,4 +355,18 @@ func (n *stdoutNotifier) Send(_ context.Context, target kernel.Target, msg kerne
 }
 func (n *stdoutNotifier) SendWithRetry(_ context.Context, target kernel.Target, msg kernel.Notification, maxRetries int) error {
 	return n.Send(context.Background(), target, msg)
+}
+
+func newCommandExecutor(cfg *Config) kernel.CommandExecutor {
+	switch cfg.CommandExecutor {
+	case "local-shell":
+		return adapter.NewLocalShellExecutor(adapter.WithProfile(cfg))
+	case "docker-sandbox":
+		return adapter.NewLocalShellExecutor(adapter.WithProfile(cfg))
+	default:
+		if cfg.Profile == "minimal" {
+			return adapter.NewLocalShellExecutor(adapter.WithProfile(cfg))
+		}
+		panic("unknown command_executor: " + cfg.CommandExecutor)
+	}
 }

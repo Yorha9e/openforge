@@ -53,6 +53,11 @@ type GRPCConfig struct {
 	CoordinatorAddr string `yaml:"coordinator_addr"`
 }
 
+func (d DatabaseConfig) DSN() string {
+	return fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
+		d.Host, d.Port, d.User, d.Password, d.DBName, d.SSLMode)
+}
+
 // JWTConfig holds JWT auth configuration.
 type JWTConfig struct {
 	Secret     string `yaml:"secret"`
