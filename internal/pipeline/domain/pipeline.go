@@ -16,6 +16,7 @@ type Pipeline struct {
 	CurrentStage   string
 	CreatedBy      string
 	BacktrackCount int
+	Version        int
 	Stages         []Stage
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
@@ -31,6 +32,7 @@ func NewPipeline(id, projectID, title, createdBy string, files, modules int) *Pi
 		Level:     level,
 		Status:    "pending",
 		CreatedBy: createdBy,
+		Version:   1,
 		Stages:    stages,
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
