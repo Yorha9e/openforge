@@ -81,6 +81,9 @@ func TestPipelineBacktrackLimit(t *testing.T) {
 		if err != nil {
 			t.Fatalf("backtrack %d should succeed: %v", i, err)
 		}
+		if p.Status != "dormant" {
+			t.Errorf("backtrack %d: status = %q, want dormant", i, p.Status)
+		}
 		p.Status = "running" // reset for next test
 	}
 
@@ -88,5 +91,21 @@ func TestPipelineBacktrackLimit(t *testing.T) {
 	err := p.Transition("backtrack")
 	if err == nil {
 		t.Fatal("4th backtrack should fail")
+	}
+	if p.BacktrackCount != 3 {
+		t.Errorf("BacktrackCount = %d, want 3 (4th should not increment)", p.BacktrackCount)
+	}
+}
+
+func TestPipelineBacktrackInvalidState(t *testing.T) {
+	p := NewPipeline("p1", "proj1", "Test", "user1", 10, 5) // L4
+	p.Status = "pending" // pending does not support backtrack
+
+	err := p.Transition("backtrack")
+	if err == nil {
+		t.Fatal("backtrack from pending should fail")
+	}
+	if p.BacktrackCount != 0 {
+		t.Errorf("BacktrackCount = %d, want 0 (invalid backtrack should not consume token)", p.BacktrackCount)
 	}
 }

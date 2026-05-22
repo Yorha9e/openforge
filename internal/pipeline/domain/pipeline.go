@@ -63,16 +63,15 @@ func defaultStages(level string) []Stage {
 
 // Transition validates and applies a state transition.
 func (p *Pipeline) Transition(action string) error {
-	if action == "backtrack" && p.BacktrackCount >= 3 {
-		return fmt.Errorf("backtrack limit exceeded (3 max)")
-	}
-	if action == "backtrack" {
-		p.BacktrackCount++
-	}
-
 	next, ok := validTransitions[p.Status][action]
 	if !ok {
 		return fmt.Errorf("invalid transition: %q from %q", action, p.Status)
+	}
+	if action == "backtrack" {
+		if p.BacktrackCount >= 3 {
+			return fmt.Errorf("backtrack limit exceeded (3 max)")
+		}
+		p.BacktrackCount++
 	}
 	p.Status = next
 	return nil
