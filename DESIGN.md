@@ -413,34 +413,213 @@ Pipeline 失败时自动分类，避免学到噪声:
 - **Goroutine Pool** (ants): 全局上限 ~8000，按 Pipeline L1-L4 分级配额
 - **进程守护**: `os/exec` + `cmd.Wait()` 自动重启 Node.js IO 层
 
-### 4.2 Query Engine (对话生命周期管理) `[Phase 1.5 — v4 新增]`
+### 4.2 Query Engine (对话生命周期管理) `[Phase 1.5 — v4, Phase 3 Gate 细化 + P0/P1 闭环]`
 
-> 采纳自 Claude Code 源码分析对比: OpenForge Phase 1 的聊天循环散落在 CLI → CSP channel → gRPC 链路中, Phase 2 Web 对话无法复用。
+> 采纳自 Claude Code 源码分析 + Gate 挂起评审: 8 项补充全闭环, P0 后 8.75/10, P1 后 9.4/10。
 
-Query Engine 管理单次对话(Pipeline 内一个 Stage)的完整生命周期:
+Query Engine 管理单次对话(Pipeline 内一个 Stage)的完整生命周期。**状态机 (6 态)**:
 
 ```
-Query Loop:
-  用户输入 → 规范化 → 写入 transcript → LLM 推理 → Tool 调用 → 结果注入 → 循环
-
-状态机:
-  IDLE → AWAITING_LLM → AWAITING_TOOLS → AWAITING_USER → IDLE
+IDLE → AWAITING_LLM → AWAITING_TOOLS → AWAITING_GATE → AWAITING_USER → IDLE
+                                             ↑ PermissionMode=default
+                                             触发 Gate 审批时挂起
 
 内部持有:
-  ├── LLMClient (port): 调用 LLM Router 的抽象
-  ├── ToolRegistry (port): 可用工具索引
-  ├── MessageHistory: 当前对话消息列表 (支持分支)
-  ├── TokenBudget: 剩余 Token 预算
-  └── AbortController: 取消传播 (StopGeneration → cancel LLM + cancel tools)
+  ├── LLMClient → Go LLM Router (Phase 1.5 Task 11)
+  ├── ToolRegistry → 可用工具索引 (§4.3)
+  ├── MessageHistory → 完整对话消息列表 (支持分支)
+  ├── TokenBudget → 剩余 Token 预算
+  ├── PermissionMode → bypass/auto/plan/default (§4.4)
+  ├── pendingGate → AWAITING_GATE 时挂起的审批状态
+  ├── resumeOnce → sync.Once 防重复调用 (P0 并发安全)
+  └── cancel → context.CancelFunc (P0 Cancel 传播)
 ```
 
-**核心方法**: `SubmitMessage(ctx, msg) → (<-chan StreamEvent, error)`
-**流式管道**: `LLM Stream → Transform(CSP token) → Filter(cache hit) → Accumulate(message) → ToolDispatch → UI`
+#### 4.2.1 核心数据结构
+
+```go
+type QueryEngine struct {
+    config       QueryEngineConfig
+    llmClient    port.LLMRouterClient
+    toolRegistry port.ToolRegistry
+    gateRepo     GateRepository              // 持久化 pending gate (P0 重启恢复)
+
+    mu           sync.Mutex                  // 保护下面所有字段
+    state        QueryState
+    history      []port.Message
+    tokenUsed    int
+    pipelineID   string
+    pendingGate  *PendingGateState           // 挂起的 Gate 审批
+    resumeOnce   sync.Once                   // P0: 防 Resume 重复调用
+    resumeErr    error
+    resumeResult *SubmitResult
+    cancel       context.CancelFunc           // P0: 传播取消
+
+    logger       Logger                       // P1: 结构化日志
+    metrics      MetricsCollector             // P1: 指标收集
+}
+```
+
+#### 4.2.2 SubmitResult + Gate 类型
+
+```go
+type SubmitResult struct {
+    Status      SubmitStatus    // "completed" | "pending_gate" | "error"
+    Reply       string
+    ToolCalls   []ToolCallRecord
+    TokenUsed   int
+    Checkpoint  *Checkpoint
+    GateRequest *GateRequest    // 非 nil → 需要 Gate 审批
+    Error       string
+}
+
+type GateRequest struct {
+    PipelineID   string
+    Stage        string
+    ToolName     string
+    Reason       string
+    ChangedFiles []string
+    ArtifactHash string
+    CreatedAt    time.Time       // P0: 超时起点
+    ExpiresAt    time.Time       // P0: 默认 +5min
+    Approvers    []string        // P2: 指定审批人 (Phase 6+)
+}
+
+type GateResult struct {
+    Approved        bool
+    LineComments    []LineComment   // 驳回时含行级反馈
+    SummaryFeedback string
+    ApprovedBy      string
+    ApprovedAt      time.Time
+}
+
+// PendingGateState — 持久化结构, crash 可恢复
+type PendingGateState struct {
+    PendingID    string
+    GateRequest  GateRequest
+    ToolCall     ToolCallParsed
+    History      []port.Message   // 挂起时的对话历史快照
+    TokenUsed    int
+    ArtifactHash string
+    CreatedAt    time.Time
+    ExpiresAt    time.Time
+    Status       string           // "pending" | "approved" | "rejected" | "timeout" | "expired"
+}
+```
+
+#### 4.2.3 核心 API
+
+```go
+// Submit — 对话唯一入口。每次 Submit 重置 resumeOnce 和 cancel。
+func (qe *QueryEngine) Submit(ctx context.Context, input string) (*SubmitResult, error)
+
+// Resume — 从 Gate 挂起点恢复。sync.Once 保护, 重复调用返回缓存结果。
+// 内部: 重新从 DB 加载 PendingGateState → 验证未过期 → 验证 ArtifactHash 冲突 → 执行恢复。
+func (qe *QueryEngine) Resume(ctx context.Context, gateResult GateResult) (*SubmitResult, error)
+
+// Cancel — 取消当前 Submit (传播到 LLM 流 + Tool 执行)。
+func (qe *QueryEngine) Cancel()
+```
+
+#### 4.2.4 P0: Gate 超时机制
+
+QueryEngine 启动时开 goroutine 每 10s 检查 `pendingGate.ExpiresAt`。超时 → 自动拒绝:
 
 ```
-Go 实现 (~300行):
-  internal/agent/domain/query_engine.go      # QueryEngine 核心循环 + 状态机
-  internal/agent/domain/query_engine_test.go  # Table-driven 测试全部 4 状态转换
+超时处理:
+  1. 状态切 AWAITING_LLM (不等审批了)
+  2. 注入 system message: "Gate 审批超时，操作被自动拒绝"
+  3. 持久化 status=timeout
+  4. ws_handler 推送 gate.timeout 事件给调用方
+  5. goroutine 不泄漏 (状态已从 AWAITING_GATE 迁出)
+```
+
+配置: `QueryEngineConfig.GateTimeout` 默认 5min。
+
+#### 4.2.5 P0: 进程重启恢复
+
+`NewQueryEngine()` 启动时扫描 DB `gate_requests` 表 WHERE status='pending':
+
+```
+恢复逻辑:
+  ├── 已过期 → 标记 status=expired, 跳过
+  ├── 待审批 → 恢复 pendingGate 状态, 状态切 AWAITING_GATE
+  └── 多个 pending → 仅恢复第一个, 其余标记 expired
+
+PG 表 (新增):
+  gate_requests (pending_id, pipeline_id, tool_name, reason,
+    changed_files, artifact_hash, history JSONB, token_used,
+    status, created_at, expires_at, approved_at, approved_by, result JSONB)
+```
+
+#### 4.2.6 P1: 冲突检测
+
+Resume 时计算当前 history SHA256, 与挂起时的 ArtifactHash 比对。不匹配 → 按策略处理:
+
+| 策略 | 行为 |
+|------|------|
+| `abort` (默认) | 返回 error: "审批期间对话历史被修改，请重新提交" |
+| `override` | 警告日志 + 强制继续 (仅 dev) |
+
+配置: `QueryEngineConfig.ConflictResolution`。
+
+#### 4.2.7 P1: Rejected 反馈格式化
+
+驳回时 `formatGateFeedback()` 将 GateResult 转为结构化 Markdown 注入 history:
+
+```
+## Gate 审批被拒绝
+
+### 总体反馈
+{SummaryFeedback}
+
+### 行级反馈
+**src/auth.ts**
+- 第42行: validate 改成 Zod schema
+
+[needs_revision] 请仅修改以下文件: src/auth.ts
+```
+
+LLM 收到后仅修改 `needs_revision` 标记的文件。
+
+#### 4.2.8 P1: 可观测性
+
+```go
+// 指标: ga_gate_requests_total{tool}, ga_gate_results_total{tool,result},
+//        ga_gate_latency_seconds{tool}
+// 日志: GateRequest 创建/审批通过/审批拒绝/超时时各输出结构化日志
+```
+
+#### 4.2.9 完整流程
+
+```
+Submit("修改 auth.ts 校验逻辑")
+  │
+  ├─ LLM 推理 → "我需要调用 BashTool: npm install zod"
+  ├─ Tool 循环 → permissionMode.Classify(BashTool) → DecisionAskGate
+  ├─ 状态切 AWAITING_GATE
+  ├─ 持久化 PendingGateState → gate_requests 表
+  ├─ 返回 SubmitResult{Status: "pending_gate", GateRequest: {...ExpiresAt: now+5min}}
+  │
+  ├─ ws_handler 收到 → 推送 WS gate.notify → 连接挂起 → 启动超时定时器
+  │
+  ├─ 审批人调用 REST POST /gate/approve → ws_handler 收到
+  ├─ Resume(GateResult{Approved: true})
+  │   ├─ sync.Once 保护
+  │   ├─ 重新从 DB 加载 PendingGateState
+  │   ├─ 验证未过期 + ArtifactHash 冲突检测
+  │   ├─ 持久化 result → status=approved
+  │   └─ 继续执行 BashTool → 结果注入 history → LLM 继续推理
+  │
+  └─ 返回 SubmitResult{Status: "completed", Reply: "已安装 zod..."}
+```
+
+```
+Go 实现 (~800行, 含 Gate 超时/恢复/冲突/反馈):
+  internal/agent/domain/query_engine.go       # QueryEngine 核心 (~500行)
+  internal/agent/domain/query_engine_test.go  # Table-driven 测试含 Gate 全生命周期
+  internal/agent/port/gate_repository.go      # GateRepository 接口
+  internal/agent/adapter/pg_gate_repository.go # PG 实现
 ```
 
 ### 4.3 Tool 接口标准化 `[Phase 1.5 — v4 新增]`
