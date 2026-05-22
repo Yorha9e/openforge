@@ -1,8 +1,111 @@
 # QE-05: MapToolErrorToFailureCode — Query Engine ↔ §3.15 对接
 
-> 日期: 2026-05-23 | 关联: DESIGN.md §3.14, §3.15, §4.2
+> 日期: 2026-05-23 | 关联: DESIGN.md §3.14, §3.15, §4.2 | P0 修正: 补充 FailureCode/ClassifyAndRecover 完整定义
 
-## 映射表
+## FailureCode 类型定义
+
+```go
+// internal/agent/domain/failure_code.go
+
+type FailureCode string
+
+const (
+    FailModelHallucination FailureCode = "MODEL_HALLUCINATION"
+    FailPromptWeakness     FailureCode = "PROMPT_WEAKNESS"
+    FailDependencyConflict FailureCode = "DEPENDENCY_CONFLICT"
+    FailSandboxTimeout     FailureCode = "SANDBOX_TIMEOUT"
+    FailRepoBug            FailureCode = "REPO_BUG"
+    FailContextOverflow    FailureCode = "CONTEXT_OVERFLOW"
+    FailTokenQuotaExceeded FailureCode = "TOKEN_QUOTA_EXCEEDED"
+    FailAPITimeout         FailureCode = "API_TIMEOUT"
+    FailRateLimited        FailureCode = "RATE_LIMITED"
+    FailOverloaded         FailureCode = "OVERLOADED"
+    FailUnknown            FailureCode = "UNKNOWN"
+)
+
+// RecoveryAction — §3.15 恢复链动作
+type RecoveryAction string
+
+const (
+    ActionRetry           RecoveryAction = "retry"
+    ActionSelfRepair      RecoveryAction = "self_repair"
+    ActionDowngradeModel  RecoveryAction = "downgrade_model"
+    ActionCompress        RecoveryAction = "compress"
+    ActionClarify         RecoveryAction = "clarify"
+    ActionLockVersion     RecoveryAction = "lock_version"
+    ActionEscalate        RecoveryAction = "escalate"
+)
+
+type RecoveryResult struct {
+    Action  RecoveryAction
+    Message string
+}
+```
+
+## ClassifyAndRecover — 完整定义 (P0)
+
+```go
+func ClassifyAndRecover(code FailureCode, attempt int) RecoveryResult {
+    switch code {
+    // Layer 1: TRANSIENT
+    case FailAPITimeout, FailRateLimited, FailOverloaded:
+        if attempt < 3 {
+            return RecoveryResult{Action: ActionRetry, Message: fmt.Sprintf("attempt %d/3", attempt+1)}
+        }
+        return RecoveryResult{Action: ActionEscalate, Message: fmt.Sprintf("TRANSIENT exhausted after %d retries", attempt)}
+
+    // Layer 2: DEGRADABLE
+    case FailContextOverflow:
+        return RecoveryResult{Action: ActionCompress, Message: "context compressed, retrying"}
+    case FailTokenQuotaExceeded:
+        return RecoveryResult{Action: ActionDowngradeModel, Message: "downgrading to cheaper model"}
+
+    // Layer 3: RECOVERABLE
+    case FailModelHallucination:
+        return RecoveryResult{Action: ActionSelfRepair, Message: "re-generating from repo baseline"}
+    case FailPromptWeakness:
+        return RecoveryResult{Action: ActionClarify, Message: "asking PM for clarification"}
+    case FailDependencyConflict:
+        return RecoveryResult{Action: ActionLockVersion, Message: "locking dependency versions"}
+
+    // Layer 4: FATAL
+    case FailSandboxTimeout, FailRepoBug:
+        return RecoveryResult{Action: ActionEscalate, Message: fmt.Sprintf("FATAL: %s", code)}
+
+    default:
+        return RecoveryResult{Action: ActionEscalate, Message: fmt.Sprintf("unknown failure: %s", code)}
+    }
+}
+
+func IsRetryable(code FailureCode) bool {
+    switch code {
+    case FailAPITimeout, FailRateLimited, FailOverloaded,
+        FailContextOverflow, FailTokenQuotaExceeded,
+        FailModelHallucination, FailPromptWeakness, FailDependencyConflict:
+        return true
+    default:
+        return false
+    }
+}
+```
+
+## 正则匹配增强 (P2)
+
+```go
+import "regexp"
+
+var (
+    reTimeout    = regexp.MustCompile(`(?i)timeout|deadline exceeded|timed out`)
+    reRateLimit  = regexp.MustCompile(`(?i)rate limit|429|too many requests`)
+    reOverloaded = regexp.MustCompile(`(?i)overloaded|503|service unavailable`)
+    reContextLen = regexp.MustCompile(`(?i)context length|token limit|max tokens`)
+    reQuota      = regexp.MustCompile(`(?i)quota|insufficient.*tokens`)
+    reNotFound   = regexp.MustCompile(`(?i)not found|undefined|no such`)
+    reDependency = regexp.MustCompile(`(?i)dependency|version conflict|incompatible`)
+    rePermission = regexp.MustCompile(`(?i)permission denied|blocked|forbidden`)
+    reSandbox    = regexp.MustCompile(`(?i)sandbox.*(timeout|killed)|OOM`)
+)
+```
 
 Query Engine 工具执行失败 → §3.14 失败分类 → §3.15 恢复链。
 

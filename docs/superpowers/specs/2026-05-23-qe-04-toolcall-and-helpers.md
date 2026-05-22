@@ -117,13 +117,56 @@ func (qe *QueryEngine) buildLLMConfig() port.LLMConfig {
     }
 }
 
-// resumeApproved — Gate 审批通过后的恢复逻辑
+// resumeApproved — Gate 审批通过后的恢复逻辑 (P0 修正: 执行暂停的工具)
 func (qe *QueryEngine) resumeApproved(ctx context.Context, gateResult GateResult) (*SubmitResult, error) {
+    // 1. 执行之前挂起的工具
+    tc := qe.pendingGate.ToolCall
+    result := qe.executeToolWithPolicy(ctx, tc)
+
+    // 2. 追加工具结果到历史
+    qe.history = append(qe.history, port.Message{
+        Role:    "tool",
+        Content: qe.formatToolResult(tc.Name, result),
+    })
+
+    // 3. 追加审批通过系统消息
     qe.history = append(qe.history, port.Message{
         Role: "system", Content: "Gate 审批通过，继续执行。",
     })
+
+    // 4. 继续 LLM 推理
+    qe.resumeRound = qe.pendingGate.RoundCount // P0: 恢复轮数
     qe.state = QueryStateAwaitingLLM
     return qe.runLLMLoop(ctx)
+}
+
+// ToolResult — P0 修正: 增加 ModifiedFiles 结构化字段
+type ToolResult struct {
+    Output        interface{}
+    Err           error
+    GateRequired  bool
+    ModifiedFiles []string  // 结构化记录修改的文件 (替代文本解析)
+}
+
+// collectChangedFiles — P1 修正: 从结构化字段读取
+func (qe *QueryEngine) collectChangedFiles() []string {
+    seen := make(map[string]bool)
+    var files []string
+    for _, record := range qe.toolCallRecords {
+        for _, f := range record.ModifiedFiles {
+            if !seen[f] { seen[f] = true; files = append(files, f) }
+        }
+    }
+    return files
+}
+
+// ToolCallRecord — 增加 ModifiedFiles
+type ToolCallRecord struct {
+    Name          string
+    Args          map[string]interface{}
+    Output        interface{}
+    Err           error
+    ModifiedFiles []string
 }
 
 // resumeRejected — Gate 审批驳回后的恢复逻辑

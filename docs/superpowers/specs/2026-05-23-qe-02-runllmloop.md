@@ -6,11 +6,11 @@
 
 ```go
 // runLLMLoop — Submit 和 Resume 共用的核心循环。
-// 调用方必须已持有 qe.mu。
+// P0 修正: 锁仅在构建请求和处理结果时持有，LLM 调用期间释放锁。
 func (qe *QueryEngine) runLLMLoop(ctx context.Context) (*SubmitResult, error) {
     var reply string
     var toolCalls []ToolCallRecord
-    roundCount := 0
+    roundCount := qe.resumeRound // Resume 时从挂起点恢复轮数 (P0: roundCount 持久化)
 
     for roundCount < qe.config.MaxToolRounds {
         select {
@@ -19,63 +19,75 @@ func (qe *QueryEngine) runLLMLoop(ctx context.Context) (*SubmitResult, error) {
         default:
         }
 
-        // 1. 构建 LLM 请求
+        // 1. 构建 LLM 请求 (需要锁)
+        qe.mu.Lock()
         req := port.ChatRequest{
             Messages: qe.history,
             Config:   qe.buildLLMConfig(),
         }
+        qe.mu.Unlock() // P0: 释放锁 — LLM 调用可能阻塞数十秒
 
-        // 2. 调用 LLM (流式)
+        // 2. 调用 LLM (无锁)
         qe.state = QueryStateAwaitingLLM
         response, err := qe.llmClient.ChatStream(ctx, req)
         if err != nil {
             return &SubmitResult{Status: SubmitError, Error: fmt.Sprintf("llm: %v", err)}, nil
         }
 
-        // 3. 解析响应: 累积 text + 提取 tool_use blocks
+        // 3. 解析响应 + 累加 Token (需要锁)
+        qe.mu.Lock()
         parsed := qe.parseStreamResponse(response)
+        qe.tokenUsed += parsed.TokenUsed        // P0: TokenUsed 累加, 防止预算超支
+        if qe.tokenUsed >= qe.config.TokenBudget {
+            qe.mu.Unlock()
+            return &SubmitResult{Status: SubmitError, Error: "token budget exceeded"}, nil
+        }
         if parsed.Text != "" {
             reply = parsed.Text
         }
 
         // 4. 无 tool_use → 对话完成
         if len(parsed.ToolCalls) == 0 {
-            qe.history = append(qe.history, port.Message{
-                Role: "agent", Content: reply,
-            })
+            qe.history = append(qe.history, port.Message{Role: "agent", Content: reply})
+            qe.state = QueryStateAwaitingUser
+            qe.mu.Unlock()
             break
         }
 
-        // 5. 有 tool_use → 执行工具
-        qe.state = QueryStateAwaitingTools
+        // 5. 权限预检 + 工具分组 (P0: 在工具执行前检查 Gate，不在执行后)
         groups := qe.analyzeDependencies(parsed.ToolCalls)
 
-        for _, group := range groups {
-            results := qe.executeToolGroup(ctx, group)
-            for i, result := range results {
-                tc := group.Tools[i]
+        // 检测是否有需要 Gate 的工具
+        var gateTool *ToolCallParsed
+        for i := range groups {
+            for j, tc := range groups[i].Tools {
+                result := qe.executeToolWithPermission(ctx, tc)
+                if result.GateRequired {
+                    gateTool = &groups[i].Tools[j]
+                    break
+                }
+                // 正常执行结果追加
                 toolCalls = append(toolCalls, ToolCallRecord{
                     Name: tc.Name, Args: tc.Args,
-                    Output: result.Output, Err: result.Err,
+                    Output: result.Output, Err: result.Err, ModifiedFiles: result.ModifiedFiles,
                 })
-
-                // 追加 tool_result 到 history
                 qe.history = append(qe.history, port.Message{
-                    Role:    "tool",
-                    Content: qe.formatToolResult(tc.Name, result),
+                    Role: "tool", Content: qe.formatToolResult(tc.Name, result),
                 })
-
-                // 6. Gate 挂起检查 (新增)
-                if result.GateRequired {
-                    return qe.handleGatePause(ctx, tc, result), nil
-                }
             }
+            if gateTool != nil { break }
+        }
+        qe.mu.Unlock()
+
+        // 6. Gate 挂起 (锁外处理, 不阻塞其他操作)
+        if gateTool != nil {
+            return qe.handleGatePause(ctx, *gateTool), nil
         }
 
+        // 7. 无 Gate 工具 → 继续循环
         roundCount++
     }
 
-    qe.state = QueryStateAwaitingUser
     return &SubmitResult{
         Status:    SubmitCompleted,
         Reply:     reply,
