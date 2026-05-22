@@ -143,6 +143,8 @@ frontend/ + backend/ 在同一个 monorepo
 
 实现: B 层 `topology-analyzer/` (frontend-parser, backend-parser, cross-stack-linker, unified-builder)，C 层 `TopologyViewer.tsx` (Cytoscape.js/D3.js 渲染)。首次接入全量生成作为种子知识，后续增量更新。
 
+底层 parser 支持 tree-sitter AST 级解析 (Phase 3)，替换纯正则匹配，提升 import/require/路由识别的准确率。LSP 保留用于符号跳转。
+
 ---
 
 ### 2.5 消息队列与事件驱动策略
@@ -171,6 +173,14 @@ L1 (原子变更): 澄清 → 实现 → 测试 → 部署 → 验证
 L2 (简单修改): 澄清 → 实现 → 测试 → 部署 → 验证
 L3 (功能开发): 澄清 → 拆解 → 实现 → 测试 → 部署 → 验证
 L4 (架构变更): 澄清 → 拆解 → 实现 → 测试 → 部署 → 验证  (+ 架构评审 Gate)
+
+**Deploy 阶段内部子步骤** `[Phase 3]`:
+```
+pre-apply dry-run → apply → post-apply verify → rollback on failure
+  模拟部署        实际部署   健康检查+冒烟测试    回退到上一版本
+```
+回滚触发: verify 失败或健康检查不通过 → 自动 rollback + 通知 PM。
+借鉴 Plandex `_apply.sh` 的 dry-run→apply→verify→rollback 模式。
 ```
 
 **复杂度判定**: Agent 在需求澄清阶段输出 `{level: L1-L4, reasoning, estimated_files, estimated_modules}`，PM 可手动调整。
@@ -193,6 +203,15 @@ L4 (架构变更): 澄清 → 拆解 → 实现 → 测试 → 部署 → 验证
 - **草稿预执行** — 低风险阶段可预先执行下游 (标记为草稿)，审批通过转正式
 - **超时自动流转** — 仅 L1/L2 的非关键 Gate，L3/L4 必须人工
 - **验证阶段永不自动关闭** — 通知升级: PM → PM Lead → 项目负责人
+
+**Gate Hook 拦截器** `[Phase 5]`: Gate 节点支持 `[]GateHook` (pre/post 拦截器)，复用现有 Gate 值对象无需新机制:
+```go
+type GateHook interface {
+    PreApprove(ctx, pipeline, stage) error   // 审批前: LicenseChecker, SecurityScan
+    PostApprove(ctx, pipeline, stage) error  // 审批后: AuditLogger, NotificationFanout
+}
+// 借鉴 DeerFlow Middleware 链模式 + Claude Code preToolUse/postToolUse hooks
+```
 
 ### 3.4 Pipeline 高可用
 
@@ -459,6 +478,57 @@ type ToolRegistry interface {
 
 **并发规则**: `IsConcurrencySafe()==true` 的工具可并行执行（如 Read, Grep）；`==false` 必须串行（如 Write, Edit, Bash 写入操作）。级联中止: Bash 错误触发兄弟工具中止, 只读工具不受影响。
 
+**Bash 作为 StreamingTool 实例**:
+
+Bash 命令执行通过 `CommandExecutor` 能力域（第 12 个能力域, 见 §10.1.1）实现。`BashTool` 实现 `StreamingTool[BashInput, ExecOutput]`，Profile 决定执行策略:
+
+```go
+// internal/tool/bash_tool.go — BashTool 实现 StreamingTool
+
+type BashInput struct {
+    Command     string `json:"command"`
+    Description string `json:"description"`
+    WorkDir     string `json:"work_dir,omitempty"`
+    TimeoutMs   int    `json:"timeout_ms,omitempty"`
+}
+
+type BashTool struct {
+    executor CommandExecutor
+}
+
+func (t *BashTool) Name() string            { return "bash" }
+func (t *BashTool) IsConcurrencySafe() bool { return false }
+func (t *BashTool) IsReadOnly() bool        { return false }
+
+func (t *BashTool) Execute(ctx context.Context, input BashInput) (ExecOutput, error) {
+    return t.executor.Execute(ctx, input.Command, ExecOptions{
+        WorkDir: input.WorkDir, Timeout: time.Duration(input.TimeoutMs) * time.Millisecond,
+    })
+}
+
+func (t *BashTool) ExecuteStream(ctx context.Context, input BashInput) (<-chan StreamChunk, error) {
+    return t.executor.ExecuteStream(ctx, input.Command, ExecOptions{...})
+}
+```
+
+**执行路径** (Profile 感知):
+
+| Profile | 实现 | 执行位置 | 安全边界 |
+|---------|------|---------|---------|
+| **minimal** | `LocalShellExecutor` | 宿主机直接 spawn (/bin/bash -c) | 危险命令硬阻断 + 路径限制 (project root + /tmp) |
+| **standard** | `DockerSandboxExecutor` | Docker 容器内 | --read-only + --cap-drop=ALL + cgroup |
+| **enterprise** | `DockerSandboxExecutor` + seccomp | Docker + 5 层纵深防护 | 同 standard + seccomp + 网络隔离 |
+
+minimal profile 对标 Claude Code 体验 — `ls`/`grep`/`npm install`/`git status` 等开发工具链直接执行，无 Docker 依赖。危险命令 (`rm -rf`/`sudo`/`dd`/`mkfs`/`curl|bash`) 硬阻断。降级阻断: `enterprise→minimal` / `standard→minimal` → FATAL 拒绝启动。
+
+**Terminal 面板** (复用现有 WebSocket 协议): 只读 Terminal 展示沙箱 stdout/stderr 流 (`terminal.output`)，调试 Terminal (仅 Dev + Tech Lead + 2FA) 接受输入 (`terminal.input`)。所有调试 Terminal 输入记 WORM 审计。
+
+**错误恢复**: Bash 执行失败 → 分类 → 融入 DESIGN.md §3.15 四层恢复链:
+- `TRANSIENT` (超时/沙箱不可用) → Layer 1 自动重试
+- `DEGRADABLE` (输出超限) → Layer 2 截断
+- `RECOVERABLE` (命令不存在) → Layer 3 Agent 自修正
+- `FATAL` (权限/危险命令) → Layer 4 升级人工 Gate
+
 ### 4.4 权限模式（四级）`[Phase 1.5 — v4 新增]`
 
 > 采纳自 Claude Code 的 default/plan/auto/bypass 四级权限, 适配 OpenForge 的 PM Pipeline + Gate 场景。
@@ -494,14 +564,232 @@ PermissionMode (按 Pipeline Stage 自动选择, PM 可手动升级):
 
 **与 RBAC 的关系**: RBAC 控制"谁能审批/谁能创建 Pipeline"，PermissionMode 控制"Agent 单次操作需要什么级别的许可"。两者正交。
 
-### 4.5 Node.js IO 层
+### 4.5 LLM Router + 模型注册表 `[Phase 1.5 — v5 新增]`
+
+> **架构决策**: LLM Router 从 Node.js IO 层移至 Go 协调层。理由: (1) Router 的本质是 HTTP 转发 + JSON 翻译，Go `net/http` 零依赖即满足; (2) minimal profile 下 Go 单二进制部署，无需 Node 运行时; (3) 与 Query Engine(Go)、Tool Registry(Go) 进程内调用，无序列化开销。
+
+#### 4.5.1 模型注册表
+
+Router 采用**表驱动**机制。每个模型一条记录，调用方只需传别名（如 `"sonnet"`），Router 从注册表查找实际 ModelID、BaseURL、API Key 引用、能力标记、降级链：
+
+```go
+// internal/llm/registry.go
+
+type ModelEntry struct {
+    Alias    string   // "sonnet" — 用户/Agent 使用的短名
+    Provider string   // "anthropic" | "deepseek" | "openai" | "gemini"
+
+    // 路由字段
+    ModelID  string   // "claude-sonnet-4-6-20250514" — 发给 API 的实际 model 名
+    BaseURL  string   // "https://api.anthropic.com"
+
+    // API Key 引用 (不存 key 本身, 运行时从 SecretStore 获取)
+    KeyRef   string   // "llm/anthropic/api_key"
+
+    // 凭据解析链 (按优先级: env → file → vault → literal)
+    CredentialChain []CredentialSource
+
+    FeatureFlags
+    RetryConfig
+    Thinking   *ThinkingConfig
+
+    // 降级与调度
+    Fallback   []string // ["deepseek", "haiku"]
+    Priority   int      // 0-3, WFQ 权重 (Phase 7)
+
+    // 成本
+    InputPricePer1K  float64
+    OutputPricePer1K float64
+}
+
+type FeatureFlags struct {
+    MessagesAPI      bool  // 支持 /v1/messages → 直通; false → 需要翻译层
+    ToolUse          bool
+    Thinking         bool
+    PromptCaching    bool
+    Vision           bool
+    Streaming        bool
+    StructuredOutput bool
+    ContextWindow    int
+    MaxOutputTokens  int
+}
+
+type ThinkingConfig struct {
+    BudgetTokens int    // 默认 4096
+    Mode         string // "enabled" | "auto"
+}
+
+type CredentialSource struct {
+    Type     string // "env" | "file" | "vault" | "literal"
+    Location string // "ANTHROPIC_AUTH_TOKEN" | "~/.openforge/credentials.json" | "llm/anthropic/api_key"
+}
+
+type RetryConfig struct {
+    MaxRetries      int           // 默认 3
+    BaseDelay       time.Duration // 默认 1s
+    MaxDelay        time.Duration // 默认 30s
+    RetryableStatus []int         // {408, 409, 425, 429, 500, 502, 503, 504}
+    NonRetryable    []string      // "auth" | "quota"
+}
+```
+
+**默认注册表** (Phase 1 硬编码，Phase 5 加 YAML 覆盖):
+
+```go
+var DefaultRegistry = ModelRegistry{
+    // ── Anthropic 原生 (直通 /v1/messages) ──
+    "opus": {
+        Alias: "opus", Provider: "anthropic",
+        ModelID: "claude-opus-4-7-20250514", BaseURL: "https://api.anthropic.com",
+        KeyRef: "llm/anthropic/api_key", Priority: 0,
+        Fallback: []string{"sonnet", "deepseek"},
+        Features: FeatureFlags{MessagesAPI: true, ToolUse: true, Thinking: true,
+            PromptCaching: true, Vision: true, Streaming: true,
+            StructuredOutput: true, ContextWindow: 200000, MaxOutputTokens: 32000},
+        Thinking: &ThinkingConfig{BudgetTokens: 4096, Mode: "enabled"},
+        InputPricePer1K: 0.015, OutputPricePer1K: 0.075,
+    },
+    "sonnet": {
+        Alias: "sonnet", Provider: "anthropic",
+        ModelID: "claude-sonnet-4-6-20250514", BaseURL: "https://api.anthropic.com",
+        KeyRef: "llm/anthropic/api_key", Priority: 1,
+        Fallback: []string{"deepseek", "haiku"},
+        Features: FeatureFlags{MessagesAPI: true, ToolUse: true, Thinking: true,
+            PromptCaching: true, Vision: true, Streaming: true,
+            StructuredOutput: true, ContextWindow: 200000, MaxOutputTokens: 32000},
+        Thinking: &ThinkingConfig{BudgetTokens: 4096, Mode: "enabled"},
+        InputPricePer1K: 0.003, OutputPricePer1K: 0.015,
+    },
+    "haiku": {
+        Alias: "haiku", Provider: "anthropic",
+        ModelID: "claude-haiku-4-5-20251001", BaseURL: "https://api.anthropic.com",
+        KeyRef: "llm/anthropic/api_key", Priority: 3,
+        Fallback: []string{"deepseek"},
+        Features: FeatureFlags{MessagesAPI: true, ToolUse: true,
+            Streaming: true, ContextWindow: 200000, MaxOutputTokens: 16000},
+        InputPricePer1K: 0.0008, OutputPricePer1K: 0.004,
+    },
+
+    // ── DeepSeek (原生 /v1/messages, 直通) ──
+    "deepseek": {
+        Alias: "deepseek", Provider: "deepseek",
+        ModelID: "deepseek-v4-pro", BaseURL: "https://api.deepseek.com",
+        KeyRef: "llm/deepseek/api_key", Priority: 1,
+        Fallback: []string{"deepseek-r1"},
+        Features: FeatureFlags{MessagesAPI: true, ToolUse: true,
+            Streaming: true, ContextWindow: 131072, MaxOutputTokens: 32000},
+        InputPricePer1K: 0.0005, OutputPricePer1K: 0.002,
+    },
+    "deepseek-r1": {
+        Alias: "deepseek-r1", Provider: "deepseek",
+        ModelID: "deepseek-reasoner", BaseURL: "https://api.deepseek.com",
+        KeyRef: "llm/deepseek/api_key", Priority: 0,
+        Fallback: []string{"deepseek"},
+        Features: FeatureFlags{MessagesAPI: true, ToolUse: false,
+            Thinking: true, Streaming: true, ContextWindow: 131072, MaxOutputTokens: 32000},
+        Thinking: &ThinkingConfig{BudgetTokens: 4096, Mode: "auto"},
+        InputPricePer1K: 0.001, OutputPricePer1K: 0.006,
+    },
+
+    // ── OpenAI (不支持 /v1/messages → 需要翻译层, Phase 5) ──
+    "gpt-5": {
+        Alias: "gpt-5", Provider: "openai",
+        ModelID: "gpt-5", BaseURL: "https://api.openai.com",
+        KeyRef: "llm/openai/api_key", Priority: 2,
+        Fallback: []string{"sonnet"},
+        Features: FeatureFlags{MessagesAPI: false, ToolUse: true,
+            Streaming: true, StructuredOutput: true, Vision: true,
+            ContextWindow: 128000, MaxOutputTokens: 16000},
+        InputPricePer1K: 0.0025, OutputPricePer1K: 0.01,
+    },
+
+    // ── Gemini (不支持 /v1/messages → 需要翻译层, Phase 5) ──
+    "gemini": {
+        Alias: "gemini", Provider: "gemini",
+        ModelID: "gemini-2.5-pro", BaseURL: "https://generativelanguage.googleapis.com",
+        KeyRef: "llm/gemini/api_key", Priority: 2,
+        Fallback: []string{"sonnet"},
+        Features: FeatureFlags{MessagesAPI: false, ToolUse: true,
+            Vision: true, Streaming: true, ContextWindow: 1048576, MaxOutputTokens: 64000},
+        InputPricePer1K: 0.00125, OutputPricePer1K: 0.005,
+    },
+}
+```
+
+#### 4.5.2 Router 核心
+
+```go
+// internal/llm/router.go
+
+type Router struct {
+    registry   ModelRegistry
+    secrets    SecretStore
+    translator *Translator        // nil until Phase 5
+    clients    map[string]*http.Client // 按 BaseURL 复用连接池
+}
+
+// SendMessage — 唯一对外暴露的方法。调用方只需传 alias。
+func (r *Router) SendMessage(ctx context.Context, alias string, req *AnthropicRequest) (*AnthropicResponse, error) {
+    entry, err := r.registry.Lookup(alias)
+    if err != nil {
+        return nil, err
+    }
+    if entry.Features.MessagesAPI {
+        return r.forward(ctx, entry, req)        // Phase 1: 直通
+    }
+    return r.translateAndForward(ctx, entry, req) // Phase 5: Anthropic→OpenAI/Gemini 翻译
+}
+
+func (r *Router) forward(ctx context.Context, entry ModelEntry, req *AnthropicRequest) (*AnthropicResponse, error) {
+    apiKey, err := r.secrets.Get(ctx, entry.KeyRef)
+    if err != nil {
+        return nil, fmt.Errorf("secret %q: %w", entry.KeyRef, err)
+    }
+    resp, err := r.post(ctx, entry.BaseURL+"/v1/messages", apiKey, req)
+    if err != nil {
+        return r.fallback(ctx, entry, req, err)  // 遍历降级链
+    }
+    return resp, nil
+}
+
+func (r *Router) fallback(ctx context.Context, entry ModelEntry, req *AnthropicRequest, origErr error) (*AnthropicResponse, error) {
+    for _, fbAlias := range entry.Fallback {
+        fb, _ := r.registry.Lookup(fbAlias)
+        if resp, err := r.forward(ctx, fb, req); err == nil {
+            emit.ModelFallback(entry.Alias, fbAlias)
+            return resp, nil
+        }
+    }
+    return nil, fmt.Errorf("all fallbacks exhausted: %w", origErr)
+}
+```
+
+#### 4.5.3 模型切换流程
+
+```
+PM 点击 [Sonnet ▾] → 选 [Opus]
+  ↓ WebSocket: {type: "model.switch", payload: {model_alias: "opus"}}
+  ↓ BFF: pipeline.config.model_alias = "opus"
+  ↓ 下一轮: Query Engine → Router.SendMessage(ctx, "opus", req)
+  ↓ Router.Lookup("opus") → 查表 (< 1μs)
+  ↓ SecretStore.Get("llm/anthropic/api_key") → POST /v1/messages
+```
+
+#### 4.5.4 企业代理覆盖
+
+环境变量覆盖注册表字段，一行配置路由全部 Anthropic 家族模型到自定义端点：
+
+```
+ANTHROPIC_BASE_URL="https://api.deepseek.com/anthropic"
+  → 所有 Provider=="anthropic" 的 entry 的 BaseURL 被替换
+ANTHROPIC_AUTH_TOKEN="sk-..."
+  → 覆盖 KeyRef，直接使用 env 值
+```
+
+### 4.6 Node.js IO 层
 
 - **Dynamic Tool Hub**: 嵌入索引 (all-MiniLM) → 按需匹配 top-3 tool → 0 schema 进上下文
 - **Skill Loader**: 扫描 SKILL.md → YAML 解析 → 语义匹配 → 注入上下文
-- **LLM Router**: 多厂家适配 (Anthropic Messages API format 为内部标准)。
-  - Anthropic tool_use 是 content block，支持文本+工具交替，更适合 tool-heavy agent
-  - 国产 LLM (DeepSeek等) 为兼容 Claude Code 已普遍提供 `/v1/messages` 端点
-  - 仅对不兼容 Anthropic 格式的 provider 写翻译层 (~80行/provider)
 - **Token Metering**: 每次 Chat 调用推送到内存环形缓冲 (lock-free ring buffer, 1000 slots)，满足 buffer>500 或 >5s 触发批量写入 (COPY protocol, 500 rows ~10ms)，Prometheus Counter 用 atomic counter 零开销。crash 时 buffer 未 flush 数据可接受丢失 (精度 ~99.9%)。
   ```sql
   CREATE TABLE token_usage (
@@ -539,6 +827,38 @@ PermissionMode (按 Pipeline Stage 自动选择, PM 可手动升级):
   - 按项目/团队/时间维度聚合统计，按模型拆分消耗趋势
   - C 层成本看板提前到 **Phase 4**
 - **Learning Engine**: 四层自学习
+
+#### 4.5.1 Sandbox Provider 生命周期 `[Phase 4]`
+
+> 借鉴 DeerFlow `SandboxProvider` 模式: acquire→use→release + LRU 缓存。
+
+复用现有 `ContainerRuntime` 接口，Provider 层加缓存管理:
+
+```
+acquire(threadID) → warm pool 取出 → bind mount → 执行 → release → reset → 归还 pool
+LRU 驱逐: 空闲 > 10min → 销毁容器
+```
+
+接口不变 (`ContainerRuntime` 已有 Create/Start/Stop/Remove/List)，仅实现层加缓存。
+
+#### 4.5.2 CommandExecutor — 第 12 能力域 `[Phase 1 — v5 新增]`
+
+Profile 感知的命令执行，Phase 1 即可交付 (zero-dependency `os/exec`):
+
+```go
+type CommandExecutor interface {
+    Execute(ctx, command, ExecOptions) (ExecOutput, error)
+    ExecuteStream(ctx, command, ExecOptions) (<-chan StreamChunk, error)
+    Validate(ctx, command, ExecOptions) error
+}
+```
+
+| Profile | 实现 | 安全边界 |
+|---------|------|---------|
+| minimal | `LocalShellExecutor` (os/exec) | 危险命令硬阻断 + 模式匹配 + 只读白名单 |
+| standard/enterprise | `DockerSandboxExecutor` | 5 层容器纵深 (复用 §6.2) |
+
+**BashTool** 实现 `StreamingTool[BashInput, ExecOutput]`，融入 §4.3 Tool 体系 + §4.4 权限判定链 + §3.15 错误恢复链。流式输出复用 §5.5.4 `terminal.output` 事件，无新增 WS 协议。
 
 ### 4.3 Go ↔ Node 通信
 
@@ -656,15 +976,22 @@ Learning Snapshot:
   4. 清理旧格式
 ```
 
-### 4.13 LLM Router Anthropic 标准选择理由
+### 4.14 LLM Router Anthropic 标准选择理由
 
 ```
-选用 Anthropic Messages API 作为内部统一标准:
+选用 Anthropic Messages API 作为内部统一标准 (详见 §4.5 LLM Router + 模型注册表):
   1. tool_use 是 content block — 支持文本+工具调用交替出现,
      更适合 tool-heavy agent 场景 (>90% 的 Agent 对话包含 tool_use)
   2. 国产 LLM (DeepSeek 等) 为兼容 Claude Code 已普遍提供 /v1/messages 端点
+      → 注册表中 Features.MessagesAPI==true → 直通, 零翻译开销
   3. 仅对不兼容 Anthropic 格式的 provider 写翻译层 (~80 行/provider, 边际成本低)
-  
+     → 注册表中 Features.MessagesAPI==false → 走 translateAndForward()
+
+Router 位于 Go 协调层(非 Node.js IO 层):
+  - minimal profile: Go 单二进制, 零 Node 依赖, LLM Router 进程内调用 Query Engine
+  - 模型切换: O(1) map 查找, 不重启 Pipeline, 不重建连接
+  - 凭据: SecretStore 统一管理, 注册表仅存 KeyRef 引用
+
 翻译范围: OpenAI tool_calls ↔ Anthropic tool_use, Gemini functionCall ↔ Anthropic tool_use
 ```
 
@@ -1660,9 +1987,13 @@ config/profiles/
 | 服务发现 | `ServiceRegistry` | 静态配置 (YAML) | DNS SRV | K8s Service + DNS |
 | 灾备 | `DisasterRecovery` | 本地 pg_dump | PG 流复制 Standby | Multi-Region Active-Passive |
 | 负载均衡 | `LoadBalancer` | 单实例（无） | Nginx 反代 | K8s Ingress + Service Mesh |
+| 命令执行 | `CommandExecutor` | local-shell (os/exec) | docker-sandbox | docker-sandbox + 5层纵深 |
 | 审批通知 | `Notifier` | 终端 stdout | 飞书 Webhook (带重试) | 飞书 + 钉钉 + 邮件多通道 + 死信队列 |
+| 命令执行 | `CommandExecutor` | `LocalShellExecutor` (宿主机直接 spawn) | `DockerSandboxExecutor` (容器内执行) | `DockerSandboxExecutor` + seccomp + 5 层纵深防护 |
 
 > **C1 修复**: `MessageQueue` 拆为 `TaskQueue`(点对点FIFO) + `EventBus`(发布-订阅广播)。`Notifier` 增加重试/死信机制确保可靠送达。
+>
+> **v5 新增**: `CommandExecutor` — Bash 命令执行能力域。minimal 走本地 shell (对标 Claude Code 体验)，standard/enterprise 走 Docker Sandbox (对标 DeerFlow 安全模型)。危险命令硬阻断、路径限制、Profile 降级阻断。
 
 #### 10.1.2 Go 注册表 + 启动装配
 
@@ -1686,6 +2017,14 @@ type EventBus interface {
 type Notifier interface {
     Send(ctx context.Context, target Target, msg Notification) error
     SendWithRetry(ctx context.Context, target Target, msg Notification, maxRetries int) error
+}
+
+// 命令执行: Bash 命令执行 (Agent 开发工具链 / 测试 / 构建)
+// Profile 决定宿主机直接 spawn 还是 Docker 容器隔离
+type CommandExecutor interface {
+    Execute(ctx context.Context, command string, opts ExecOptions) (ExecOutput, error)
+    ExecuteStream(ctx context.Context, command string, opts ExecOptions) (<-chan StreamChunk, error)
+    Validate(ctx context.Context, command string, opts ExecOptions) error
 }
 
 // 其余接口 (无变化)
@@ -1712,6 +2051,7 @@ func Bootstrap(profile Profile) *OpenForge {
         DR:         newDisasterRecovery(profile),
         LB:         newLoadBalancer(profile),
         Notifier:   newNotifier(profile),
+        CommandExec: newCommandExecutor(profile),
     }
 }
 
@@ -1750,6 +2090,7 @@ service_registry: static
 disaster_recovery: local-backup
 load_balancer: none
 notifier: stdout
+command_executor: local-shell   # 宿主机直接 spawn, 对标 Claude Code
 
 # enterprise.yaml — 大型企业多 Region
 profile: enterprise
@@ -1764,6 +2105,7 @@ service_registry: k8s-service
 disaster_recovery: multi-region
 load_balancer: k8s-ingress
 notifier: multi-channel
+command_executor: docker-sandbox   # 容器内执行 + seccomp + 5 层纵深防护
 ```
 
 #### 10.1.4 Profile 安全护栏
@@ -2871,17 +3213,137 @@ migrations/
 
 | Phase | 内容 | 用户可见交付 | 组件数 |
 |-------|------|-------------|--------|
-| **Phase 1** | 项目骨架 + Go↔Node Proto 通信 + 单 Agent LLM 对话 (CLI) + **10 个能力域 minimal 实现 + 接口 stub** | CLI: "帮我写 Hello World" (仅 minimal profile) | 3 |
-| **Phase 2** | 极简 Web 对话界面 (聊天框 + Markdown + 拓扑图) + BFF Auth | PM 浏览器与 Agent 对话, 查看模块拓扑 | 5 |
-| **Phase 3** | Pipeline 状态机 + 实现阶段 + Diff 预览 (side-by-side) + 行级评论 + 审批收件箱 | 开发能审查代码, PM 能看阶段进度 | 5 |
+| **Phase 1** | 项目骨架 + 单 Agent LLM 对话 (CLI) + **12 个能力域 (4 真实 + 8 stub)** + **LLM Router (Go) + 模型注册表 (Anthropic/DeepSeek 直通)** + **BashTool (local-shell)** | CLI: "帮我写 Hello World" + Agent 可执行 ls/grep/npm install (仅 minimal profile) | 1 (Go 单二进制) |
+| **Phase 2** | 极简 Web 对话界面 (聊天框 + Markdown + 拓扑图) + BFF Auth + Terminal (只读) 面板 | PM 浏览器与 Agent 对话, 查看模块拓扑, 观察命令输出 | 3 (Go + Node/BFF + React) |
+| **Phase 3** | Pipeline 状态机 + 实现阶段 + Diff 预览 (side-by-side) + 行级评论 + 审批收件箱 + **模型切换 UI** | 开发能审查代码, PM 能看阶段进度, 前端切换模型 | 5 |
 | **Phase 4** | Docker Sandbox + 自动化测试 + 一键 Staging 部署 + 验证反馈 + **Token 成本看板** | **完整闭环**: 需求→代码→部署→PM 体验→反馈 + 成本可见 | 5 |
-| Phase 5 | CSP 多 Agent 协作 + Tool Registry + 嵌入索引 + 子 Pipeline 分支 | Agent 能力增强 (后台) | 6 |
-| Phase 6 | 企业级: RBAC + SSO + 审计 + 沙箱安全 + 二维模块归属 | 多团队可用, 安全合规 | 6 |
-| Phase 7 | 自学习 4 层 + A/B 测试 + 知识回滚 + 回顾/总结报告 + LLM 优先级调度 | 知识积累, 效率可见提升 | 7 |
+| Phase 5 | CSP 多 Agent 协作 + Tool Registry + 嵌入索引 + 子 Pipeline 分支 + **Node.js IO 层启动** + **OpenAI/Gemini 翻译层** | Agent 能力增强 (后台), 模型选择扩展到非 Anthropic 提供商 | 6 |
+| Phase 6 | 企业级: RBAC + SSO + 审计 + 沙箱安全 + 二维模块归属 + **CommandExecutor 切换 docker-sandbox** | 多团队可用, 安全合规 | 6 |
+| Phase 7 | 自学习 4 层 + A/B 测试 + 知识回滚 + 回顾/总结报告 + LLM 优先级调度 (WFQ) | 知识积累, 效率可见提升 | 7 |
 | Phase 8 | 性能优化 + 高并发 (预热池/分片/读写分离) + 高可用 (熔断/降级/检查点) + DR | 压测通过 SLO, 灾备就绪 | 9 |
 | Phase 9 | 完整工作台 (需求面板 / CI-CD 看板 / 成本看板 / A/B 实验看板) | 全功能工作台 | 11 |
 | Phase 9-10 | 可移植 + 扩展 + 合规报告 + Runbook + 离线部署包 + **enterprise 实现交付** | 企业级就绪 | 13 |
 
-> **C3 修复**: Phase 1 仅交付 minimal 实现 + 接口 stub。enterprise 实现 (Vault HA / K8s Pod API / Multi-Region DR) 随 Phase 9-10 引入，不要求 Phase 1 就写完。
+> **C3 修复**: Phase 1 仅交付 minimal 实现 + 接口 stub。enterprise 实现 (Vault HA / K8s Pod API / Multi-Region DR / DockerSandboxExecutor) 随 Phase 9-10 引入，不要求 Phase 1 就写完。
+>
+> **v5 新增**: 能力域从 11 个扩展为 12 个 (新增 `CommandExecutor`)。LLM Router 从 Node.js IO 层移至 Go 协调层，采用表驱动模型注册表。Phase 1 模型注册表覆盖 Anthropic + DeepSeek (直通 /v1/messages)，Phase 5 加 OpenAI/Gemini 翻译层。
 
 **核心变化**: Phase 2-4 每个阶段都交付可用的 UI 增量。Phase 4 已是完整闭环产品，后续 Phase 加深度而非补基础。MVP 用户从 Phase 2 即可介入体验。
+
+### 18.1 Phase 1 实现分解 `[v5 细化]`
+
+Phase 1 交付一个 **Go 单二进制 CLI**，不依赖 Docker、不依赖 Node.js。用户通过终端与 Agent 对话，Agent 可执行只读命令和开发工具链。
+
+**核心原则**:
+- LLM Router 在 Go 内（Phase 1 无 Node.js 运行时，仅保留 Proto 契约定义供 Phase 5 使用）
+- 模型注册表硬编码，Phase 5 加 YAML 覆盖
+- Bash 走 `local-shell`，对标 Claude Code 体验
+- 12 个能力域: 4 个真实实现 + 8 个 stub
+
+#### 18.1.1 文件清单
+
+```
+internal/
+├── llm/
+│   ├── registry.go              # ModelRegistry + ModelEntry + DefaultRegistry (Anthropic/DeepSeek)
+│   ├── router.go                # Router.SendMessage() → forward() 直通 /v1/messages
+│   └── anthropic/
+│       └── client.go            # HTTP POST + SSE 流式解析 (net/http, 零第三方依赖)
+├── port/
+│   ├── llm_client.go            # LLMRouterClient 接口 (Chat + ChatStream)
+│   ├── command_executor.go      # CommandExecutor 接口 (Execute + ExecuteStream + Validate)
+│   ├── tool_registry.go         # Tool + StreamingTool + ToolRegistry 接口 (已有)
+│   └── learning_client.go       # LearningEngine 接口 (stub, Phase 7)
+├── adapter/
+│   ├── local_shell_executor.go  # LocalShellExecutor: os/exec + 危险命令阻断 + 路径限制
+│   └── local_shell_executor_test.go
+├── tool/
+│   ├── bash_tool.go             # BashTool — 实现 StreamingTool[BashInput, ExecOutput]
+│   ├── read_tool.go             # ReadFileTool
+│   ├── write_tool.go            # WriteFileTool
+│   ├── grep_tool.go             # GrepTool
+│   └── glob_tool.go             # GlobTool
+├── agent/
+│   ├── domain/
+│   │   ├── query_engine.go      # QueryEngine 状态机 (已有)
+│   │   ├── query_engine_test.go
+│   │   └── coordinator.go       # AgentCoordinator (已有, 需改: 注入 Router + BashTool)
+│   └── service/
+│       └── csp_channel.go       # CSP Channel (已有, 单 Agent 仅需单 channel)
+├── config/
+│   └── profiles/
+│       └── minimal.yaml         # Phase 1 唯一使用的 profile
+├── secret/
+│   └── envfile_store.go         # SecretStore minimal 实现 — 读 .env
+cmd/
+└── server/
+    └── main.go                  # CLI 入口: Bootstrap(profile) → Agent Loop (stdin/stdout)
+```
+
+**不需要的文件**（延后到 Phase 5）:
+- `adapter/grpc_llm_client.go` — LLM Router 已在 Go 内，无需 gRPC 到 Node
+- `adapter/docker_sandbox_executor.go` — Phase 4
+- `internal/agent/adapter/*_learning_client.go` — Phase 7
+- Node.js IO 层全部代码 — Phase 5
+
+**保留但不运行时使用的文件**:
+- `proto/agent/v1/*.proto` — 保留 IDL 定义，供 Phase 5 Node.js IO 层生成；Phase 1 **不启动** ConnectRPC server
+- `proto/agent/v1/llm.proto` — 保留 LLMConfig.model_alias 字段定义
+
+#### 18.1.2 能力域实现状态
+
+| 能力域 | Phase 1 状态 | 实现 |
+|--------|-------------|------|
+| `SecretStore` | **真实** | `envfile_store.go` — 读 `.env` 文件, Router 依赖 |
+| `CommandExecutor` | **真实** | `local_shell_executor.go` — 宿主机 spawn, BashTool 依赖 |
+| `Telemetry` | **真实** | stdout JSON 日志, 所有组件依赖 |
+| `Notifier` | **真实** | stdout 输出, 通知/错误可见 |
+| `ContainerRuntime` | stub | 返回 "not implemented", Phase 4 |
+| `ObjectStore` | stub | 返回 "not implemented", Phase 4 |
+| `TaskQueue` | stub | 返回 "not implemented", Phase 5 |
+| `EventBus` | stub | 返回 "not implemented", Phase 5 |
+| `Cache` | stub | 返回 "not implemented", Phase 5 |
+| `ServiceRegistry` | stub | 返回 "not implemented", Phase 5 |
+| `DisasterRecovery` | stub | 返回 "not implemented", Phase 8 |
+| `LoadBalancer` | stub | 返回 "not implemented", Phase 8 |
+
+#### 18.1.3 Agent Loop (CLI 核心)
+
+```
+启动: ./openforge serve --profile minimal
+  ↓
+Bootstrap(profile) → 注入 4 真实 + 8 stub 能力域
+  ↓
+QueryEngine.Start()
+  ↓
+┌─ Agent Loop (stdin/stdout) ──────────────────────────────┐
+│ You: 帮我在当前项目加一个 eslint 配置                        │
+│   ↓                                                       │
+│ QueryEngine.SubmitMessage() → Router.SendMessage("sonnet")│
+│   ↓ LLM 返回 tool_use: {name:"bash", input:{command:"ls"}}│
+│ BashTool.Execute("ls") → LocalShellExecutor.spawn()       │
+│   ↓ LLM 继续推理 → tool_use: {name:"write", ...}          │
+│ WriteTool.Execute(".eslintrc.json", content)               │
+│   ↓ LLM 返回 tool_use: {name:"bash", input:{npm install}} │
+│ BashTool.Execute("npm install ...") → 流式输出到终端       │
+│   ↓                                                       │
+│ Agent: eslint 配置已完成 ✅                                 │
+└──────────────────────────────────────────────────────────┘
+```
+
+#### 18.1.4 Phase 1 自检清单
+
+```
+[ ] Go 单二进制编译通过 (go build ./cmd/server)
+[ ] Router 直通 Anthropic /v1/messages (真实 API Key)
+[ ] Router 直通 DeepSeek /v1/messages (真实 API Key)
+[ ] 模型降级: opus 不可用 → 自动 fallback sonnet → deepseek
+[ ] BashTool: ls / grep / git status 可执行
+[ ] BashTool: npm install / go build 可执行 (流式输出)
+[ ] BashTool: rm -rf / 被阻断 (危险命令)
+[ ] BashTool: curl | bash 被阻断 (管道注入)
+[ ] BashTool: 超时 60s → SIGTERM → 2s → SIGKILL
+[ ] Agent Loop: 3 轮对话不崩溃 (需求→实现→测试)
+[ ] Agent Loop: Ctrl+C 优雅退出, 清理子进程
+[ ] Token Metering: ring buffer 记录每轮 token
+```
