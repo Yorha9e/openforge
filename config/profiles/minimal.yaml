@@ -13,6 +13,7 @@ service_registry: static
 disaster_recovery: local-backup
 load_balancer: none
 notifier: stdout
+command_executor: local-shell
 
 database:
   host: localhost
@@ -29,3 +30,8 @@ llm:
 grpc:
   nodejs_io_addr: 127.0.0.1:50051
   coordinator_addr: 127.0.0.1:50052
+
+jwt:
+  secret: "dev-secret-change-in-production-32b!"
+  access_ttl: "1h"
+  refresh_ttl: "24h"

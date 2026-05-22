@@ -23,10 +23,12 @@ type Config struct {
 	DisasterRecovery string `yaml:"disaster_recovery"`
 	LoadBalancer     string `yaml:"load_balancer"`
 	Notifier         string `yaml:"notifier"`
+	CommandExecutor  string `yaml:"command_executor"`
 
 	Database DatabaseConfig `yaml:"database"`
 	LLM      LLMConfig      `yaml:"llm"`
 	GRPC     GRPCConfig     `yaml:"grpc"`
+	JWT      JWTConfig      `yaml:"jwt"`
 }
 
 // DatabaseConfig holds database connection parameters.
@@ -49,6 +51,13 @@ type LLMConfig struct {
 type GRPCConfig struct {
 	NodejsIOAddr    string `yaml:"nodejs_io_addr"`
 	CoordinatorAddr string `yaml:"coordinator_addr"`
+}
+
+// JWTConfig holds JWT auth configuration.
+type JWTConfig struct {
+	Secret     string `yaml:"secret"`
+	AccessTTL  string `yaml:"access_ttl"`
+	RefreshTTL string `yaml:"refresh_ttl"`
 }
 
 // Load reads a YAML profile from path, optionally verifies its Ed25519
