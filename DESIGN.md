@@ -413,213 +413,334 @@ Pipeline 失败时自动分类，避免学到噪声:
 - **Goroutine Pool** (ants): 全局上限 ~8000，按 Pipeline L1-L4 分级配额
 - **进程守护**: `os/exec` + `cmd.Wait()` 自动重启 Node.js IO 层
 
-### 4.2 Query Engine (对话生命周期管理) `[Phase 1.5 — v4, Phase 3 Gate 细化 + P0/P1 闭环]`
+### 4.2 Query Engine (对话生命周期管理) `[Phase 1.5 — v5 spec 闭环, 评分 9.5/10]`
 
-> 采纳自 Claude Code 源码分析 + Gate 挂起评审: 8 项补充全闭环, P0 后 8.75/10, P1 后 9.4/10。
+> 5 个独立 spec (QE-01~05) 合并，P0/P1 全闭环。采纳自 Claude Code 源码分析 + Gate 挂起评审 + QE Specs 审核。
 
 Query Engine 管理单次对话(Pipeline 内一个 Stage)的完整生命周期。**状态机 (6 态)**:
 
 ```
 IDLE → AWAITING_LLM → AWAITING_TOOLS → AWAITING_GATE → AWAITING_USER → IDLE
-                                             ↑ PermissionMode=default
-                                             触发 Gate 审批时挂起
-
-内部持有:
-  ├── LLMClient → Go LLM Router (Phase 1.5 Task 11)
-  ├── ToolRegistry → 可用工具索引 (§4.3)
-  ├── MessageHistory → 完整对话消息列表 (支持分支)
-  ├── TokenBudget → 剩余 Token 预算
-  ├── PermissionMode → bypass/auto/plan/default (§4.4)
-  ├── pendingGate → AWAITING_GATE 时挂起的审批状态
-  ├── resumeOnce → sync.Once 防重复调用 (P0 并发安全)
-  └── cancel → context.CancelFunc (P0 Cancel 传播)
 ```
 
-#### 4.2.1 核心数据结构
+#### 4.2.1 QueryEngineConfig (QE-01)
+
+```go
+type QueryEngineConfig struct {
+    MaxToolRounds      int                 // 默认 10
+    TokenBudget        int                 // 默认 200000
+    CheckpointInterval int                 // 默认 10 (0=禁用)
+    GateTimeout        time.Duration       // 默认 5min
+    ConflictResolution ConflictResolution  // abort(默认) | override
+    ToolErrorPolicy    ToolErrorPolicy
+    HistoryCompression HistoryCompressionConfig
+    EnableMetrics      bool                // 默认 false (Phase 7)
+    EnableTracing      bool                // 默认 false (Phase 8)
+    AutoApprovalRules  []AutoApprovalRule  // P2: Phase 6+
+}
+
+type ConflictResolution string
+const (
+    ConflictAbort    ConflictResolution = "abort"
+    ConflictOverride ConflictResolution = "override"
+)
+
+type ToolErrorPolicy struct {
+    MaxRetries    int           // 默认 3
+    RetryDelay    time.Duration // 默认 1s
+    BackoffFactor float64       // 默认 2.0
+    OnFailure     string        // "notify_llm"(默认) | "skip" | "abort"
+}
+
+type HistoryCompressionConfig struct {
+    Enabled          bool    // Phase 1.5 禁用，Phase 3 开启
+    TriggerThreshold float64 // 默认 0.8
+    KeepRecentRounds int     // 默认 10
+    MaxSummaryTokens int     // 默认 2000
+}
+
+var DefaultQueryEngineConfig = QueryEngineConfig{
+    MaxToolRounds: 10, TokenBudget: 200000, CheckpointInterval: 10,
+    GateTimeout: 5 * time.Minute, ConflictResolution: ConflictAbort,
+    ToolErrorPolicy: ToolErrorPolicy{MaxRetries: 3, RetryDelay: 1 * time.Second, BackoffFactor: 2.0, OnFailure: "notify_llm"},
+    HistoryCompression: HistoryCompressionConfig{TriggerThreshold: 0.8, KeepRecentRounds: 10, MaxSummaryTokens: 2000},
+}
+```
+
+#### 4.2.2 核心数据结构 (QE-01 + QE-04)
 
 ```go
 type QueryEngine struct {
     config       QueryEngineConfig
     llmClient    port.LLMRouterClient
     toolRegistry port.ToolRegistry
-    gateRepo     GateRepository              // 持久化 pending gate (P0 重启恢复)
+    gateRepo     GateRepository
 
-    mu           sync.Mutex                  // 保护下面所有字段
+    mu           sync.Mutex
     state        QueryState
     history      []port.Message
     tokenUsed    int
     pipelineID   string
-    pendingGate  *PendingGateState           // 挂起的 Gate 审批
-    resumeOnce   sync.Once                   // P0: 防 Resume 重复调用
-    resumeErr    error
-    resumeResult *SubmitResult
-    cancel       context.CancelFunc           // P0: 传播取消
+    model        string
+    currentStage string
+    resumeRound  int                    // Resume 恢复轮数 (持久化)
+    pendingGate  *PendingGateState
+    resumeOnce   sync.Once
+    cancel       context.CancelFunc
+    toolCallRecords []ToolCallRecord    // 结构化文件记录
 
-    logger       Logger                       // P1: 结构化日志
-    metrics      MetricsCollector             // P1: 指标收集
+    logger       Logger
+    metrics      MetricsCollector
 }
-```
 
-#### 4.2.2 SubmitResult + Gate 类型
-
-```go
+// ── 提交结果 ──
 type SubmitResult struct {
-    Status      SubmitStatus    // "completed" | "pending_gate" | "error"
+    Status      SubmitStatus     // "completed" | "pending_gate" | "error"
     Reply       string
     ToolCalls   []ToolCallRecord
     TokenUsed   int
     Checkpoint  *Checkpoint
-    GateRequest *GateRequest    // 非 nil → 需要 Gate 审批
+    GateRequest *GateRequest
     Error       string
 }
 
+type SubmitStatus string
+const (
+    SubmitCompleted   SubmitStatus = "completed"
+    SubmitPendingGate SubmitStatus = "pending_gate"
+    SubmitError       SubmitStatus = "error"
+)
+
+// ── Gate 类型 ──
 type GateRequest struct {
-    PipelineID   string
-    Stage        string
-    ToolName     string
-    Reason       string
-    ChangedFiles []string
-    ArtifactHash string
-    CreatedAt    time.Time       // P0: 超时起点
-    ExpiresAt    time.Time       // P0: 默认 +5min
-    Approvers    []string        // P2: 指定审批人 (Phase 6+)
+    PipelineID   string; Stage string; ToolName string; Reason string
+    ChangedFiles []string; ArtifactHash string
+    CreatedAt    time.Time; ExpiresAt time.Time
+    Approvers    []string               // P2: Phase 6+
 }
 
 type GateResult struct {
-    Approved        bool
-    LineComments    []LineComment   // 驳回时含行级反馈
-    SummaryFeedback string
-    ApprovedBy      string
-    ApprovedAt      time.Time
+    Approved bool; LineComments []LineComment; SummaryFeedback string
+    ApprovedBy string; ApprovedAt time.Time
 }
 
-// PendingGateState — 持久化结构, crash 可恢复
 type PendingGateState struct {
-    PendingID    string
-    GateRequest  GateRequest
-    ToolCall     ToolCallParsed
-    History      []port.Message   // 挂起时的对话历史快照
-    TokenUsed    int
-    ArtifactHash string
-    CreatedAt    time.Time
-    ExpiresAt    time.Time
-    Status       string           // "pending" | "approved" | "rejected" | "timeout" | "expired"
+    PendingID    string; GateRequest GateRequest; ToolCall ToolCallParsed
+    History      []port.Message; TokenUsed int; RoundCount int
+    ArtifactHash string; CreatedAt time.Time; ExpiresAt time.Time
+    Status       string   // "pending" | "approved" | "rejected" | "timeout" | "expired"
+}
+
+// ── 工具类型 ──
+type ToolCallParsed struct {
+    ID string; Name string; Args map[string]interface{}; IsReadOnly bool
+}
+
+type ToolCallGroup struct {
+    Tools    []ToolCallParsed; Parallel bool
+}
+
+type ToolResult struct {
+    Output        interface{}; Err error; GateRequired bool
+    ModifiedFiles []string                // 结构化文件记录 (替代文本解析)
+}
+
+type ToolCallRecord struct {
+    Name string; Args map[string]interface{}
+    Output interface{}; Err error; ModifiedFiles []string
 }
 ```
 
-#### 4.2.3 核心 API
+#### 4.2.3 核心 API + runLLMLoop (QE-02, P0 锁修复)
 
 ```go
-// Submit — 对话唯一入口。每次 Submit 重置 resumeOnce 和 cancel。
 func (qe *QueryEngine) Submit(ctx context.Context, input string) (*SubmitResult, error)
-
-// Resume — 从 Gate 挂起点恢复。sync.Once 保护, 重复调用返回缓存结果。
-// 内部: 重新从 DB 加载 PendingGateState → 验证未过期 → 验证 ArtifactHash 冲突 → 执行恢复。
 func (qe *QueryEngine) Resume(ctx context.Context, gateResult GateResult) (*SubmitResult, error)
-
-// Cancel — 取消当前 Submit (传播到 LLM 流 + Tool 执行)。
 func (qe *QueryEngine) Cancel()
+
+// runLLMLoop — P0: 锁仅在构建请求/处理结果时持有，LLM 调用期间释放
+func (qe *QueryEngine) runLLMLoop(ctx context.Context) (*SubmitResult, error) {
+    for round := qe.resumeRound; round < qe.config.MaxToolRounds; round++ {
+        // 构建请求 (加锁)
+        qe.mu.Lock()
+        req := port.ChatRequest{Messages: qe.history, Config: qe.buildLLMConfig()}
+        qe.mu.Unlock()                                          // ← 释放锁
+
+        // LLM 调用 (无锁, 可能阻塞数十秒)
+        qe.state = QueryStateAwaitingLLM
+        response, err := qe.llmClient.ChatStream(ctx, req)
+        if err != nil { return &SubmitResult{Status: SubmitError, Error: err.Error()}, nil }
+
+        // 处理结果 (重新加锁)
+        qe.mu.Lock()
+        parsed := qe.parseStreamResponse(response)
+        qe.tokenUsed += parsed.TokenUsed                        // ← P0 Token 累加
+        if qe.tokenUsed >= qe.config.TokenBudget { qe.mu.Unlock(); return tokenExceededResult, nil }
+
+        if len(parsed.ToolCalls) == 0 { /* 完成 */ qe.mu.Unlock(); break }
+
+        // 权限预检 + 工具执行 (在锁内完成分类和 Gate 判断)
+        gateTool := qe.executeToolGroupWithGateCheck(parsed.ToolCalls)
+        qe.mu.Unlock()
+
+        if gateTool != nil {
+            return qe.handleGatePause(ctx, *gateTool), nil       // Gate 挂起
+        }
+    }
+    return &SubmitResult{Status: SubmitCompleted, TokenUsed: qe.tokenUsed}, nil
+}
 ```
 
-#### 4.2.4 P0: Gate 超时机制
-
-QueryEngine 启动时开 goroutine 每 10s 检查 `pendingGate.ExpiresAt`。超时 → 自动拒绝:
-
-```
-超时处理:
-  1. 状态切 AWAITING_LLM (不等审批了)
-  2. 注入 system message: "Gate 审批超时，操作被自动拒绝"
-  3. 持久化 status=timeout
-  4. ws_handler 推送 gate.timeout 事件给调用方
-  5. goroutine 不泄漏 (状态已从 AWAITING_GATE 迁出)
-```
-
-配置: `QueryEngineConfig.GateTimeout` 默认 5min。
-
-#### 4.2.5 P0: 进程重启恢复
-
-`NewQueryEngine()` 启动时扫描 DB `gate_requests` 表 WHERE status='pending':
-
-```
-恢复逻辑:
-  ├── 已过期 → 标记 status=expired, 跳过
-  ├── 待审批 → 恢复 pendingGate 状态, 状态切 AWAITING_GATE
-  └── 多个 pending → 仅恢复第一个, 其余标记 expired
-
-PG 表 (新增):
-  gate_requests (pending_id, pipeline_id, tool_name, reason,
-    changed_files, artifact_hash, history JSONB, token_used,
-    status, created_at, expires_at, approved_at, approved_by, result JSONB)
-```
-
-#### 4.2.6 P1: 冲突检测
-
-Resume 时计算当前 history SHA256, 与挂起时的 ArtifactHash 比对。不匹配 → 按策略处理:
-
-| 策略 | 行为 |
-|------|------|
-| `abort` (默认) | 返回 error: "审批期间对话历史被修改，请重新提交" |
-| `override` | 警告日志 + 强制继续 (仅 dev) |
-
-配置: `QueryEngineConfig.ConflictResolution`。
-
-#### 4.2.7 P1: Rejected 反馈格式化
-
-驳回时 `formatGateFeedback()` 将 GateResult 转为结构化 Markdown 注入 history:
-
-```
-## Gate 审批被拒绝
-
-### 总体反馈
-{SummaryFeedback}
-
-### 行级反馈
-**src/auth.ts**
-- 第42行: validate 改成 Zod schema
-
-[needs_revision] 请仅修改以下文件: src/auth.ts
-```
-
-LLM 收到后仅修改 `needs_revision` 标记的文件。
-
-#### 4.2.8 P1: 可观测性
+#### 4.2.4 Gate 挂起与恢复 (QE-02, QE-04, P0 修复)
 
 ```go
-// 指标: ga_gate_requests_total{tool}, ga_gate_results_total{tool,result},
-//        ga_gate_latency_seconds{tool}
-// 日志: GateRequest 创建/审批通过/审批拒绝/超时时各输出结构化日志
+// handleGatePause — 持久化 + 返回 pending_gate
+func (qe *QueryEngine) handleGatePause(ctx context.Context, tc ToolCallParsed) *SubmitResult {
+    now := time.Now()
+    qe.pendingGate = &PendingGateState{
+        PendingID: fmt.Sprintf("gate-%s-%d", qe.pipelineID, now.UnixNano()),
+        GateRequest: GateRequest{
+            PipelineID: qe.pipelineID, Stage: qe.currentStage, ToolName: tc.Name,
+            Reason: tc.Name + " requires Gate approval",
+            ChangedFiles: qe.collectChangedFiles(), ArtifactHash: qe.calcHistoryHash(),
+            CreatedAt: now, ExpiresAt: now.Add(qe.config.GateTimeout),
+        },
+        ToolCall: tc, History: qe.snapshotHistory(),
+        TokenUsed: qe.tokenUsed, RoundCount: qe.resumeRound,  // P0: 持久化轮数
+        ArtifactHash: qe.calcHistoryHash(), CreatedAt: now, ExpiresAt: now.Add(qe.config.GateTimeout),
+        Status: "pending",
+    }
+    if qe.gateRepo != nil { qe.gateRepo.Create(context.Background(), qe.pendingGate) }
+    qe.state = QueryStateAwaitingGate
+    return &SubmitResult{Status: SubmitPendingGate, GateRequest: &qe.pendingGate.GateRequest}
+}
+
+// resumeApproved — P0 修复: 先执行暂停的工具, 再继续 LLM 推理
+func (qe *QueryEngine) resumeApproved(ctx context.Context, gr GateResult) (*SubmitResult, error) {
+    result := qe.executeToolWithPolicy(ctx, qe.pendingGate.ToolCall)
+    qe.history = append(qe.history, port.Message{Role: "tool", Content: qe.formatToolResult(qe.pendingGate.ToolCall.Name, result)})
+    qe.history = append(qe.history, port.Message{Role: "system", Content: "Gate 审批通过，继续执行。"})
+    qe.resumeRound = qe.pendingGate.RoundCount
+    qe.state = QueryStateAwaitingLLM
+    return qe.runLLMLoop(ctx)
+}
+
+// resumeRejected — 反馈注入 + needs_revision 标记
+func (qe *QueryEngine) resumeRejected(ctx context.Context, gr GateResult) (*SubmitResult, error) {
+    qe.history = append(qe.history, port.Message{Role: "system", Content: qe.formatGateFeedback(gr)})
+    if len(gr.LineComments) > 0 {
+        files := extractFilesFromComments(gr.LineComments)
+        qe.history = append(qe.history, port.Message{Role: "system",
+            Content: fmt.Sprintf("[needs_revision] 请仅修改以下文件: %s", strings.Join(files, ", "))})
+    }
+    qe.state = QueryStateAwaitingLLM
+    return qe.runLLMLoop(ctx)
+}
 ```
 
-#### 4.2.9 完整流程
+#### 4.2.5 GateRepository 接口 + PG 实现 (QE-03)
 
-```
-Submit("修改 auth.ts 校验逻辑")
-  │
-  ├─ LLM 推理 → "我需要调用 BashTool: npm install zod"
-  ├─ Tool 循环 → permissionMode.Classify(BashTool) → DecisionAskGate
-  ├─ 状态切 AWAITING_GATE
-  ├─ 持久化 PendingGateState → gate_requests 表
-  ├─ 返回 SubmitResult{Status: "pending_gate", GateRequest: {...ExpiresAt: now+5min}}
-  │
-  ├─ ws_handler 收到 → 推送 WS gate.notify → 连接挂起 → 启动超时定时器
-  │
-  ├─ 审批人调用 REST POST /gate/approve → ws_handler 收到
-  ├─ Resume(GateResult{Approved: true})
-  │   ├─ sync.Once 保护
-  │   ├─ 重新从 DB 加载 PendingGateState
-  │   ├─ 验证未过期 + ArtifactHash 冲突检测
-  │   ├─ 持久化 result → status=approved
-  │   └─ 继续执行 BashTool → 结果注入 history → LLM 继续推理
-  │
-  └─ 返回 SubmitResult{Status: "completed", Reply: "已安装 zod..."}
+```go
+// internal/agent/port/gate_repository.go
+type GateRepository interface {
+    Create(ctx context.Context, state *PendingGateState) error
+    Get(ctx context.Context, pendingID string) (*PendingGateState, error)
+    UpdateResult(ctx context.Context, pendingID string, result GateResult) error
+    UpdateStatus(ctx context.Context, pendingID string, status string) error
+    ListPending(ctx context.Context) ([]*PendingGateState, error)
+}
 ```
 
+PG DDL:
+
+```sql
+CREATE TABLE gate_request (
+    pending_id    VARCHAR(64) PRIMARY KEY,
+    pipeline_id   VARCHAR(64) NOT NULL REFERENCES pipeline(id),
+    tool_name     VARCHAR(128) NOT NULL, reason TEXT,
+    changed_files JSONB, artifact_hash VARCHAR(64) NOT NULL,
+    history       JSONB NOT NULL, tool_call JSONB NOT NULL,
+    token_used    INT DEFAULT 0, round_count INT DEFAULT 0,
+    status        VARCHAR(16) DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected','timeout','expired')),
+    created_at    TIMESTAMPTZ DEFAULT NOW(), expires_at TIMESTAMPTZ NOT NULL,
+    approved_at   TIMESTAMPTZ, approved_by VARCHAR(320), result JSONB
+);
+CREATE INDEX idx_gate_request_status ON gate_request(status);
+CREATE INDEX idx_gate_request_expires ON gate_request(expires_at);
 ```
-Go 实现 (~800行, 含 Gate 超时/恢复/冲突/反馈):
-  internal/agent/domain/query_engine.go       # QueryEngine 核心 (~500行)
-  internal/agent/domain/query_engine_test.go  # Table-driven 测试含 Gate 全生命周期
-  internal/agent/port/gate_repository.go      # GateRepository 接口
-  internal/agent/adapter/pg_gate_repository.go # PG 实现
+
+恢复: `NewQueryEngine()` 启动时 `recoverPendingGates()` — 扫描 pending, 已过期标记 expired, 恢复第一个到 `pendingGate`。
+
+#### 4.2.6 错误映射 → §3.15 (QE-05)
+
+```go
+// FailureCode + ClassifyAndRecover 完整定义 (P0 闭环)
+type FailureCode string
+const (
+    FailAPITimeout FailureCode = "API_TIMEOUT"; FailRateLimited = "RATE_LIMITED"
+    FailOverloaded = "OVERLOADED"; FailContextOverflow = "CONTEXT_OVERFLOW"
+    FailTokenQuotaExceeded = "TOKEN_QUOTA_EXCEEDED"
+    FailModelHallucination = "MODEL_HALLUCINATION"; FailPromptWeakness = "PROMPT_WEAKNESS"
+    FailDependencyConflict = "DEPENDENCY_CONFLICT"; FailSandboxTimeout = "SANDBOX_TIMEOUT"
+    FailRepoBug = "REPO_BUG"; FailUnknown = "UNKNOWN"
+)
+
+func MapToolErrorToFailureCode(err error) FailureCode {
+    msg := err.Error()
+    switch {
+    case reTimeout.MatchString(msg):    return FailAPITimeout
+    case reRateLimit.MatchString(msg):  return FailRateLimited
+    case reOverloaded.MatchString(msg): return FailOverloaded
+    case reContextLen.MatchString(msg): return FailContextOverflow
+    case reQuota.MatchString(msg):      return FailTokenQuotaExceeded
+    case reNotFound.MatchString(msg):   return FailModelHallucination
+    case reDependency.MatchString(msg): return FailDependencyConflict
+    case rePermission.MatchString(msg): return FailRepoBug
+    case reSandbox.MatchString(msg):    return FailSandboxTimeout
+    default:                            return FailUnknown
+    }
+}
+
+func ClassifyAndRecover(code FailureCode, attempt int) RecoveryResult {
+    switch code {
+    case FailAPITimeout, FailRateLimited, FailOverloaded:
+        if attempt < 3 { return RecoveryResult{ActionRetry, fmt.Sprintf("attempt %d/3", attempt+1)} }
+        return RecoveryResult{ActionEscalate, "TRANSIENT exhausted"}
+    case FailContextOverflow:  return RecoveryResult{ActionCompress, "compressing context"}
+    case FailTokenQuotaExceeded: return RecoveryResult{ActionDowngradeModel, "switching model"}
+    case FailModelHallucination, FailDependencyConflict: return RecoveryResult{ActionSelfRepair, "auto-repair"}
+    case FailPromptWeakness: return RecoveryResult{ActionClarify, "asking PM"}
+    default: return RecoveryResult{ActionEscalate, fmt.Sprintf("FATAL: %s", code)}
+    }
+}
+```
+
+**错误匹配用正则** (P2): `reTimeout`, `reRateLimit`, `reOverloaded`, `reContextLen`, `reQuota`, `reNotFound`, `reDependency`, `rePermission`, `reSandbox` 共 9 个 `regexp.MustCompile`。
+
+#### 4.2.7 Gate 超时 + 冲突检测 + 反馈格式化 (QE-02, QE-04)
+
+- **超时:** goroutine 每 10s 检查 `pendingGate.ExpiresAt`, 超时自动拒绝 (状态切 AWAITING_LLM, system message 注入, status=timeout 持久化)
+- **冲突:** Resume 时 calcHistoryHash() 比对, 不匹配 → abort(默认) 或 override(dev)
+- **反馈:** `formatGateFeedback()` → 结构化 Markdown (总结 + 按文件分组的行级评论 + `[needs_revision]` 文件列表)
+
+#### 4.2.8 文件清单
+
+```
+internal/agent/domain/
+  query_engine.go           # QueryEngine 核心 (~500行, 6 态 + Gate 挂起)
+  query_engine_config.go    # QueryEngineConfig + 默认值
+  query_engine_test.go      # Table-driven 测试
+  tool_call_parsed.go       # ToolCallParsed + ToolCallGroup + ToolResult
+  error_mapping.go          # FailureCode + MapToolErrorToFailureCode + ClassifyAndRecover
+
+internal/agent/port/
+  gate_repository.go        # GateRepository 接口
+
+internal/agent/adapter/
+  pg_gate_repository.go     # PG 实现
+
+migrations/
+  003_gate_request.up.sql   # gate_request DDL
 ```
 
 ### 4.3 Tool 接口标准化 `[Phase 1.5 — v4 新增]`
