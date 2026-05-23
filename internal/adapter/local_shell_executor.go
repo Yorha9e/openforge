@@ -53,8 +53,8 @@ func NewLocalShellExecutor(opts ...LocalShellOption) *LocalShellExecutor {
 }
 
 func detectShell() string {
-	if _, err := exec.LookPath("bash"); err == nil {
-		return "/bin/bash"
+	if path, err := exec.LookPath("bash"); err == nil {
+		return path
 	}
 	return "powershell.exe"
 }
