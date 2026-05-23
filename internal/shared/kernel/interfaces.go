@@ -136,3 +136,36 @@ type LoadBalancer interface {
 	RemoveBackend(ctx context.Context, name string, addr string) error
 	HealthCheck(ctx context.Context, name string) (bool, error)
 }
+
+// --- CommandExecutor (12th capability domain) ---
+
+// ExecOptions configures command execution.
+type ExecOptions struct {
+	WorkDir   string
+	Env       map[string]string
+	Timeout   time.Duration
+	MaxOutput int64
+	ReadOnly  bool
+}
+
+// ExecOutput holds the result of a command execution.
+type ExecOutput struct {
+	ExitCode int
+	Stdout   string
+	Stderr   string
+	Duration time.Duration
+}
+
+// ExecStreamChunk represents a single chunk of streaming command output.
+type ExecStreamChunk struct {
+	Delta  string
+	Stream string // "stdout" | "stderr"
+}
+
+// CommandExecutor executes shell commands. Implementation is selected by
+// Profile: local-shell (minimal, zero-dependency) or docker-sandbox (standard+).
+type CommandExecutor interface {
+	Execute(ctx context.Context, command string, opts ExecOptions) (ExecOutput, error)
+	ExecuteStream(ctx context.Context, command string, opts ExecOptions) (<-chan ExecStreamChunk, error)
+	Validate(ctx context.Context, command string, opts ExecOptions) error
+}
