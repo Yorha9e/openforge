@@ -35,19 +35,29 @@ type PooledSandbox struct {
 
 // SandboxProvider manages a warm pool of sandbox containers.
 type SandboxProvider struct {
-	cfg     SandboxProviderConfig
-	mu      sync.Mutex
-	warm    []*PooledSandbox
-	active  int
-	runtime kernel.ContainerRuntime // Phase 4+: Docker API; MVP: noop
-	stopCh  chan struct{}
+	cfg       SandboxProviderConfig
+	mu        sync.Mutex
+	warm      []*PooledSandbox
+	active    int
+	runtime   kernel.ContainerRuntime // Phase 4+: Docker API; MVP: noop
+	stopCh    chan struct{}
+	closeOnce sync.Once
 }
 
 // NewSandboxProvider creates a new SandboxProvider and starts background
 // goroutines for reaping idle containers and filling the warm pool.
 func NewSandboxProvider(cfg SandboxProviderConfig) *SandboxProvider {
-	if cfg.WarmCount == 0 {
-		cfg = defaultSandboxProviderConfig()
+	if cfg.WarmCount <= 0 {
+		cfg.WarmCount = 10
+	}
+	if cfg.MaxTotal <= 0 {
+		cfg.MaxTotal = 30
+	}
+	if cfg.IdleTimeout <= 0 {
+		cfg.IdleTimeout = 10 * time.Minute
+	}
+	if cfg.Image == "" {
+		cfg.Image = "openforge/sandbox-node:latest"
 	}
 	p := &SandboxProvider{
 		cfg:     cfg,
@@ -61,18 +71,17 @@ func NewSandboxProvider(cfg SandboxProviderConfig) *SandboxProvider {
 
 // Acquire retrieves a sandbox from the warm pool or cold-starts one.
 func (p *SandboxProvider) Acquire(ctx context.Context) (*PooledSandbox, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	// Try warm pool first — skip expired entries (LRU eviction at acquire time)
-	cutoff := time.Now().Add(-p.cfg.IdleTimeout)
-	var kept []*PooledSandbox
-	for _, sb := range p.warm {
-		if sb.LastUsed.After(cutoff) {
-			kept = append(kept, sb)
-		}
-	}
-	p.warm = kept
+	p.evictExpiredLocked(time.Now())
 
 	if len(p.warm) > 0 {
 		sb := p.warm[len(p.warm)-1]
@@ -109,7 +118,7 @@ func (p *SandboxProvider) Release(sb *PooledSandbox) {
 
 // Drain stops background goroutines and clears the pool.
 func (p *SandboxProvider) Drain() {
-	close(p.stopCh)
+	p.closeOnce.Do(func() { close(p.stopCh) })
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.warm = nil
@@ -140,14 +149,7 @@ func (p *SandboxProvider) reaper() {
 			return
 		case <-ticker.C:
 			p.mu.Lock()
-			cutoff := time.Now().Add(-p.cfg.IdleTimeout)
-			var kept []*PooledSandbox
-			for _, sb := range p.warm {
-				if sb.LastUsed.After(cutoff) {
-					kept = append(kept, sb)
-				}
-			}
-			p.warm = kept
+			p.evictExpiredLocked(time.Now())
 			p.mu.Unlock()
 		}
 	}
@@ -163,13 +165,31 @@ func (p *SandboxProvider) filler() {
 			return
 		case <-ticker.C:
 			p.mu.Lock()
-			for len(p.warm) < p.cfg.WarmCount {
-				id := fmt.Sprintf("sb-%d-fill", time.Now().UnixNano())
-				p.warm = append(p.warm, &PooledSandbox{ID: id, CreatedAt: time.Now(), LastUsed: time.Now()})
-			}
+			needed := p.cfg.WarmCount - len(p.warm)
 			p.mu.Unlock()
+			for i := 0; i < needed; i++ {
+				p.mu.Lock()
+				if len(p.warm) < p.cfg.WarmCount {
+					id := fmt.Sprintf("sb-%d-fill", time.Now().UnixNano())
+					p.warm = append(p.warm, &PooledSandbox{ID: id, CreatedAt: time.Now(), LastUsed: time.Now()})
+				}
+				p.mu.Unlock()
+			}
 		}
 	}
+}
+
+// evictExpiredLocked removes warm containers whose LastUsed is past IdleTimeout.
+// Must be called with p.mu held.
+func (p *SandboxProvider) evictExpiredLocked(now time.Time) {
+	cutoff := now.Add(-p.cfg.IdleTimeout)
+	var kept []*PooledSandbox
+	for _, sb := range p.warm {
+		if sb.LastUsed.After(cutoff) {
+			kept = append(kept, sb)
+		}
+	}
+	p.warm = kept
 }
 
 // noopRuntime is a placeholder until Docker SDK integration (post-Phase 4).
