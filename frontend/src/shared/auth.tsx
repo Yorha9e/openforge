@@ -70,8 +70,18 @@ export function useRole(): string {
   return user?.role || '';
 }
 
+const roleHierarchy: Record<string, string[]> = {
+  admin:    ['admin', 'pm', 'dev_lead', 'dev', 'observer'],
+  pm:       ['pm', 'dev', 'observer'],
+  dev_lead: ['dev_lead', 'dev', 'observer'],
+  dev:      ['dev', 'observer'],
+  observer: ['observer'],
+};
+
 export function useCanAccess(requiredRole: string): boolean {
   const role = useRole();
-  if (role === 'admin') return true;
-  return role === requiredRole;
+  if (!role) return false;
+  const allowed = roleHierarchy[role];
+  if (!allowed) return false;
+  return allowed.includes(requiredRole);
 }
