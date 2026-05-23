@@ -67,6 +67,13 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ line_comments: comments, summary_feedback: summary }),
     }),
+
+  // Token / Cost Dashboard
+  getTokenUsage: (projectId: string, days?: number) =>
+    request<any[]>(`/projects/${projectId}/token-usage${days ? `?days=${days}` : ''}`),
+
+  getTokenBudget: (projectId: string) =>
+    request<any>(`/projects/${projectId}/token-budget`),
 };
 
 export function wsURL(): string {
