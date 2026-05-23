@@ -1,5 +1,7 @@
 # Phase 3 — Pipeline 状态机 + Diff 预览 + Gate 审批 实现计划
 
+> **状态: ✅ 已完成**
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 交付 Pipeline 生命周期状态机、Gate 审批流程、Side-by-side Diff 代码审查面板、Dockview 多面板专业模式。对齐 v5 设计: Query Engine (§4.2), PermissionMode (§4.4), ErrorRecovery (§3.15)。

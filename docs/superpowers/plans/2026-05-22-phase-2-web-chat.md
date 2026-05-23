@@ -1,5 +1,7 @@
 # Phase 2 — 极简 Web 聊天框 + BFF Auth 实现计划
 
+> **状态: ✅ 已完成**
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 交付浏览器端 AI 对话界面 — PM 可通过 Web 聊天框与 Agent 对话，BFF 层完成 JWT 鉴权，JWT/XSS/CSP 三项高危清零。

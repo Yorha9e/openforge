@@ -1,5 +1,7 @@
 # Phase 3 Handoff — 当前完成状态
 
+> **状态: ⚠️ 已过时 — 所有 Phase 1→5b 均已完成 (2026-05-23 最终审计)**
+
 > **日期**: 2026-05-23 | **Phase 3 计划**: `docs/superpowers/plans/2026-05-22-phase-3-pipeline-gate.md` | **v5 设计对齐**
 
 ## v5 关键设计变更 (Phase 1.5 已交付)

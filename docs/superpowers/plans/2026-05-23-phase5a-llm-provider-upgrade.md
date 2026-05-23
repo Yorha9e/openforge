@@ -1,5 +1,7 @@
 # Phase 5a — LLM Router Provider Abstraction + Model Config YAML
 
+> **状态: ✅ 已完成**
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** LLM Router 从"硬编码 Anthropic 格式"升级为"可扩展提供者抽象层"，支持 OpenAI/Gemini 协议翻译，模型注册表从 YAML 加载，模型回退链。
