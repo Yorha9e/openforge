@@ -28,11 +28,11 @@ func (s *stubCommandExecutor) Execute(_ context.Context, _ string, _ kernel.Exec
 }
 
 func (s *stubCommandExecutor) ExecuteStream(_ context.Context, _ string, _ kernel.ExecOptions) (<-chan kernel.ExecStreamChunk, error) {
-	return nil, nil
+	panic("unexpected call to ExecuteStream")
 }
 
 func (s *stubCommandExecutor) Validate(_ context.Context, _ string, _ kernel.ExecOptions) error {
-	return nil
+	panic("unexpected call to Validate")
 }
 
 func TestDeployService_DryRunFail(t *testing.T) {
@@ -83,5 +83,37 @@ func TestDeployService_VerifyFails_Rollback(t *testing.T) {
 	}
 	if result.Status != "rolled_back" {
 		t.Errorf("status = %q, want rolled_back", result.Status)
+	}
+}
+
+func TestDeployService_ApplyFail(t *testing.T) {
+	exec := &stubCommandExecutor{
+		results: []kernel.ExecOutput{
+			{ExitCode: 0, Stdout: "dry-run ok"},  // dry-run passes
+			{ExitCode: 1, Stderr: "apply error"},  // apply fails
+		},
+	}
+	svc := NewDeployService(exec)
+
+	_, err := svc.Deploy(context.Background(), "proj-1", "/tmp/worktree", "main")
+	if err == nil {
+		t.Fatal("expected error on apply failure")
+	}
+}
+
+func TestDeployService_RollbackFail(t *testing.T) {
+	exec := &stubCommandExecutor{
+		results: []kernel.ExecOutput{
+			{ExitCode: 0, Stdout: "dry-run ok"},       // dry-run
+			{ExitCode: 0, Stdout: "applied"},           // apply
+			{ExitCode: 1, Stdout: "unhealthy"},          // verify FAIL
+			{ExitCode: 1, Stderr: "rollback error"},     // rollback also FAIL
+		},
+	}
+	svc := NewDeployService(exec)
+
+	_, err := svc.Deploy(context.Background(), "proj-1", "/tmp/worktree", "main")
+	if err == nil {
+		t.Fatal("expected error on rollback failure")
 	}
 }
