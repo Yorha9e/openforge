@@ -1,6 +1,16 @@
 import { createContext, useContext, useState, useCallback, type ReactNode } from 'react';
 import { api, setToken } from './api';
 
+function parseRoleFromJWT(token: string): string {
+  try {
+    const parts = token.split('.');
+    const payload = JSON.parse(atob(parts[1] || ''));
+    return payload.role || 'pm';
+  } catch {
+    return 'pm';
+  }
+}
+
 interface AuthState {
   token: string | null;
   refreshToken: string | null;
@@ -30,7 +40,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const result = await api.login(username, password);
     setAccessToken(result.access_token);
     setRefreshToken(result.refresh_token);
-    const u = { id: username, role: 'pm' };
+    const u = { id: username, role: parseRoleFromJWT(result.access_token) };
     setUser(u);
     localStorage.setItem('of_token', result.access_token);
     localStorage.setItem('of_refresh', result.refresh_token);
@@ -54,3 +64,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 }
 
 export function useAuth() { return useContext(AuthContext); }
+
+export function useRole(): string {
+  const { user } = useAuth();
+  return user?.role || '';
+}
+
+export function useCanAccess(requiredRole: string): boolean {
+  const role = useRole();
+  if (role === 'admin') return true;
+  return role === requiredRole;
+}

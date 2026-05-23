@@ -90,6 +90,7 @@ func handleLogin(jwtSvc *service.JWTService, cfg *profile.Config) http.HandlerFu
 		var req struct {
 			Username string `json:"username"`
 			Password string `json:"password"`
+			Role     string `json:"role"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, 400, "invalid request body")
@@ -99,7 +100,11 @@ func handleLogin(jwtSvc *service.JWTService, cfg *profile.Config) http.HandlerFu
 			writeError(w, 400, "username required")
 			return
 		}
-		token, err := jwtSvc.Issue(req.Username, "pm", "")
+		role := req.Role
+		if role == "" {
+			role = "pm" // default for dev mode
+		}
+		token, err := jwtSvc.Issue(req.Username, role, "")
 		if err != nil {
 			writeError(w, 500, "failed to issue token")
 			return
