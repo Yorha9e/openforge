@@ -13,12 +13,14 @@ import (
 type GateService struct {
 	gateRepo port.GateRepository
 	pipeRepo port.PipelineRepository
+	hooks    domain.HookChain
 }
 
-func NewGateService(gateRepo port.GateRepository, pipeRepo port.PipelineRepository) *GateService {
+func NewGateService(gateRepo port.GateRepository, pipeRepo port.PipelineRepository, hooks ...domain.GateHook) *GateService {
 	return &GateService{
 		gateRepo: gateRepo,
 		pipeRepo: pipeRepo,
+		hooks:    hooks,
 	}
 }
 
@@ -40,9 +42,14 @@ func (s *GateService) Approve(ctx context.Context, pipelineID, stage, actor stri
 		ContentHash:     fmt.Sprintf("%x", sha256.Sum256([]byte(content))),
 		PrevHash:        "genesis",
 	}
+
+	if err := s.hooks.RunPreApprove(ctx, ev); err != nil {
+		return err
+	}
 	if err := s.gateRepo.CreateEvent(ctx, ev); err != nil {
 		return err
 	}
+	s.hooks.RunPostApprove(ctx, ev)
 
 	if err := p.Transition("gate_approve"); err != nil {
 		return err
@@ -68,9 +75,14 @@ func (s *GateService) Reject(ctx context.Context, pipelineID, stage, actor strin
 		ContentHash:     fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprintf("%s|%s|%s|reject", pipelineID, stage, actor)))),
 		PrevHash:        "genesis",
 	}
+
+	if err := s.hooks.RunPreReject(ctx, ev); err != nil {
+		return err
+	}
 	if err := s.gateRepo.CreateEvent(ctx, ev); err != nil {
 		return err
 	}
+	s.hooks.RunPostReject(ctx, ev)
 
 	if err := p.Transition("gate_reject"); err != nil {
 		return err
