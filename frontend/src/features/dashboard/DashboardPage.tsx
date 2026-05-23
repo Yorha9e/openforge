@@ -20,6 +20,7 @@ export function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [logoutHovered, setLogoutHovered] = useState(false);
+  const [navHovered, setNavHovered] = useState<string | null>(null);
 
   useEffect(() => {
     api.listProjects()
@@ -28,10 +29,29 @@ export function DashboardPage() {
       .finally(() => setLoading(false));
   }, []);
 
+  const navLink = (to: string, label: string) => (
+    <Link
+      key={to}
+      to={to}
+      onMouseEnter={() => setNavHovered(to)}
+      onMouseLeave={() => setNavHovered(null)}
+      style={{
+        color: navHovered === to ? tokens.text : tokens.muted,
+        textDecoration: 'none', fontSize: 14, transition: tokens.transition,
+      }}
+    >{label}</Link>
+  );
+
   return (
     <div style={{ minHeight: '100vh', background: tokens.bg, color: tokens.text, fontFamily: tokens.fontBody }}>
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 24px', borderBottom: `1px solid ${tokens.border}` }}>
-        <h1 style={{ fontSize: 18, fontWeight: 700, fontFamily: tokens.fontHeading }}>OpenForge</h1>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 24 }}>
+          <h1 style={{ fontSize: 18, fontWeight: 700, fontFamily: tokens.fontHeading }}>OpenForge</h1>
+          <nav style={{ display: 'flex', gap: 16 }}>
+            {navLink('/settings', 'Settings')}
+            {navLink('/review-inbox', 'Review Inbox')}
+          </nav>
+        </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
           <span style={{ color: tokens.muted, fontSize: 14 }}>{user?.id}</span>
           <button
@@ -43,11 +63,19 @@ export function DashboardPage() {
         </div>
       </header>
       <main style={{ maxWidth: 960, margin: '0 auto', padding: 24 }}>
-        <h2 style={{ fontSize: 28, fontWeight: 700, marginBottom: 24, fontFamily: tokens.fontHeading }}>Projects</h2>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
+          <h2 style={{ fontSize: 28, fontWeight: 700, fontFamily: tokens.fontHeading }}>Projects</h2>
+        </div>
         {error && <p style={{ color: tokens.error, fontSize: 14, marginBottom: 12 }}>{error}</p>}
         {loading ? <PageSkeleton />
-        : projects.length === 0 ? <p style={{ color: tokens.muted }}>No projects yet.</p>
-        : (
+        : projects.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '60px 0' }}>
+            <p style={{ color: tokens.muted, fontSize: 16, marginBottom: 8 }}>No projects yet</p>
+            <p style={{ color: tokens.muted, fontSize: 14 }}>
+              Create a project to get started. Visit <Link to="/settings" style={{ color: tokens.cta }}>Settings</Link> or start a new pipeline.
+            </p>
+          </div>
+        ) : (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 16 }}>
             {projects.map(p => (
               <Link key={p.id} to={`/project/${p.id}`} style={{ textDecoration: 'none' }}>
