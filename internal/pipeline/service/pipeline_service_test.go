@@ -153,8 +153,23 @@ func TestPipelineService_Start_RepoError(t *testing.T) {
 }
 
 func TestPipelineService_AdvanceStage_NeedsGate(t *testing.T) {
-	p := newL3Pipeline("p1")
-	p.Status = "running"
+	p := &domain.Pipeline{
+		ID:           "p1",
+		ProjectID:    "proj1",
+		Title:        "Test",
+		Level:        "L3",
+		Status:       "running",
+		CurrentStage: "impl",
+		Version:      1,
+		Stages: []domain.Stage{
+			{Type: "clarify", Status: "passed"},
+			{Type: "decompose", Status: "passed"},
+			{Type: "impl", Status: "running"},
+			{Type: "test", Status: "pending"},
+			{Type: "deploy", Status: "pending"},
+			{Type: "verify", Status: "pending"},
+		},
+	}
 	mock := &mockPipelineRepo{
 		pipelines: map[string]*domain.Pipeline{"p1": p},
 	}
