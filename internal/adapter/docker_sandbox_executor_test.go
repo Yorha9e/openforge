@@ -77,3 +77,92 @@ func TestDockerSandboxExecutor_Validate(t *testing.T) {
 		})
 	}
 }
+
+func TestShellQuote(t *testing.T) {
+	tests := []struct {
+		input       string
+		contains    string // substring that must be present
+		notContains string // substring that must NOT be present after quoting
+	}{
+		{"echo hello", "echo hello", "$"},
+		{"echo $(whoami)", "$(whoami)", ""},   // $() preserved literally inside quotes, not expanded
+		{"echo `whoami`", "`whoami`", ""},     // backticks preserved literally
+		{"it's working", "'\\''", ""},          // single quote in middle handled
+		{`echo \$VAR`, `\$VAR`, ""},            // backslash preserved literally
+		{"", "", ""},                            // empty string
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			result := shellQuote(tt.input)
+			if !strings.Contains(result, tt.contains) {
+				t.Errorf("shellQuote(%q) = %q, want contains %q", tt.input, result, tt.contains)
+			}
+			if tt.notContains != "" && strings.Contains(result, tt.notContains) {
+				t.Errorf("shellQuote(%q) = %q, must NOT contain %q", tt.input, result, tt.notContains)
+			}
+			// Verify the result starts and ends with single quotes
+			if !strings.HasPrefix(result, "'") || !strings.HasSuffix(result, "'") {
+				t.Errorf("shellQuote(%q) = %q, not properly quoted", tt.input, result)
+			}
+		})
+	}
+}
+
+func TestBuildDockerCmdEscapesShellMetachars(t *testing.T) {
+	// Construct directly to avoid Docker daemon dependency — buildDockerCmd is pure.
+	exec := &DockerSandboxExecutor{
+		cfg: DockerSandboxConfig{
+			Image:       "openforge/sandbox-node:latest",
+			MemoryMB:    2048,
+			CPUs:        2,
+			MaxPids:     100,
+			NetworkMode: "none",
+			Timeout:     30 * time.Second,
+		},
+	}
+
+	tests := []struct {
+		name             string
+		command          string
+		wantSingleQuoted string // substring that should appear inside single quotes in the final command
+	}{
+		{
+			name:             "simple echo",
+			command:          "echo hello",
+			wantSingleQuoted: "'echo hello'",
+		},
+		{
+			name:             "command substitution is inside single quotes",
+			command:          `echo $(whoami)`,
+			wantSingleQuoted: "'echo $(whoami)'",
+		},
+		{
+			name:             "backtick is inside single quotes",
+			command:          "echo `whoami`",
+			wantSingleQuoted: "'echo `whoami`'",
+		},
+		{
+			name:             "single quote in command is escaped",
+			command:          "echo it's safe",
+			wantSingleQuoted: "'echo it'\\''s safe'",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := exec.buildDockerCmd(tt.command, kernel.ExecOptions{})
+			if !strings.Contains(cmd, tt.wantSingleQuoted) {
+				t.Errorf("buildDockerCmd(%q) = %q, want contains %q", tt.command, cmd, tt.wantSingleQuoted)
+			}
+			// Verify the single-quoted section does not have an unclosed opening before /bin/sh -c
+			idx := strings.Index(cmd, "/bin/sh -c ")
+			if idx < 0 {
+				t.Fatal("expected /bin/sh -c in docker command")
+			}
+			rest := cmd[idx+len("/bin/sh -c "):]
+			if !strings.HasPrefix(rest, "'") {
+				t.Errorf("command after /bin/sh -c must start with single quote, got: %s", rest)
+			}
+		})
+	}
+}

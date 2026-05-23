@@ -111,13 +111,6 @@ func (e *DockerSandboxExecutor) ExecuteStream(ctx context.Context, command strin
 // buildDockerCmd constructs the docker run command string with proper escaping
 // and all required flags.
 func (e *DockerSandboxExecutor) buildDockerCmd(command string, opts kernel.ExecOptions) string {
-	// Escape shell metacharacters to prevent host-level command injection.
-	// Go's %q does not escape $ or backtick, which bash expands inside double-quoted strings.
-	escaped := strings.ReplaceAll(command, "\\", "\\\\")
-	escaped = strings.ReplaceAll(escaped, "$", "\\$")
-	escaped = strings.ReplaceAll(escaped, "`", "\\`")
-	escaped = strings.ReplaceAll(escaped, "\"", "\\\"")
-
 	dockerCmd := fmt.Sprintf(
 		"docker run --rm --init --read-only --cap-drop=ALL --memory=%dm --cpus=%d --pids-limit=%d --network=%s",
 		e.cfg.MemoryMB, e.cfg.CPUs, e.cfg.MaxPids, e.cfg.NetworkMode,
@@ -130,8 +123,17 @@ func (e *DockerSandboxExecutor) buildDockerCmd(command string, opts kernel.ExecO
 		dockerCmd = fmt.Sprintf("%s -e %s=%s", dockerCmd, k, v)
 	}
 
-	dockerCmd = fmt.Sprintf("%s %s /bin/sh -c %q", dockerCmd, e.cfg.Image, escaped)
+	dockerCmd = fmt.Sprintf("%s %s /bin/sh -c %s", dockerCmd, e.cfg.Image, shellQuote(command))
 	return dockerCmd
+}
+
+// shellQuote wraps s in single quotes for safe passing to /bin/sh -c.
+// Single quotes prevent ALL expansion: $(), backticks, variables, etc.
+func shellQuote(s string) string {
+	// Inside single quotes, EVERYTHING is literal.
+	// The only character that can't appear inside single quotes is ' itself.
+	// We handle it by ending the single quote, adding an escaped ', and resuming.
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
 
 // Validate checks whether a command is safe to execute in the sandbox.
