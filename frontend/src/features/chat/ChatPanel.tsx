@@ -4,6 +4,7 @@ import { ChatProvider } from './ChatProvider';
 import { MessageList } from './MessageList';
 import { MessageInput } from './MessageInput';
 import { ModelSelector } from './ModelSelector';
+import { AgentPanel } from './AgentPanel';
 import { tokens } from '../../shared/design-tokens';
 
 export function ChatPanel() {
@@ -20,6 +21,7 @@ export function ChatPanel() {
           <span>Pipeline: {pipelineId}</span>
           <ModelSelector current={model} onSelect={setModel} />
         </header>
+        <AgentPanel agents={[]} />
         <MessageList />
         <MessageInput />
       </div>
