@@ -31,6 +31,12 @@ type Config struct {
 	JWT      JWTConfig      `yaml:"jwt"`
 }
 
+// DockerConfig holds Docker daemon connection parameters.
+type DockerConfig struct {
+	Host       string `yaml:"host"`
+	APIVersion string `yaml:"api_version"`
+}
+
 // DatabaseConfig holds database connection parameters.
 type DatabaseConfig struct {
 	Host     string `yaml:"host"`

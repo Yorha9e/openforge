@@ -15,6 +15,10 @@ load_balancer: none
 notifier: stdout
 command_executor: local-shell
 
+docker:
+  host: "unix:///var/run/docker.sock"
+  api_version: "1.45"
+
 database:
   host: localhost
   port: 5432

@@ -35,13 +35,16 @@ type OpenForge struct {
 	Notifier     kernel.Notifier
 	CommandExec  kernel.CommandExecutor
 	LLMRouter    *llm.Router
-	LLMRegistry  *llm.Registry
-	Config       *Config
+	LLMRegistry     *llm.Registry
+	Config          *Config
 
-	PipelineRepo *pipelineadapter.PGRepository
-	PipelineSvc  *service.PipelineService
-	GateSvc      *service.GateService
-	DB           *sql.DB
+	PipelineRepo    *pipelineadapter.PGRepository
+	PipelineSvc     *service.PipelineService
+	GateSvc         *service.GateService
+	SandboxProvider *adapter.SandboxProvider
+	DeploySvc       *service.DeployService
+	TokenCostSvc    *service.TokenCostService
+	DB              *sql.DB
 }
 
 // Bootstrap creates a new OpenForge composition root from the given profile
@@ -85,6 +88,16 @@ func Bootstrap(cfg *Config) (*OpenForge, error) {
 	of.PipelineRepo = pipelineadapter.NewPGRepository(db)
 	of.PipelineSvc = service.NewPipelineService(of.PipelineRepo)
 	of.GateSvc = service.NewGateService(of.PipelineRepo, of.PipelineRepo)
+
+	// Phase 4: Sandbox + Deploy + Cost
+	of.SandboxProvider = adapter.NewSandboxProvider(adapter.SandboxProviderConfig{
+		WarmCount:   10,
+		MaxTotal:    30,
+		IdleTimeout: 10 * time.Minute,
+		Image:       "openforge/sandbox-node:latest",
+	})
+	of.DeploySvc = service.NewDeployService(of.CommandExec)
+	of.TokenCostSvc = service.NewTokenCostService(of.PipelineRepo)
 	return of, nil
 }
 
