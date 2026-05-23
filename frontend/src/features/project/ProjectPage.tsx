@@ -16,13 +16,18 @@ export function ProjectPage() {
   const [createError, setCreateError] = useState<string | null>(null);
   const [inputFocused, setInputFocused] = useState(false);
   const [btnHovered, setBtnHovered] = useState(false);
+  const [showContent, setShowContent] = useState(false);
 
   useEffect(() => {
     if (!id) return;
-    api.getProject(id)
+    const minDelay = new Promise(r => setTimeout(r, 600));
+    const fetch = api.getProject(id)
       .then(setProject)
-      .catch(err => setError(err instanceof Error ? err.message : 'Failed to load project'))
-      .finally(() => setLoading(false));
+      .catch(err => setError(err instanceof Error ? err.message : 'Failed to load project'));
+    Promise.all([fetch, minDelay]).finally(() => {
+      setLoading(false);
+      setShowContent(true);
+    });
   }, [id]);
 
   const handleCreate = async () => {
@@ -38,8 +43,8 @@ export function ProjectPage() {
     }
   };
 
-  if (loading) return <PageSkeleton cards={1} />;
-  if (!project) return <div style={{ minHeight: '100vh', background: tokens.bg, color: tokens.text, padding: 24, fontFamily: tokens.fontBody }}>Project not found</div>;
+  if (!showContent) return <PageSkeleton cards={1} />;
+  if (!project && !loading) return <div style={{ minHeight: '100vh', background: tokens.bg, color: tokens.text, padding: 24, fontFamily: tokens.fontBody }}>Project not found</div>;
 
   return (
     <div style={{ minHeight: '100vh', background: tokens.bg, color: tokens.text, fontFamily: tokens.fontBody }}>

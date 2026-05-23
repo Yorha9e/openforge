@@ -8,12 +8,17 @@ export function ReviewInboxPage() {
   const [items, setItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [showContent, setShowContent] = useState(false);
 
   useEffect(() => {
-    api.getReviewInbox()
+    const minDelay = new Promise(r => setTimeout(r, 600));
+    const fetch = api.getReviewInbox()
       .then(setItems)
-      .catch(err => setError(err instanceof Error ? err.message : 'Failed to load reviews'))
-      .finally(() => setLoading(false));
+      .catch(err => setError(err instanceof Error ? err.message : 'Failed to load reviews'));
+    Promise.all([fetch, minDelay]).finally(() => {
+      setLoading(false);
+      setShowContent(true);
+    });
   }, []);
 
   return (
@@ -26,7 +31,7 @@ export function ReviewInboxPage() {
       </header>
       <main style={{ maxWidth: 720, margin: '0 auto', padding: 24 }}>
         {error && <p style={{ color: tokens.error, fontSize: 14, marginBottom: 12 }}>{error}</p>}
-        {loading ? <PageSkeleton cards={2} />
+        {!showContent ? <PageSkeleton cards={2} />
         : items.length === 0 ? <p style={{ color: tokens.muted }}>No pending reviews.</p>
         : items.map(item => (
           <div key={item.pipeline_id + item.stage} style={{ background: tokens.surface, border: `1px solid ${tokens.border}`, borderRadius: 8, padding: 16, marginBottom: 12 }}>
