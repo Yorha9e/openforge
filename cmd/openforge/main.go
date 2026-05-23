@@ -12,6 +12,7 @@ import (
 	"openforge/internal/agent/domain"
 	"openforge/internal/agent/port"
 	"openforge/internal/shared/profile"
+	"openforge/internal/tool"
 )
 
 func main() {
@@ -35,7 +36,12 @@ func main() {
 	}
 
 	llmClient := of.LLMRouter
-	coordinator := domain.NewCoordinator(llmClient)
+	toolReg := tool.NewRegistry()
+	toolReg.RegisterTool(&tool.ReadFileTool{})
+	toolReg.RegisterTool(&tool.WriteFileTool{})
+	toolReg.RegisterTool(&tool.GrepTool{})
+	toolReg.RegisterTool(&tool.GlobTool{})
+	coordinator := domain.NewCoordinator(llmClient, toolReg)
 
 	llmConfig := port.LLMConfig{
 		Provider:    cfg.LLM.DefaultProvider,

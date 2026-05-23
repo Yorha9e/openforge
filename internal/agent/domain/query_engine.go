@@ -8,6 +8,14 @@ import (
 	agentport "openforge/internal/agent/port"
 )
 
+// QueryState represents the state of the query engine.
+type QueryState string
+
+const (
+	QueryStateIdle         QueryState = "IDLE"
+	QueryStateAwaitingUser QueryState = "AWAITING_USER"
+)
+
 // StreamEvent represents a single event emitted during a streaming LLM response.
 type StreamEvent struct {
 	Type    string // "delta", "done", or "error"
@@ -23,6 +31,7 @@ type QueryEngine struct {
 	config     agentport.LLMConfig
 	messages   []agentport.Message
 	tokenCount int
+	state      QueryState
 	mu         sync.Mutex
 }
 
@@ -31,7 +40,15 @@ func NewQueryEngine(llmClient agentport.LLMRouterClient, config agentport.LLMCon
 	return &QueryEngine{
 		llmClient: llmClient,
 		config:    config,
+		state:     QueryStateIdle,
 	}
+}
+
+// State returns the current query engine state.
+func (qe *QueryEngine) State() QueryState {
+	qe.mu.Lock()
+	defer qe.mu.Unlock()
+	return qe.state
 }
 
 // SubmitMessage appends a user message to the conversation history and starts a
@@ -84,6 +101,10 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, msg string) (<-chan St
 		qe.messages = append(qe.messages, agentport.Message{Role: "assistant", Content: responseText})
 		qe.mu.Unlock()
 
+		qe.mu.Lock()
+		qe.state = QueryStateAwaitingUser
+		qe.mu.Unlock()
+
 		out <- StreamEvent{Type: "done", Content: responseText}
 	}()
 
@@ -122,4 +143,5 @@ func (qe *QueryEngine) Clear() {
 	defer qe.mu.Unlock()
 	qe.messages = nil
 	qe.tokenCount = 0
+	qe.state = QueryStateIdle
 }
