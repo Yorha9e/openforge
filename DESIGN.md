@@ -1,6 +1,6 @@
 ﻿# OpenForge (原 SuperAgent) — AI 工程工具 设计文档
 
-> 日期: 2026-05-21 | 比赛: Agent 辅助全栈挑战赛 | 题目: 题一「AI工程工具」 | 版本: v4 (Claude Code 源码对比采纳 + Phase 1 审计闭环)
+> 日期: 2026-05-24 | 比赛: Agent 辅助全栈挑战赛 | 题目: 题一「AI工程工具」 | 版本: v5 (Phase 5d Prompt 三层简化 + §4.2b 新增 + 文件清单更新)
 
 ---
 
@@ -412,6 +412,7 @@ Pipeline 失败时自动分类，避免学到噪声:
 - **CSP Channel**: buffer 固定 + 背压传播，下游慢 → 上游自动节流
 - **Goroutine Pool** (ants): 全局上限 ~8000，按 Pipeline L1-L4 分级配额
 - **进程守护**: `os/exec` + `cmd.Wait()` 自动重启 Node.js IO 层
+- **Prompt 构建系统** (§4.2b): L1 static.xml → L2 项目融合 → L4 对话摘要, 三层简化架构。SystemPrompt 通过 proto → port → router → adapter 穿透至 LLM Provider
 
 ### 4.2 Query Engine (对话生命周期管理) `[Phase 1.5 — v5 spec 闭环, 评分 9.5/10]`
 
@@ -727,20 +728,245 @@ func ClassifyAndRecover(code FailureCode, attempt int) RecoveryResult {
 
 ```
 internal/agent/domain/
-  query_engine.go           # QueryEngine 核心 (~500行, 6 态 + Gate 挂起)
+  query_engine.go           # QueryEngine 核心 (~200行, 6 态 + PromptBuilder 集成)
   query_engine_config.go    # QueryEngineConfig + 默认值
   query_engine_test.go      # Table-driven 测试
+  prompt_builder.go         # PromptBuilder 核心 (~350行, L1/L2/L4 三层架构)
+  prompt_builder_test.go    # PromptBuilder 测试
+  stage_templates.go        # 6 阶段 × 4 复杂度服务器默认模板
+  tools_stages.go           # StageToolMap + InjectTools (Phase 7→ToolRegistry)
+  knowledge_querier.go      # KnowledgeQuerier — L2 附属, 对接 LearningEngine
   tool_call_parsed.go       # ToolCallParsed + ToolCallGroup + ToolResult
   error_mapping.go          # FailureCode + MapToolErrorToFailureCode + ClassifyAndRecover
+  coordinator.go            # AgentCoordinator — goroutine pool 管理
 
 internal/agent/port/
   gate_repository.go        # GateRepository 接口
+  llm_client.go             # LLMRouterClient + ChatRequest (含 SystemPrompt)
 
 internal/agent/adapter/
   pg_gate_repository.go     # PG 实现
+  grpc_llm_client.go        # ConnectRPC → Node.js (传递 SystemPrompt)
+
+config/prompts/
+  static.xml                # L1 不可覆盖 — 身份/安全/代码规范
 
 migrations/
   003_gate_request.up.sql   # gate_request DDL
+```
+
+### 4.2b Prompt 构建系统 `[Phase 5d — v2 简化]`
+
+> 架构: L1 (static.xml 不可覆盖) → L2 (项目融合) → L4 (对话摘要)。L3 退化入 L2（无独立数据源）。注入器精简为 KnowledgeQuerier（L2 附属）+ 独立 tools_stages.go。
+
+#### 4.2b.1 三层架构
+
+```
+PromptBuilder.Build(ctx, BuildRequest)
+  │
+  ├── 1. L1 静态安全层 (config/prompts/static.xml)
+  │       启动加载，内存缓存，永不重读
+  │       身份声明 + 安全规则 + 代码规范
+  │       拼接在最末尾，不可被项目模板覆盖
+  │
+  ├── 2. L2Builder.Build(ctx, L2Request)
+  │       ├── ProjectPrefs (of-prefs.yaml, mtime 热重载, Phase 6 实现)
+  │       ├── stageInstruction(stage, level)
+  │       │     → of-prefs.yaml 项目覆盖(优先)
+  │       │     → stage_templates.go 服务器默认模板(兜底)
+  │       │     → 通用 fallback 提示(最后)
+  │       ├── KnowledgeQuerier.Query(ctx, projectID, userQuery)
+  │       │     → 5min TTL 缓存 → LearningEngine (nil 时静默返回 "")
+  │       └── Metadata (pipeline_id, project_id, current_time, 回溯/子Pipeline)
+  │
+  ├── 3. Tool 注入 (tools_stages.go)
+  │       InjectTools(stage, permissionMode)
+  │       → StageToolMap[stage] → plan模式过滤 → tool描述文本 + []ToolDefinition
+  │       Phase 7: 替换为 ToolRegistry.Search()
+  │
+  └── 4. L4 对话摘要 (纯函数 buildL4Summary)
+        最近 5 轮 (10 条消息) → <conversation_summary> XML
+        注入 SystemPrompt，不影响 Messages 数组
+        Messages 完全由 QueryEngine 独立管理
+```
+
+#### 4.2b.2 核心类型
+
+```go
+// PromptBuilder — 简化后核心
+type PromptBuilder struct {
+    l1Content string          // static.xml 内存缓存，启动加载
+    l2Builder *L2Builder
+    metrics   *PromptMetrics
+    mu        sync.RWMutex
+}
+
+// L2Builder 负责 L2 层全部内容组装
+type L2Builder struct {
+    prefs     *ProjectPrefsLoader  // of-prefs.yaml 热重载
+    knowledge *KnowledgeQuerier    // L2 附属，可为 nil
+    mu        sync.RWMutex
+}
+
+// L2Request L2 层输入
+type L2Request struct {
+    ProjectID        string
+    PipelineID       string
+    Stage            string
+    Level            string
+    UserQuery        string
+    BacktrackReason  string
+    BacktrackTarget  string
+    ParentPipelineID string
+}
+
+// BuildRequest 完整请求
+type BuildRequest struct {
+    PipelineID, ProjectID, Stage, StageLevel string
+    PermissionMode, UserRole, UserMessage    string
+    ConversationHistory                      []Message
+    BacktrackReason, BacktrackTarget         string
+    ParentPipelineID                         string
+}
+
+// Prompt 构建输出 — System + Tools + Token，不含 Messages
+type Prompt struct {
+    System     string
+    Tools      []ToolDefinition
+    TokenUsage *TokenUsage
+}
+```
+
+#### 4.2b.3 PromptBuilder 构造与核心方法
+
+```go
+// NewPromptBuilder 创建 PromptBuilder
+// l1Path: config/prompts/static.xml 路径 (服务启动校验，缺失 fast-fail)
+// knowledgeQuerier: 可为 nil (Phase 7 前知识查询静默返回空)
+func NewPromptBuilder(l1Path string, knowledgeQuerier *KnowledgeQuerier) (*PromptBuilder, error)
+
+// Build 执行完整构建链: L2 → Tools → L4 → L1 + sanitize + token估算
+func (pb *PromptBuilder) Build(ctx context.Context, req *BuildRequest) (*Prompt, error)
+
+// GetMetrics 返回构建指标 (Stage/Complexity/Permission/BuildDuration/Token 统计)
+func (pb *PromptBuilder) GetMetrics() *PromptMetrics
+```
+
+#### 4.2b.4 tools_stages.go — 阶段工具映射
+
+```go
+// ToolDefinition 工具定义 (字段名与 port.ToolInfo 对齐，方便 Phase 7 迁移)
+type ToolDefinition struct {
+    Name        string
+    Description string
+    InputSchema map[string]interface{}
+    ReadOnly    bool
+}
+
+// StageToolMap 硬编码 6 阶段工具列表 (Phase 7 → ToolRegistry.Search)
+var StageToolMap = map[string][]ToolDefinition{
+    "clarify":   {read_file, search_content, analyze_topology, lsp_symbols},
+    "decompose": {read_file, search_content, analyze_topology, lsp_references},
+    "implement": {acquire_file_lock, release_file_lock, read_file, edit_file, write_file, bash, lsp_*},
+    "test":      {read_file, edit_file, bash, search_content},
+    "deploy":    {bash, read_file, manage_sandbox},
+    "verify":    {read_file, bash, write_knowledge_delta},
+}
+
+// PermissionFilter plan 模式下允许的工具白名单 (13 个只读工具)
+var PermissionFilter = map[string][]string{"plan": {...}}
+
+// InjectTools 返回 (工具描述 XML 文本, []ToolDefinition)
+func InjectTools(stage, permissionMode string) (string, []ToolDefinition)
+```
+
+#### 4.2b.5 L1 不可覆盖规则
+
+`config/prompts/static.xml` 在 `Build()` 拼接链最末尾。项目 `of-prefs.yaml` 不能覆盖其中的安全规则：
+
+```xml
+<system_prompt>
+  <identity>
+    <role>You are OpenForge, an AI-driven full-stack development agent.</role>
+    <mission>Execute software engineering tasks across the complete lifecycle.</mission>
+  </identity>
+  <security>
+    <audit>All operations are audited (WORM).</audit>
+    <gate>Never bypass the Gate approval system.</gate>
+    <license>Never generate GPL/AGPL code.</license>
+  </security>
+  <code_conventions>
+    <convention>NO COMMENTS unless asked</convention>
+    <convention>Follow existing code style</convention>
+    <convention>Prefer editing existing files over creating new ones</convention>
+    <convention>Never expose or log secrets/keys</convention>
+  </code_conventions>
+</system_prompt>
+```
+
+#### 4.2b.6 SystemPrompt 穿透链路
+
+```
+QueryEngine.SubmitMessage()
+  → PromptBuilder.Build(ctx, buildReq)
+    → SystemPrompt = L2 + Tools + L4 + L1
+  → port.ChatRequest.SystemPrompt = prompt.System
+    → llm.Router.Chat/ChatStream → internal ChatRequest.SystemPrompt
+      → adapter.LLMClient.toProtoRequest() → proto LLMChatRequest.system_prompt
+        → Node.js LLMRouterService.Chat → ChatRequest.systemPrompt → Provider
+```
+
+**涉及文件**: `query_engine.go` → `prompt_builder.go` → `port/llm_client.go` → `router.go` → `grpc_llm_client.go` → `llm.proto` → `nodejs-io`
+
+#### 4.2b.7 KnowledgeQuerier (L2 附属)
+
+```go
+// KnowledgeQuerier 对接 LearningEngine，被 L2Builder 调用
+type KnowledgeQuerier struct {
+    learningEngine LearningEngine  // nil 时 Query() 静默返回 ""
+    embeddingIndex EmbeddingIndex
+    cache          sync.Map        // 5min TTL
+}
+// Query 并行查询偏好(QueryKnowledge) + 轨迹(MatchTrajectory)
+func (kq *KnowledgeQuerier) Query(ctx context.Context, projectID, query string) (string, error)
+```
+
+**与旧设计的差异**: `knowledge_injector.go` 已删除。原 Tool/Context/Security 三个独立注入器 (L369-619) 全部移除。LearningEngine 接口的三个方法 (`QueryKnowledge`/`MatchTrajectory`/`WriteKnowledge`) 在 domain 内部自定，`port.LearningEngineClient` 的方法扩展延至 Phase 7。
+
+#### 4.2b.8 Phase 7 预留扩展点
+
+| 当前实现 | Phase 7 替换 |
+|---------|-------------|
+| `tools_stages.go` 硬编码 `StageToolMap` | 调用 `ToolRegistry.Search(ctx, stage, topK)` |
+| `KnowledgeQuerier.learningEngine == nil` → 返回 "" | 对接真实 pgvector 嵌入索引 |
+| `PermissionFilter` 白名单硬编码 | 调 `Tool.IsReadOnly()` 接口动态判定 |
+| `ProjectPrefsLoader.Get()` 返回 "" | 读 `of-prefs.yaml` + mtime 热重载 |
+| 服务器模板 Go string 常量 | `templates/stages/*.xml` + embed.FS 外部化 |
+
+#### 4.2b.9 文件清单 (Phase 5d 变更)
+
+```
+新建:
+  config/prompts/static.xml                              ← L1 不可覆盖
+  internal/agent/domain/tools_stages.go                  ← StageToolMap + InjectTools
+  internal/agent/domain/knowledge_querier.go             ← KnowledgeQuerier (替代 knowledge_injector.go)
+
+重写:
+  internal/agent/domain/prompt_builder.go                ← ~900→~350行, 4层→3层简化
+
+删除:
+  internal/agent/domain/knowledge_injector.go            ← 13 类型/11 方法移入 knowledge_querier.go
+
+修改:
+  internal/agent/domain/query_engine.go                  ← +promptBuilder +PipelineContext
+  internal/agent/domain/query_engine_test.go             ← 对齐新 API
+  internal/agent/port/llm_client.go                       ← ChatRequest.SystemPrompt
+  internal/llm/router.go                                  ← SystemPrompt 穿透
+  internal/agent/adapter/grpc_llm_client.go               ← toProtoRequest 传递
+  internal/shared/profile/bootstrap.go                    ← OpenForge.PromptBuilder 字段 + 初始化
+  internal/server/ws_handler.go                           ← PromptBuilder + PipelineContext 注入
+  proto/agent/v1/llm.proto                                ← system_prompt 字段
+  nodejs-io/src/kernel/interfaces.ts                      ← ChatRequest.systemPrompt 字段
 ```
 
 ### 4.3 Tool 接口标准化 `[Phase 1.5 — v4 新增]`
@@ -1178,13 +1404,16 @@ type CommandExecutor interface {
 
 ### 4.5 Prompt 分层缓存
 
-```
-L1 静态层: 通用规则 + 代码规范 → Anthropic Prompt Cache 命中
-L2 项目层: 偏好 profile + 模块索引(需求相关子集) → 每 10 Pipeline 刷新
-L3 阶段层: 上一阶段摘要 + 当前 Artifact → 每阶段刷新
-L4 对话层: 最近 5 轮对话 + 检查点上下文 → 每轮动态
+> Phase 5d 已将 Prompt 构建从四层简化为三层 (L1/L2/L4), L3 退化入 L2。详见 §4.2b。
 
-节省: ~40% token (L3/L4 受 Anthropic 5-min TTL 限制, 实际命中率低于 L1/L2)
+```
+L1 静态层: config/prompts/static.xml 启动加载 → 内存缓存, 永不重读
+L2 项目层: of-prefs.yaml + stage_templates.go + KnowledgeQuerier → 
+           Pipeline 内缓存 (Phase 6 计数触发刷新, Phase 5d 始终重建)
+L4 对话层: buildL4Summary() 最近 5 轮 → 注入 SystemPrompt → 每轮动态
+
+Anthropic Prompt Cache 断点 (cache_control): Phase 6 (含 L1/L2 prefix 标注)
+节省预估: ~40% token (L4 受 Anthropic 5-min TTL 限制, 实际命中率低于 L1/L2)
 ```
 
 ### 4.6 LLM 优先级调度
