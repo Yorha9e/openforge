@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Navigate } from 'react-router-dom';
 import { useAuth } from '../../shared/auth';
 import { useToast } from '../../shared/toast';
 import { tokens } from '../../shared/design-tokens';
@@ -16,7 +16,7 @@ export function LoginPage() {
   const [passwordFocused, setPasswordFocused] = useState(false);
   const [btnHovered, setBtnHovered] = useState(false);
 
-  if (token) { navigate('/', { replace: true }); return null; }
+  if (token) return <Navigate to="/" replace />;
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
