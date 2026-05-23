@@ -98,6 +98,15 @@ func Bootstrap(cfg *Config) (*OpenForge, error) {
 	})
 	of.DeploySvc = service.NewDeployService(of.CommandExec)
 	of.TokenCostSvc = service.NewTokenCostService(of.PipelineRepo)
+
+	// Run database migrations
+	migrationsDir := "migrations"
+	if _, err := os.Stat(migrationsDir); err == nil {
+		runner := NewMigrationRunner(db, migrationsDir)
+		if err := runner.Run(context.Background()); err != nil {
+			return nil, fmt.Errorf("migration: %w", err)
+		}
+	}
 	return of, nil
 }
 
