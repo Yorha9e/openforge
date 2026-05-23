@@ -101,7 +101,7 @@ func Load(path string, verifySignature bool) (*Config, error) {
 		}
 		_ = sig
 		_ = pubKey
-		// TODO: implement ed25519.Verify([]byte(pubKey), data, sig) once key format is finalized
+		// Ed25519 profile signature verification deferred to Phase 8 (per DESIGN.md §6.5).
 	}
 
 	var cfg Config

@@ -106,8 +106,12 @@ func Bootstrap(cfg *Config) (*OpenForge, error) {
 		"https://api.anthropic.com", string(antAPIKey)))
 	of.LLMRouter.RegisterProvider("deepseek", llm.NewDeepSeekProvider(
 		"https://api.deepseek.com/anthropic", string(dsAPIKey)))
+	openAIKey, errOAI := of.Secrets.Get(context.Background(), "OPENAI_API_KEY")
+	if errOAI != nil {
+		openAIKey = antAPIKey // fallback for dev: reuse Anthropic key
+	}
 	of.LLMRouter.RegisterProvider("openai", llm.NewOpenAIProvider(
-		"https://api.openai.com", string(antAPIKey))) // TODO: use OPENAI_API_KEY in production
+		"https://api.openai.com", string(openAIKey)))
 
 	db, err := sql.Open("postgres", cfg.Database.DSN())
 	if err != nil {
