@@ -174,6 +174,7 @@ func (p *Pipeline) Fork(childID, title, createdBy string) *Pipeline {
 		childLevel = "L3"
 	}
 	parentID := p.ID
+	stages := defaultStages(childLevel)
 	child := &Pipeline{
 		ID:               childID,
 		ProjectID:        p.ProjectID,
@@ -181,11 +182,15 @@ func (p *Pipeline) Fork(childID, title, createdBy string) *Pipeline {
 		Title:            title,
 		Level:            childLevel,
 		Status:           "pending",
+		CurrentStage:     stages[0].Type,
 		CreatedBy:        createdBy,
 		Region:           p.Region,
 		Config:           p.Config.Clone(),
+		Stages:           stages,
 		BacktrackCount:   0,
 		Version:          1,
+		CreatedAt:        time.Now(),
+		UpdatedAt:        time.Now(),
 	}
 	return child
 }
