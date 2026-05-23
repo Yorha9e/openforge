@@ -13,7 +13,7 @@ func TestDockerSandboxExecutor_Execute(t *testing.T) {
 	exec, err := NewDockerSandboxExecutor(DockerSandboxConfig{
 		Image:       "openforge/sandbox-node:latest",
 		MemoryMB:    2048,
-		CPUShares:   2,
+		CPUs:        2,
 		MaxPids:     100,
 		NetworkMode: "none",
 		Timeout:     30 * time.Second,

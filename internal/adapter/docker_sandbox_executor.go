@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os/exec"
 	"regexp"
+	"strings"
 	"time"
 
 	"openforge/internal/shared/kernel"
@@ -17,7 +18,7 @@ var execLookPath = exec.LookPath
 type DockerSandboxConfig struct {
 	Image       string
 	MemoryMB    int
-	CPUShares   int
+	CPUs        int
 	MaxPids     int
 	NetworkMode string
 	Timeout     time.Duration
@@ -39,7 +40,7 @@ func defaultDockerSandboxConfig() DockerSandboxConfig {
 	return DockerSandboxConfig{
 		Image:       "openforge/sandbox-node:latest",
 		MemoryMB:    2048,
-		CPUShares:   2,
+		CPUs:        2,
 		MaxPids:     100,
 		NetworkMode: "none",
 		Timeout:     30 * time.Second,
@@ -79,13 +80,7 @@ func (e *DockerSandboxExecutor) Execute(ctx context.Context, command string, opt
 	}
 
 	start := time.Now()
-	// Phase 4 MVP: delegate to LocalShellExecutor wrapped with docker CLI.
-	// Post-Phase 4: use Docker SDK (github.com/docker/docker/client) for direct API access.
-	dockerCmd := fmt.Sprintf(
-		"docker run --rm --read-only --cap-drop=ALL --memory=%dm --cpus=%d --pids-limit=%d --network=%s %s /bin/sh -c %q",
-		e.cfg.MemoryMB, e.cfg.CPUShares, e.cfg.MaxPids, e.cfg.NetworkMode,
-		e.cfg.Image, command,
-	)
+	dockerCmd := e.buildDockerCmd(command, opts)
 
 	local := NewLocalShellExecutor(WithProfile(nil))
 	out, err := local.Execute(ctx, dockerCmd, kernel.ExecOptions{
@@ -103,11 +98,7 @@ func (e *DockerSandboxExecutor) ExecuteStream(ctx context.Context, command strin
 		return nil, err
 	}
 
-	dockerCmd := fmt.Sprintf(
-		"docker run --rm --read-only --cap-drop=ALL --memory=%dm --cpus=%d --pids-limit=%d --network=%s %s /bin/sh -c %q",
-		e.cfg.MemoryMB, e.cfg.CPUShares, e.cfg.MaxPids, e.cfg.NetworkMode,
-		e.cfg.Image, command,
-	)
+	dockerCmd := e.buildDockerCmd(command, opts)
 
 	local := NewLocalShellExecutor(WithProfile(nil))
 	return local.ExecuteStream(ctx, dockerCmd, kernel.ExecOptions{
@@ -115,6 +106,32 @@ func (e *DockerSandboxExecutor) ExecuteStream(ctx context.Context, command strin
 		Timeout:   e.cfg.Timeout,
 		MaxOutput: opts.MaxOutput,
 	})
+}
+
+// buildDockerCmd constructs the docker run command string with proper escaping
+// and all required flags.
+func (e *DockerSandboxExecutor) buildDockerCmd(command string, opts kernel.ExecOptions) string {
+	// Escape shell metacharacters to prevent host-level command injection.
+	// Go's %q does not escape $ or backtick, which bash expands inside double-quoted strings.
+	escaped := strings.ReplaceAll(command, "\\", "\\\\")
+	escaped = strings.ReplaceAll(escaped, "$", "\\$")
+	escaped = strings.ReplaceAll(escaped, "`", "\\`")
+	escaped = strings.ReplaceAll(escaped, "\"", "\\\"")
+
+	dockerCmd := fmt.Sprintf(
+		"docker run --rm --init --read-only --cap-drop=ALL --memory=%dm --cpus=%d --pids-limit=%d --network=%s",
+		e.cfg.MemoryMB, e.cfg.CPUs, e.cfg.MaxPids, e.cfg.NetworkMode,
+	)
+
+	if opts.WorkDir != "" {
+		dockerCmd = fmt.Sprintf("%s --workdir %s", dockerCmd, opts.WorkDir)
+	}
+	for k, v := range opts.Env {
+		dockerCmd = fmt.Sprintf("%s -e %s=%s", dockerCmd, k, v)
+	}
+
+	dockerCmd = fmt.Sprintf("%s %s /bin/sh -c %q", dockerCmd, e.cfg.Image, escaped)
+	return dockerCmd
 }
 
 // Validate checks whether a command is safe to execute in the sandbox.
