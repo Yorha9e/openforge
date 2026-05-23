@@ -4,6 +4,7 @@ import { api } from '../../shared/api';
 import { useAuth } from '../../shared/auth';
 import { ProjectCard } from './ProjectCard';
 import { tokens } from '../../shared/design-tokens';
+import { PageSkeleton } from '../../shared/skeleton';
 
 interface Project {
   id: string;
@@ -44,7 +45,7 @@ export function DashboardPage() {
       <main style={{ maxWidth: 960, margin: '0 auto', padding: 24 }}>
         <h2 style={{ fontSize: 28, fontWeight: 700, marginBottom: 24, fontFamily: tokens.fontHeading }}>Projects</h2>
         {error && <p style={{ color: tokens.error, fontSize: 14, marginBottom: 12 }}>{error}</p>}
-        {loading ? <p style={{ color: tokens.muted }}>Loading...</p>
+        {loading ? <PageSkeleton />
         : projects.length === 0 ? <p style={{ color: tokens.muted }}>No projects yet.</p>
         : (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 16 }}>

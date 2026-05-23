@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { useChat } from './ChatProvider';
 import { sanitizeHTML } from '../../shared/sanitize';
 import { tokens } from '../../shared/design-tokens';
+import { TextSkeleton } from '../../shared/skeleton';
 
 export function MessageList() {
   const { messages, streaming } = useChat();
@@ -10,6 +11,8 @@ export function MessageList() {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, streaming]);
+
+  if (!messages) return <div style={{ padding: 16 }}><TextSkeleton lines={5} /></div>;
 
   return (
     <div style={{ flex: 1, overflowY: 'auto', padding: 16, fontFamily: tokens.fontBody }} aria-live="polite" role="log" aria-label="Chat messages">

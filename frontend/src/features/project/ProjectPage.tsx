@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { api } from '../../shared/api';
 import { tokens } from '../../shared/design-tokens';
+import { PageSkeleton } from '../../shared/skeleton';
 
 export function ProjectPage() {
   const { id } = useParams<{ id: string }>();
@@ -33,7 +34,7 @@ export function ProjectPage() {
     }
   };
 
-  if (loading) return <div style={{ minHeight: '100vh', background: tokens.bg, color: tokens.text, padding: 24, fontFamily: tokens.fontBody }}>Loading...</div>;
+  if (loading) return <PageSkeleton cards={1} />;
   if (!project) return <div style={{ minHeight: '100vh', background: tokens.bg, color: tokens.text, padding: 24, fontFamily: tokens.fontBody }}>Project not found</div>;
 
   return (

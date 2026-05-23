@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../../shared/api';
 import { tokens } from '../../shared/design-tokens';
+import { PageSkeleton } from '../../shared/skeleton';
 
 export function ReviewInboxPage() {
   const [items, setItems] = useState<any[]>([]);
@@ -25,7 +26,7 @@ export function ReviewInboxPage() {
       </header>
       <main style={{ maxWidth: 720, margin: '0 auto', padding: 24 }}>
         {error && <p style={{ color: tokens.error, fontSize: 14, marginBottom: 12 }}>{error}</p>}
-        {loading ? <p style={{ color: tokens.muted }}>Loading...</p>
+        {loading ? <PageSkeleton cards={2} />
         : items.length === 0 ? <p style={{ color: tokens.muted }}>No pending reviews.</p>
         : items.map(item => (
           <div key={item.pipeline_id + item.stage} style={{ background: tokens.surface, border: `1px solid ${tokens.border}`, borderRadius: 8, padding: 16, marginBottom: 12 }}>
