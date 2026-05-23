@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { tokens } from '../../shared/design-tokens';
 
-interface AgentInfo {
+export interface AgentInfo {
   id: string;
   role: string;
   pipeline_id: string;

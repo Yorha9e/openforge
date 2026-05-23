@@ -4,14 +4,21 @@ import { ChatProvider } from './ChatProvider';
 import { MessageList } from './MessageList';
 import { MessageInput } from './MessageInput';
 import { ModelSelector } from './ModelSelector';
-import { AgentPanel } from './AgentPanel';
+import { AgentPanel, AgentInfo } from './AgentPanel';
 import { tokens } from '../../shared/design-tokens';
+
+function useAgents(_pipelineId: string): AgentInfo[] {
+  // Phase 6+: fetch from GET /api/pipelines/{id}/agents
+  // For now, return empty — agents API not yet exposed
+  return [];
+}
 
 export function ChatPanel() {
   const { id } = useParams<{ id: string }>();
   const [params] = useSearchParams();
   const pipelineId = params.get('pipeline') || 'default';
   const [model, setModel] = useState('deepseek');
+  const agents = useAgents(pipelineId);
   if (!id) return null;
 
   return (
@@ -21,7 +28,7 @@ export function ChatPanel() {
           <span>Pipeline: {pipelineId}</span>
           <ModelSelector current={model} onSelect={setModel} />
         </header>
-        <AgentPanel agents={[]} />
+        <AgentPanel agents={agents} />
         <MessageList />
         <MessageInput />
       </div>
