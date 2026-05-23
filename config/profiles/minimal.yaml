@@ -58,3 +58,12 @@ jwt:
   secret: "dev-secret-change-in-production-32b!"
   access_ttl: "1h"
   refresh_ttl: "24h"
+
+auth:
+  provider: jwt  # "jwt" (dev) | "oidc" (enterprise)
+  oidc:
+    enabled: false
+    issuer_url: ""
+    client_id: ""
+    client_secret: ""
+    redirect_url: ""

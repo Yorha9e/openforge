@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	authadapter "openforge/internal/auth/adapter"
 	rbacmw "openforge/internal/auth/middleware"
 	"openforge/internal/auth/service"
 	"openforge/internal/pipeline/domain"
@@ -54,6 +55,13 @@ func RegisterRoutes(of *profile.OpenForge, jwtSvc *service.JWTService, cfg *prof
 
 	// Models (observer)
 	mux.HandleFunc("GET /api/models", withRole("observer", handleListModels(of)))
+
+	// OIDC (conditionally registered when auth.provider is "oidc")
+	if cfg.Auth.Provider == "oidc" {
+		oidcProvider := authadapter.NewOIDCProvider(cfg.Auth.OIDC)
+		mux.HandleFunc("GET /api/auth/oidc/login", handleOIDCLogin(oidcProvider))
+		mux.HandleFunc("GET /api/auth/oidc/callback", handleOIDCCallback(oidcProvider, jwtSvc))
+	}
 
 	// WebSocket (auth via first-frame protocol, not HTTP header)
 	mux.HandleFunc("GET /ws/chat", handleChatWS(of, jwtSvc))
@@ -309,5 +317,43 @@ func handleStatic() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Static-File", "not-implemented")
 		writeError(w, 404, "static files not available in dev mode (use Vite dev server)")
+	}
+}
+
+// --- OIDC handlers ---
+
+func handleOIDCLogin(provider *authadapter.OIDCProvider) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		state := r.URL.Query().Get("state")
+		if state == "" {
+			state = fmt.Sprintf("%d", time.Now().UnixNano())
+		}
+		url, err := provider.AuthCodeURL(state)
+		if err != nil {
+			writeError(w, 500, err.Error())
+			return
+		}
+		writeJSON(w, 200, map[string]string{"url": url, "state": state})
+	}
+}
+
+func handleOIDCCallback(provider *authadapter.OIDCProvider, jwtSvc *service.JWTService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		code := r.URL.Query().Get("code")
+		if code == "" {
+			writeError(w, 400, "missing code parameter")
+			return
+		}
+		user, err := provider.Exchange(r.Context(), code)
+		if err != nil {
+			writeError(w, 500, err.Error())
+			return
+		}
+		token, err := jwtSvc.Issue(user.Email, "pm", "")
+		if err != nil {
+			writeError(w, 500, "failed to issue token")
+			return
+		}
+		writeJSON(w, 200, token)
 	}
 }

@@ -29,6 +29,23 @@ type Config struct {
 	LLM      LLMConfig      `yaml:"llm"`
 	GRPC     GRPCConfig     `yaml:"grpc"`
 	JWT      JWTConfig      `yaml:"jwt"`
+	Auth     AuthConfig     `yaml:"auth"`
+}
+
+// AuthConfig holds authentication provider configuration.
+type AuthConfig struct {
+	Provider string     `yaml:"provider"` // "jwt" (default) | "oidc"
+	OIDC     OIDCConfig `yaml:"oidc"`
+}
+
+// OIDCConfig holds OIDC provider connection parameters.
+type OIDCConfig struct {
+	Enabled      bool     `yaml:"enabled"`
+	IssuerURL    string   `yaml:"issuer_url"`
+	ClientID     string   `yaml:"client_id"`
+	ClientSecret string   `yaml:"client_secret"`
+	RedirectURL  string   `yaml:"redirect_url"`
+	Scopes       []string `yaml:"scopes"`
 }
 
 // DockerConfig holds Docker daemon connection parameters.
