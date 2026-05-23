@@ -34,9 +34,6 @@ func (s *GateService) Approve(ctx context.Context, pipelineID, stage, actor stri
 	if err != nil {
 		return err
 	}
-	if prevHash == "" {
-		prevHash = "genesis"
-	}
 
 	content := fmt.Sprintf("%s|%s|%s|approve", pipelineID, stage, actor)
 	ev := &domain.GateEvent{
@@ -75,9 +72,6 @@ func (s *GateService) Reject(ctx context.Context, pipelineID, stage, actor strin
 	prevHash, err := s.gateRepo.GetLatestHash(ctx, pipelineID)
 	if err != nil {
 		return err
-	}
-	if prevHash == "" {
-		prevHash = "genesis"
 	}
 
 	content := fmt.Sprintf("%s|%s|%s|reject", pipelineID, stage, actor)
