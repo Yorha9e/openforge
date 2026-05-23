@@ -9,7 +9,6 @@ import (
 	"strings"
 	"syscall"
 
-	"openforge/internal/agent/adapter"
 	"openforge/internal/agent/domain"
 	"openforge/internal/agent/port"
 	"openforge/internal/shared/profile"
@@ -35,25 +34,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	apiKey, err := of.Secrets.Get(context.Background(), "ANTHROPIC_API_KEY")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "ANTHROPIC_API_KEY not set: %v\n", err)
-		os.Exit(1)
-	}
-
-	llmClient, err := adapter.NewLLMClient(cfg.GRPC.NodejsIOAddr)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to connect to LLM router: %v\n", err)
-		os.Exit(1)
-	}
-	defer llmClient.Close()
-
+	llmClient := of.LLMRouter
 	coordinator := domain.NewCoordinator(llmClient)
 
 	llmConfig := port.LLMConfig{
 		Provider:    cfg.LLM.DefaultProvider,
 		Model:       cfg.LLM.DefaultModel,
-		APIKey:      string(apiKey),
 		MaxTokens:   4096,
 		Temperature: 0.7,
 	}

@@ -52,7 +52,14 @@
       "Bash(export ANTHROPIC_MODEL=\"mimo-v2.5-pro\")",
       "Bash(export ANTHROPIC_DEFAULT_SONNET_MODEL=\"mimo-v2.5-pro\")",
       "Bash(export ANTHROPIC_DEFAULT_OPUS_MODEL=\"mimo-v2.5-pro\")",
-      "Bash(export ANTHROPIC_DEFAULT_HAIKU_MODEL=\"mimo-v2.5-pro\")"
+      "Bash(export ANTHROPIC_DEFAULT_HAIKU_MODEL=\"mimo-v2.5-pro\")",
+      "Bash(export ANTHROPIC_MODEL=\"mimo-v2.5-pro[1m]\")",
+      "Bash(export ANTHROPIC_DEFAULT_SONNET_MODEL=\"mimo-v2.5-pro[1m]\")",
+      "Bash(export ANTHROPIC_DEFAULT_OPUS_MODEL=\"mimo-v2.5-pro[1m]\")",
+      "Bash(export ANTHROPIC_DEFAULT_HAIKU_MODEL=\"mimo-v2.5-pro[1m]\")",
+      "Bash(Get-ChildItem -Recurse -File -Path \"D:\\\\vscode\\\\tiktok\\\\openforge\\\\frontend\")",
+      "Bash(bash *)",
+      "PowerShell($GIT_DIR = \\(git rev-parse --git-dir\\); $GIT_COMMON = \\(git rev-parse --git-common-dir\\); Write-Host \"GIT_DIR=$GIT_DIR\"; Write-Host \"GIT_COMMON=$GIT_COMMON\"; if \\($GIT_DIR -eq $GIT_COMMON\\) { Write-Host \"NOT_WORKTREE\" } else { Write-Host \"IS_LINKED\" }; $super = git rev-parse --show-superproject-working-tree 2>$null; if \\($super\\) { Write-Host \"IS_SUBMODULE\" })"
     ]
   }
 }

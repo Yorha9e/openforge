@@ -2,6 +2,7 @@ import { useParams, useSearchParams } from 'react-router-dom';
 import { ChatProvider } from './ChatProvider';
 import { MessageList } from './MessageList';
 import { MessageInput } from './MessageInput';
+import { tokens } from '../../shared/design-tokens';
 
 export function ChatPanel() {
   const { id } = useParams<{ id: string }>();
@@ -11,8 +12,8 @@ export function ChatPanel() {
 
   return (
     <ChatProvider pipelineId={pipelineId}>
-      <div style={{ height: '100vh', background: '#0f0f0f', color: '#fff', display: 'flex', flexDirection: 'column' }}>
-        <header style={{ padding: '8px 24px', borderBottom: '1px solid #262626', fontSize: 14, color: '#a3a3a3' }}>
+      <div style={{ height: '100%', background: tokens.bg, color: tokens.text, display: 'flex', flexDirection: 'column', fontFamily: tokens.fontBody }} role="region" aria-label="Chat panel">
+        <header style={{ padding: '8px 24px', borderBottom: `1px solid ${tokens.border}`, fontSize: 14, color: tokens.muted }}>
           Pipeline: {pipelineId}
         </header>
         <MessageList />

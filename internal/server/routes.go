@@ -41,8 +41,8 @@ func RegisterRoutes(of *profile.OpenForge, jwtSvc *service.JWTService, cfg *prof
 	mux.HandleFunc("GET /api/projects/{id}/token-usage", authMw(handleTokenUsage(of)))
 	mux.HandleFunc("GET /api/projects/{id}/token-budget", authMw(handleTokenBudget(of)))
 
-	// WebSocket
-	mux.HandleFunc("GET /ws/chat", authMw(handleChatWS(of, jwtSvc)))
+	// WebSocket (auth via first-frame protocol, not HTTP header)
+	mux.HandleFunc("GET /ws/chat", handleChatWS(of, jwtSvc))
 
 	// Static files
 	mux.HandleFunc("GET /", handleStatic())
@@ -112,6 +112,9 @@ func handleListProjects(of *profile.OpenForge) http.HandlerFunc {
 		if err != nil {
 			writeError(w, 500, err.Error())
 			return
+		}
+		if projects == nil {
+			projects = []*domain.Pipeline{}
 		}
 		writeJSON(w, 200, projects)
 	}

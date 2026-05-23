@@ -17,7 +17,7 @@ import (
 
 func main() {
 	configPath := flag.String("config", "config/profiles/minimal.yaml", "profile config path")
-	addr := flag.String("addr", ":8080", "listen address")
+	addr := flag.String("addr", ":8030", "listen address")
 	flag.Parse()
 
 	cfg, err := profile.Load(*configPath, false)

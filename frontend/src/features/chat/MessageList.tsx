@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useChat } from './ChatProvider';
 import { sanitizeHTML } from '../../shared/sanitize';
+import { tokens } from '../../shared/design-tokens';
 
 export function MessageList() {
   const { messages, streaming } = useChat();
@@ -11,13 +12,13 @@ export function MessageList() {
   }, [messages, streaming]);
 
   return (
-    <div style={{ flex: 1, overflowY: 'auto', padding: 16 }}>
+    <div style={{ flex: 1, overflowY: 'auto', padding: 16, fontFamily: tokens.fontBody }} aria-live="polite" role="log" aria-label="Chat messages">
       {messages.map(msg => (
         <div key={msg.id} style={{ display: 'flex', justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start', marginBottom: 12 }}>
           <div style={{
             maxWidth: '80%', borderRadius: 8, padding: '8px 16px',
-            background: msg.role === 'user' ? '#2563eb' : msg.role === 'system' ? 'rgba(185,28,28,0.3)' : '#262626',
-            color: msg.role === 'system' ? '#fca5a5' : '#fff',
+            background: msg.role === 'user' ? tokens.userBubble : msg.role === 'system' ? 'rgba(185,28,28,0.3)' : tokens.surface,
+            color: msg.role === 'system' ? tokens.error : tokens.text,
           }}>
             {msg.role === 'agent'
               ? <div dangerouslySetInnerHTML={{ __html: sanitizeHTML(msg.content) }} />
@@ -28,9 +29,9 @@ export function MessageList() {
       ))}
       {streaming && (
         <div style={{ display: 'flex', justifyContent: 'flex-start', marginBottom: 12 }}>
-          <div style={{ maxWidth: '80%', borderRadius: 8, padding: '8px 16px', background: '#262626', color: '#fff' }}>
+          <div style={{ maxWidth: '80%', borderRadius: 8, padding: '8px 16px', background: tokens.surface, color: tokens.text }}>
             <div dangerouslySetInnerHTML={{ __html: sanitizeHTML(streaming) }} />
-            <span style={{ display: 'inline-block', width: 8, height: 16, background: '#a3a3a3', marginLeft: 4, animation: 'pulse 1s infinite' }} />
+            <span style={{ display: 'inline-block', width: 8, height: 16, background: tokens.muted, marginLeft: 4, animation: 'pulse 1s infinite' }} />
           </div>
         </div>
       )}

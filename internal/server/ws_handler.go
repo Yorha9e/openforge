@@ -29,11 +29,12 @@ const (
 	wsPingInterval = 30 * time.Second
 	wsPongTimeout  = 10 * time.Second
 	wsMaxPongFail  = 3
+	wsAuthTimeout  = 5 * time.Second
 )
 
 type wsMessage struct {
 	Type    string `json:"type"`
-	Payload any    `json:"payload,omitempty"`
+	Payload json.RawMessage `json:"payload,omitempty"`
 }
 
 type chatSendPayload struct {
@@ -41,14 +42,22 @@ type chatSendPayload struct {
 	Message    string `json:"message"`
 }
 
+type authPayload struct {
+	Token string `json:"token"`
+}
+
+type wsConn struct {
+	conn     *websocket.Conn
+	jwtSvc   *service.JWTService
+	userID   string
+	mu       sync.Mutex
+	engines  map[string]*domain.QueryEngine
+	of       *profile.OpenForge
+	pongFail int
+}
+
 func handleChatWS(of *profile.OpenForge, jwtSvc *service.JWTService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		userID := UserIDFromContext(r.Context())
-		if userID == "" {
-			writeError(w, 401, "authentication required")
-			return
-		}
-
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
 			log.Printf("ws upgrade failed: %v", err)
@@ -57,7 +66,7 @@ func handleChatWS(of *profile.OpenForge, jwtSvc *service.JWTService) http.Handle
 
 		c := &wsConn{
 			conn:     conn,
-			userID:   userID,
+			jwtSvc:   jwtSvc,
 			engines:  make(map[string]*domain.QueryEngine),
 			of:       of,
 			pongFail: 0,
@@ -66,17 +75,13 @@ func handleChatWS(of *profile.OpenForge, jwtSvc *service.JWTService) http.Handle
 	}
 }
 
-type wsConn struct {
-	conn     *websocket.Conn
-	userID   string
-	mu       sync.Mutex
-	engines  map[string]*domain.QueryEngine
-	of       *profile.OpenForge
-	pongFail int
-}
-
 func (c *wsConn) run() {
 	defer c.conn.Close()
+
+	// First-frame auth with timeout
+	if !c.authenticate() {
+		return
+	}
 
 	c.conn.SetReadDeadline(time.Now().Add(wsPingInterval + wsPongTimeout))
 	c.conn.SetPongHandler(func(string) error {
@@ -114,6 +119,38 @@ func (c *wsConn) run() {
 	}
 }
 
+func (c *wsConn) authenticate() bool {
+	c.conn.SetReadDeadline(time.Now().Add(wsAuthTimeout))
+
+	_, raw, err := c.conn.ReadMessage()
+	if err != nil {
+		c.write(map[string]any{"type": "error", "payload": map[string]string{"message": "auth timeout"}})
+		return false
+	}
+
+	var msg wsMessage
+	if err := json.Unmarshal(raw, &msg); err != nil || msg.Type != "auth" {
+		c.write(map[string]any{"type": "error", "payload": map[string]string{"message": "auth required as first message"}})
+		return false
+	}
+
+	var ap authPayload
+	if err := json.Unmarshal(msg.Payload, &ap); err != nil || ap.Token == "" {
+		c.write(map[string]any{"type": "error", "payload": map[string]string{"message": "invalid auth payload"}})
+		return false
+	}
+
+	claims, err := c.jwtSvc.Verify(ap.Token)
+	if err != nil {
+		c.write(map[string]any{"type": "error", "payload": map[string]string{"message": "invalid token: " + err.Error()}})
+		return false
+	}
+
+	c.userID = claims.UserID
+	log.Printf("ws: user %s authenticated", c.userID)
+	return true
+}
+
 func (c *wsConn) handleMessage(raw []byte) {
 	var msg wsMessage
 	if err := json.Unmarshal(raw, &msg); err != nil {
@@ -121,10 +158,12 @@ func (c *wsConn) handleMessage(raw []byte) {
 	}
 
 	switch msg.Type {
+	case "auth":
+		// Already authenticated; re-auth ignored in Phase 2
+
 	case "chat.send":
-		payloadBytes, _ := json.Marshal(msg.Payload)
 		var p chatSendPayload
-		if err := json.Unmarshal(payloadBytes, &p); err != nil {
+		if err := json.Unmarshal(msg.Payload, &p); err != nil {
 			return
 		}
 

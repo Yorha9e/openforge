@@ -2,6 +2,7 @@ import { DockviewReact, DockviewReadyEvent, IDockviewPanelProps } from 'dockview
 import { ChatPanel } from '../chat/ChatPanel';
 import { DiffPanel } from './DiffPanel';
 import { FileTreePanel } from './FileTreePanel';
+import { tokens } from '../../shared/design-tokens';
 
 const components = {
   chat: (props: IDockviewPanelProps) => (
@@ -15,7 +16,7 @@ const components = {
     </div>
   ),
   filetree: (props: IDockviewPanelProps) => (
-    <div style={{ height: '100%', background: '#1a1a1a', color: '#fff', padding: 12 }}>
+    <div style={{ height: '100%', background: tokens.surface, color: tokens.text, padding: 12 }}>
       <FileTreePanel />
     </div>
   ),
@@ -30,7 +31,7 @@ export function ProModePage() {
   };
 
   return (
-    <div style={{ height: '100vh', background: '#0f0f0f' }}>
+    <div style={{ height: '100vh', background: tokens.bg }}>
       <DockviewReact components={components} onReady={onReady} className="dockview-theme-dark" />
     </div>
   );
