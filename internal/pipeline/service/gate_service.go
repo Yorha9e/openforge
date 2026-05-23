@@ -30,6 +30,14 @@ func (s *GateService) Approve(ctx context.Context, pipelineID, stage, actor stri
 		return err
 	}
 
+	prevHash, err := s.gateRepo.GetLatestHash(ctx, pipelineID)
+	if err != nil {
+		return err
+	}
+	if prevHash == "" {
+		prevHash = "genesis"
+	}
+
 	content := fmt.Sprintf("%s|%s|%s|approve", pipelineID, stage, actor)
 	ev := &domain.GateEvent{
 		PipelineID:      pipelineID,
@@ -39,8 +47,8 @@ func (s *GateService) Approve(ctx context.Context, pipelineID, stage, actor stri
 		Decision:        "approve",
 		SummaryFeedback: summary,
 		Checklist:       checklist,
-		ContentHash:     fmt.Sprintf("%x", sha256.Sum256([]byte(content))),
-		PrevHash:        "genesis",
+		PrevHash:        prevHash,
+		ContentHash:     fmt.Sprintf("%x", sha256.Sum256([]byte(prevHash+content))),
 	}
 
 	if err := s.hooks.RunPreApprove(ctx, ev); err != nil {
@@ -64,6 +72,15 @@ func (s *GateService) Reject(ctx context.Context, pipelineID, stage, actor strin
 		return err
 	}
 
+	prevHash, err := s.gateRepo.GetLatestHash(ctx, pipelineID)
+	if err != nil {
+		return err
+	}
+	if prevHash == "" {
+		prevHash = "genesis"
+	}
+
+	content := fmt.Sprintf("%s|%s|%s|reject", pipelineID, stage, actor)
 	ev := &domain.GateEvent{
 		PipelineID:      pipelineID,
 		Stage:           stage,
@@ -72,8 +89,8 @@ func (s *GateService) Reject(ctx context.Context, pipelineID, stage, actor strin
 		Decision:        "reject",
 		LineComments:    comments,
 		SummaryFeedback: summary,
-		ContentHash:     fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprintf("%s|%s|%s|reject", pipelineID, stage, actor)))),
-		PrevHash:        "genesis",
+		PrevHash:        prevHash,
+		ContentHash:     fmt.Sprintf("%x", sha256.Sum256([]byte(prevHash+content))),
 	}
 
 	if err := s.hooks.RunPreReject(ctx, ev); err != nil {

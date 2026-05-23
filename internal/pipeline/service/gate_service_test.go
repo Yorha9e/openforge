@@ -23,6 +23,11 @@ type mockGateRepo struct {
 	lastReleasePipelineID string
 	lastReleaseStage     string
 	lastReleaseActor     string
+	latestHash      string
+}
+
+func (m *mockGateRepo) GetLatestHash(_ context.Context, pipelineID string) (string, error) {
+	return m.latestHash, nil
 }
 
 func (m *mockGateRepo) CreateEvent(_ context.Context, ev *domain.GateEvent) error {
@@ -30,6 +35,7 @@ func (m *mockGateRepo) CreateEvent(_ context.Context, ev *domain.GateEvent) erro
 		return m.createEventErr
 	}
 	m.events = append(m.events, ev)
+	m.latestHash = ev.ContentHash
 	return nil
 }
 
@@ -134,8 +140,8 @@ func TestGateService_Approve(t *testing.T) {
 	if ev.ContentHash == "" {
 		t.Error("ContentHash should not be empty")
 	}
-	if ev.PrevHash != "genesis" {
-		t.Errorf("PrevHash = %q, want %q", ev.PrevHash, "genesis")
+	if ev.PrevHash == "" {
+		t.Error("PrevHash should not be empty")
 	}
 
 	// Verify pipeline state was updated
@@ -227,8 +233,8 @@ func TestGateService_Reject(t *testing.T) {
 	if ev.SummaryFeedback != "Security issues found" {
 		t.Errorf("summary = %q, want %q", ev.SummaryFeedback, "Security issues found")
 	}
-	if ev.PrevHash != "genesis" {
-		t.Errorf("PrevHash = %q, want %q", ev.PrevHash, "genesis")
+	if ev.PrevHash == "" {
+		t.Error("PrevHash should not be empty")
 	}
 
 	// Verify pipeline state
@@ -415,5 +421,35 @@ func TestGateService_Reject_CreateEventError(t *testing.T) {
 	err := svc.Reject(context.Background(), "p1", "impl", "bob", nil, "no")
 	if err == nil {
 		t.Fatal("Reject() expected error when event creation fails")
+	}
+}
+
+func TestGateService_PrevHashChaining(t *testing.T) {
+	gateMock := &mockGateRepo{latestHash: "abc123"}
+	pipeMock := &mockPipelineRepo{
+		pipelines: map[string]*domain.Pipeline{
+			"pipe-1": newL3PipelineAtReview("pipe-1"),
+		},
+	}
+	svc := NewGateService(gateMock, pipeMock)
+
+	// First approve should use latestHash from repo
+	err := svc.Approve(context.Background(), "pipe-1", "impl", "alice", domain.GateChecklist{}, "ok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstHash := gateMock.events[0].ContentHash
+	if gateMock.events[0].PrevHash != "abc123" {
+		t.Errorf("first event prevHash = %q, want abc123", gateMock.events[0].PrevHash)
+	}
+
+	// Second approve should chain from first
+	pipeMock.pipelines["pipe-2"] = newL3PipelineAtReview("pipe-2")
+	err = svc.Approve(context.Background(), "pipe-2", "impl", "bob", domain.GateChecklist{}, "ok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gateMock.events[1].PrevHash != firstHash {
+		t.Errorf("second event prevHash = %q, want %q (should chain from first)", gateMock.events[1].PrevHash, firstHash)
 	}
 }

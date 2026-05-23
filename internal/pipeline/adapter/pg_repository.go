@@ -104,6 +104,19 @@ func (r *PGRepository) IncrementBacktrack(ctx context.Context, id string) error 
 
 // --- GateRepository ---
 
+func (r *PGRepository) GetLatestHash(ctx context.Context, pipelineID string) (string, error) {
+	var hash string
+	err := r.db.QueryRowContext(ctx, `
+		SELECT content_hash FROM gate_event
+		WHERE pipeline_id = $1
+		ORDER BY created_at DESC LIMIT 1
+	`, pipelineID).Scan(&hash)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return hash, err
+}
+
 func (r *PGRepository) CreateEvent(ctx context.Context, ev *domain.GateEvent) error {
 	comments, _ := json.Marshal(ev.LineComments)
 	checklist, _ := json.Marshal(ev.Checklist)

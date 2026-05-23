@@ -17,6 +17,7 @@ type PipelineRepository interface {
 
 type GateRepository interface {
 	CreateEvent(ctx context.Context, ev *domain.GateEvent) error
+	GetLatestHash(ctx context.Context, pipelineID string) (string, error)
 	ListByPipeline(ctx context.Context, pipelineID string) ([]*domain.GateEvent, error)
 	ListPending(ctx context.Context, actor string) ([]*domain.GateEvent, error)
 	Claim(ctx context.Context, pipelineID, stage, actor string, ttl time.Duration) error
