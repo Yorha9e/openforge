@@ -15,5 +15,5 @@ CREATE TABLE IF NOT EXISTS gate_request (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_gate_request_pipeline ON gate_request(pipeline_id, stage);
-CREATE INDEX idx_gate_request_pending ON gate_request(status) WHERE status = 'pending';
+CREATE INDEX IF NOT EXISTS idx_gate_request_pipeline ON gate_request(pipeline_id, stage);
+CREATE INDEX IF NOT EXISTS idx_gate_request_pending ON gate_request(status) WHERE status = 'pending';

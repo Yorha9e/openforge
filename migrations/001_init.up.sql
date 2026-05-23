@@ -66,9 +66,9 @@ CREATE TABLE IF NOT EXISTS pipeline (
     version         INT NOT NULL DEFAULT 1
 );
 
-CREATE INDEX idx_pipeline_project_status ON pipeline(project_id, status);
-CREATE INDEX idx_pipeline_parent ON pipeline(parent_pipeline_id);
-CREATE INDEX idx_pipeline_created_by ON pipeline(created_by, created_at);
+CREATE INDEX IF NOT EXISTS idx_pipeline_project_status ON pipeline(project_id, status);
+CREATE INDEX IF NOT EXISTS idx_pipeline_parent ON pipeline(parent_pipeline_id);
+CREATE INDEX IF NOT EXISTS idx_pipeline_created_by ON pipeline(created_by, created_at);
 
 CREATE TABLE IF NOT EXISTS pipeline_stage (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -89,7 +89,7 @@ CREATE TABLE IF NOT EXISTS pipeline_stage (
     version         INT NOT NULL DEFAULT 1
 );
 
-CREATE INDEX idx_pipeline_stage_pipeline ON pipeline_stage(pipeline_id);
+CREATE INDEX IF NOT EXISTS idx_pipeline_stage_pipeline ON pipeline_stage(pipeline_id);
 
 CREATE TABLE IF NOT EXISTS gate_event (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -108,8 +108,8 @@ CREATE TABLE IF NOT EXISTS gate_event (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_gate_event_pipeline ON gate_event(pipeline_id);
-CREATE INDEX idx_gate_event_actor ON gate_event(actor, event, created_at);
+CREATE INDEX IF NOT EXISTS idx_gate_event_pipeline ON gate_event(pipeline_id);
+CREATE INDEX IF NOT EXISTS idx_gate_event_actor ON gate_event(actor, event, created_at);
 
 -- 3. Checkpoints
 CREATE TABLE IF NOT EXISTS checkpoint (
@@ -122,7 +122,7 @@ CREATE TABLE IF NOT EXISTS checkpoint (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_checkpoint_pipeline_stage ON checkpoint(pipeline_id, stage DESC);
+CREATE INDEX IF NOT EXISTS idx_checkpoint_pipeline_stage ON checkpoint(pipeline_id, stage DESC);
 
 -- 4. Conversation
 CREATE TABLE IF NOT EXISTS conversation_message (
@@ -165,7 +165,7 @@ CREATE TABLE IF NOT EXISTS file_lock (
     UNIQUE(project_id, file_path)
 );
 
-CREATE INDEX idx_file_lock_project ON file_lock(project_id);
+CREATE INDEX IF NOT EXISTS idx_file_lock_project ON file_lock(project_id);
 
 -- 6. Token usage (partitioned)
 CREATE TABLE IF NOT EXISTS token_usage (
@@ -187,8 +187,8 @@ CREATE TABLE IF NOT EXISTS token_usage_2026_05 PARTITION OF token_usage
 CREATE TABLE IF NOT EXISTS token_usage_2026_06 PARTITION OF token_usage
     FOR VALUES FROM ('2026-06-01') TO ('2026-07-01');
 
-CREATE INDEX idx_token_usage_pipeline ON token_usage(pipeline_id);
-CREATE INDEX idx_token_usage_project ON token_usage(project_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_token_usage_pipeline ON token_usage(pipeline_id);
+CREATE INDEX IF NOT EXISTS idx_token_usage_project ON token_usage(project_id, created_at);
 
 CREATE TABLE IF NOT EXISTS cost_quota (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -227,8 +227,8 @@ CREATE TABLE IF NOT EXISTS audit_log_2026_05 PARTITION OF audit_log
 CREATE TABLE IF NOT EXISTS audit_log_2026_06 PARTITION OF audit_log
     FOR VALUES FROM ('2026-06-01') TO ('2026-07-01');
 
-CREATE INDEX idx_audit_log_created ON audit_log(created_at);
-CREATE INDEX idx_audit_log_actor ON audit_log(actor, created_at);
+CREATE INDEX IF NOT EXISTS idx_audit_log_created ON audit_log(created_at);
+CREATE INDEX IF NOT EXISTS idx_audit_log_actor ON audit_log(actor, created_at);
 
 -- 8. Feature flags
 CREATE TABLE IF NOT EXISTS feature_flag (
@@ -263,5 +263,5 @@ CREATE TABLE IF NOT EXISTS task_queue (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_task_queue_dequeue ON task_queue(status, priority DESC, created_at DESC)
+CREATE INDEX IF NOT EXISTS idx_task_queue_dequeue ON task_queue(status, priority DESC, created_at DESC)
     WHERE status = 'pending';
