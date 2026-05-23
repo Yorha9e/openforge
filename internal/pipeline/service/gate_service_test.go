@@ -443,9 +443,10 @@ func TestGateService_PrevHashChaining(t *testing.T) {
 		t.Errorf("first event prevHash = %q, want abc123", gateMock.events[0].PrevHash)
 	}
 
-	// Second approve should chain from first
-	pipeMock.pipelines["pipe-2"] = newL3PipelineAtReview("pipe-2")
-	err = svc.Approve(context.Background(), "pipe-2", "impl", "bob", domain.GateChecklist{}, "ok")
+	// Second approve on the same pipeline should chain from first.
+	// Reset pipeline back to awaiting_review since first approve transitions it to running.
+	pipeMock.pipelines["pipe-1"] = newL3PipelineAtReview("pipe-1")
+	err = svc.Approve(context.Background(), "pipe-1", "impl", "bob", domain.GateChecklist{}, "ok")
 	if err != nil {
 		t.Fatal(err)
 	}
