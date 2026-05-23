@@ -39,6 +39,9 @@ func RegisterRoutes(of *profile.OpenForge, jwtSvc *service.JWTService, cfg *prof
 	mux.HandleFunc("POST /api/pipelines/{id}/gate/{stage}", authMw(handleApproveGate(of)))
 	mux.HandleFunc("POST /api/pipelines/{id}/gate/{stage}/reject", authMw(handleRejectGate(of)))
 
+	// Pipeline fork
+	mux.HandleFunc("POST /api/pipelines/{id}/fork", authMw(handleForkPipeline(of)))
+
 	// Token/Cost
 	mux.HandleFunc("GET /api/projects/{id}/token-usage", authMw(handleTokenUsage(of)))
 	mux.HandleFunc("GET /api/projects/{id}/token-budget", authMw(handleTokenBudget(of)))
@@ -272,6 +275,22 @@ func handleListModels(of *profile.OpenForge) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		models := of.LLMRouter.ListModels()
 		writeJSON(w, http.StatusOK, models)
+	}
+}
+
+func handleForkPipeline(of *profile.OpenForge) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct{ Title string `json:"title"` }
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, 400, "invalid body")
+			return
+		}
+		child, err := of.PipelineSvc.Fork(r.Context(), r.PathValue("id"), req.Title, UserIDFromContext(r.Context()))
+		if err != nil {
+			writeError(w, 500, sanitizeError(err))
+			return
+		}
+		writeJSON(w, 201, child)
 	}
 }
 

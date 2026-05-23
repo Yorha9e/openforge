@@ -2,7 +2,10 @@ package service
 
 import (
 	"context"
+	"fmt"
+	"time"
 
+	"openforge/internal/pipeline/domain"
 	"openforge/internal/pipeline/port"
 )
 
@@ -76,4 +79,17 @@ func (s *PipelineService) Cancel(ctx context.Context, id string) error {
 		return err
 	}
 	return s.repo.UpdateStatus(ctx, id, p.Status, p.Version)
+}
+
+func (s *PipelineService) Fork(ctx context.Context, parentID, title, createdBy string) (*domain.Pipeline, error) {
+	parent, err := s.repo.GetByID(ctx, parentID)
+	if err != nil {
+		return nil, err
+	}
+	childID := "pipe-" + fmt.Sprintf("%d", time.Now().UnixNano())
+	child := parent.Fork(childID, title, createdBy)
+	if err := s.repo.Create(ctx, child); err != nil {
+		return nil, err
+	}
+	return s.repo.GetByID(ctx, childID)
 }

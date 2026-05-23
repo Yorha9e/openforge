@@ -8,19 +8,31 @@ import (
 )
 
 type Pipeline struct {
-	ID             string
-	ProjectID      string
-	Title          string
-	Level          string
-	Status         string
-	CurrentStage   string
-	CreatedBy      string
-	BacktrackCount int
-	Version        int
-	Stages         []Stage
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	ID               string
+	ProjectID        string
+	Title            string
+	Level            string
+	Status           string
+	CurrentStage     string
+	CreatedBy        string
+	BacktrackCount   int
+	Version          int
+	Stages           []Stage
+	ParentPipelineID *string        `json:"parent_pipeline_id,omitempty"`
+	Region           string         `json:"region"`
+	Config           PipelineConfig `json:"config"`
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
+
+// PipelineConfig holds the configuration snapshot for a pipeline.
+type PipelineConfig struct {
+	Language  string `json:"language"`
+	Framework string `json:"framework"`
+	MaxAgents int    `json:"max_agents"`
+}
+
+func (c PipelineConfig) Clone() PipelineConfig { return c }
 
 func NewPipeline(id, projectID, title, createdBy string, files, modules int) *Pipeline {
 	level := ClassifyComplexity(files, modules)
@@ -149,4 +161,36 @@ var validTransitions = map[string]map[string]string{
 	"token_exceeded": {
 		"resume": "running",
 	},
+}
+
+// Fork creates a sub-pipeline inheriting parent context.
+func (p *Pipeline) Fork(childID, title, createdBy string) *Pipeline {
+	childLevel := p.Level
+	if p.Level == "L1" {
+		childLevel = "L2"
+	} else if p.Level == "L2" {
+		childLevel = "L3"
+	} else {
+		childLevel = "L3"
+	}
+	parentID := p.ID
+	child := &Pipeline{
+		ID:               childID,
+		ProjectID:        p.ProjectID,
+		ParentPipelineID: &parentID,
+		Title:            title,
+		Level:            childLevel,
+		Status:           "pending",
+		CreatedBy:        createdBy,
+		Region:           p.Region,
+		Config:           p.Config.Clone(),
+		BacktrackCount:   0,
+		Version:          1,
+	}
+	return child
+}
+
+// IsSubPipeline returns true if this is a sub-pipeline (has parent).
+func (p *Pipeline) IsSubPipeline() bool {
+	return p.ParentPipelineID != nil && *p.ParentPipelineID != ""
 }
