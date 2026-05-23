@@ -225,7 +225,10 @@ func handleReviewInbox(of *profile.OpenForge) http.HandlerFunc {
 			writeError(w, 500, sanitizeError(err))
 			return
 		}
-		writeJSON(w, 200, events)
+		if events == nil {
+				events = []*domain.GateEvent{}
+			}
+			writeJSON(w, 200, events)
 	}
 }
 
