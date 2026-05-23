@@ -15,7 +15,7 @@ import { CircuitBreakerPage } from './features/errors/CircuitBreakerPage';
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { token } = useAuth();
   if (!token) return <Navigate to="/login" replace />;
-  return <>{children}</>;
+  return <div className="page-enter">{children}</div>;
 }
 
 export function App() {

@@ -21,10 +21,22 @@
         to { opacity: 1; transform: translateX(0); }
       }
 
+      @keyframes of-fade-in {
+        from { opacity: 0; transform: translateY(4px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+
+      .page-enter {
+        animation: of-fade-in 200ms ease-out both;
+      }
+
       @media (prefers-reduced-motion: reduce) {
         *[style*="of-shimmer"] {
           animation: none !important;
           opacity: 0.5;
+        }
+        .page-enter {
+          animation: none;
         }
       }
     </style>
