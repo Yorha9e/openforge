@@ -1,5 +1,5 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
-import { useAuth } from './shared/auth';
+import { useAuth, useCanAccess } from './shared/auth';
 import { LoginPage } from './features/login/LoginPage';
 import { DashboardPage } from './features/dashboard/DashboardPage';
 import { ProjectPage } from './features/project/ProjectPage';
@@ -11,10 +11,19 @@ import { SettingsPage } from './features/settings/SettingsPage';
 import { OnboardingFlow } from './features/onboarding/OnboardingFlow';
 import { ErrorPage } from './features/errors/ErrorPage';
 import { CircuitBreakerPage } from './features/errors/CircuitBreakerPage';
+import { AdminPage } from './features/admin/AdminPage';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { token } = useAuth();
   if (!token) return <Navigate to="/login" replace />;
+  return <div className="page-enter">{children}</div>;
+}
+
+function AdminRoute({ children }: { children: React.ReactNode }) {
+  const { token } = useAuth();
+  const canAccess = useCanAccess('admin');
+  if (!token) return <Navigate to="/login" replace />;
+  if (!canAccess) return <Navigate to="/" replace />;
   return <div className="page-enter">{children}</div>;
 }
 
@@ -32,6 +41,7 @@ export function App() {
       <Route path="/onboarding" element={<ProtectedRoute><OnboardingFlow /></ProtectedRoute>} />
       <Route path="/error" element={<ErrorPage />} />
       <Route path="/circuit-breaker" element={<ProtectedRoute><CircuitBreakerPage /></ProtectedRoute>} />
+      <Route path="/admin" element={<AdminRoute><AdminPage /></AdminRoute>} />
     </Routes>
   );
 }
