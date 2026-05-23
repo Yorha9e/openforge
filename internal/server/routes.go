@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	rbacmw "openforge/internal/auth/middleware"
 	"openforge/internal/auth/service"
 	"openforge/internal/pipeline/domain"
 	"openforge/internal/shared/profile"
@@ -27,27 +28,32 @@ func RegisterRoutes(of *profile.OpenForge, jwtSvc *service.JWTService, cfg *prof
 	mux.HandleFunc("POST /api/auth/login", handleLogin(jwtSvc, cfg))
 	mux.HandleFunc("POST /api/auth/refresh", handleRefresh(jwtSvc))
 
-	// Projects (authenticated)
-	mux.HandleFunc("GET /api/projects", authMw(handleListProjects(of)))
+	// RBAC helper — wraps authMw with role requirement
+	withRole := func(role string, next http.HandlerFunc) http.HandlerFunc {
+		return authMw(rbacmw.RequireRoleMiddleware(role, next))
+	}
 
-	// Pipeline (authenticated, real logic)
-	mux.HandleFunc("GET /api/pipelines/{id}", authMw(handleGetPipeline(of)))
-	mux.HandleFunc("POST /api/projects/{id}/pipelines", authMw(handleCreatePipeline(of)))
+	// Projects (auth + role)
+	mux.HandleFunc("GET /api/projects", withRole("observer", handleListProjects(of)))
 
-	// Gate approval
-	mux.HandleFunc("GET /api/review-inbox", authMw(handleReviewInbox(of)))
-	mux.HandleFunc("POST /api/pipelines/{id}/gate/{stage}", authMw(handleApproveGate(of)))
-	mux.HandleFunc("POST /api/pipelines/{id}/gate/{stage}/reject", authMw(handleRejectGate(of)))
+	// Pipeline (auth + role)
+	mux.HandleFunc("GET /api/pipelines/{id}", withRole("observer", handleGetPipeline(of)))
+	mux.HandleFunc("POST /api/projects/{id}/pipelines", withRole("pm", handleCreatePipeline(of)))
 
-	// Pipeline fork
-	mux.HandleFunc("POST /api/pipelines/{id}/fork", authMw(handleForkPipeline(of)))
+	// Gate approval (dev_lead)
+	mux.HandleFunc("GET /api/review-inbox", withRole("dev_lead", handleReviewInbox(of)))
+	mux.HandleFunc("POST /api/pipelines/{id}/gate/{stage}", withRole("dev_lead", handleApproveGate(of)))
+	mux.HandleFunc("POST /api/pipelines/{id}/gate/{stage}/reject", withRole("dev_lead", handleRejectGate(of)))
 
-	// Token/Cost
-	mux.HandleFunc("GET /api/projects/{id}/token-usage", authMw(handleTokenUsage(of)))
-	mux.HandleFunc("GET /api/projects/{id}/token-budget", authMw(handleTokenBudget(of)))
+	// Pipeline fork (pm)
+	mux.HandleFunc("POST /api/pipelines/{id}/fork", withRole("pm", handleForkPipeline(of)))
 
-	// Models
-	mux.HandleFunc("GET /api/models", authMw(handleListModels(of)))
+	// Token/Cost (pm)
+	mux.HandleFunc("GET /api/projects/{id}/token-usage", withRole("pm", handleTokenUsage(of)))
+	mux.HandleFunc("GET /api/projects/{id}/token-budget", withRole("pm", handleTokenBudget(of)))
+
+	// Models (observer)
+	mux.HandleFunc("GET /api/models", withRole("observer", handleListModels(of)))
 
 	// WebSocket (auth via first-frame protocol, not HTTP header)
 	mux.HandleFunc("GET /ws/chat", handleChatWS(of, jwtSvc))

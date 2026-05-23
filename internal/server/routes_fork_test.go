@@ -11,6 +11,8 @@ import (
 	"openforge/internal/pipeline/domain"
 	"openforge/internal/pipeline/service"
 	"openforge/internal/shared/profile"
+
+	authdomain "openforge/internal/auth/domain"
 )
 
 type stubPipelineRepo struct {
@@ -51,7 +53,7 @@ func (s *stubPipelineRepo) IncrementBacktrack(ctx context.Context, id string) er
 }
 
 func withTestUser(ctx context.Context, userID string) context.Context {
-	return context.WithValue(ctx, ContextUserID, userID)
+	return context.WithValue(ctx, authdomain.UserIDContextKey, userID)
 }
 
 func TestHandleForkPipeline_Success(t *testing.T) {

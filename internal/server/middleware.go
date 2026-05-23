@@ -7,15 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"openforge/internal/auth/domain"
 	"openforge/internal/auth/service"
-)
-
-type contextKey string
-
-const (
-	ContextUserID    contextKey = "user_id"
-	ContextUserRole  contextKey = "user_role"
-	ContextProjectID contextKey = "project_id"
 )
 
 func AuthMiddleware(jwtSvc *service.JWTService) func(http.HandlerFunc) http.HandlerFunc {
@@ -32,21 +25,21 @@ func AuthMiddleware(jwtSvc *service.JWTService) func(http.HandlerFunc) http.Hand
 				writeError(w, 401, "invalid or expired token")
 				return
 			}
-			ctx := context.WithValue(r.Context(), ContextUserID, claims.UserID)
-			ctx = context.WithValue(ctx, ContextUserRole, claims.Role)
-			ctx = context.WithValue(ctx, ContextProjectID, claims.ProjectID)
+			ctx := context.WithValue(r.Context(), domain.UserIDContextKey, claims.UserID)
+			ctx = context.WithValue(ctx, domain.UserRoleContextKey, claims.Role)
+			ctx = context.WithValue(ctx, domain.ProjectIDContextKey, claims.ProjectID)
 			next(w, r.WithContext(ctx))
 		}
 	}
 }
 
 func UserIDFromContext(ctx context.Context) string {
-	v, _ := ctx.Value(ContextUserID).(string)
+	v, _ := ctx.Value(domain.UserIDContextKey).(string)
 	return v
 }
 
 func UserRoleFromContext(ctx context.Context) string {
-	v, _ := ctx.Value(ContextUserRole).(string)
+	v, _ := ctx.Value(domain.UserRoleContextKey).(string)
 	return v
 }
 

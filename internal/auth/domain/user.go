@@ -2,6 +2,13 @@ package domain
 
 import "time"
 
+// Context keys shared across auth and server packages.
+const (
+	UserIDContextKey    = "user_id"
+	UserRoleContextKey  = "user_role"
+	ProjectIDContextKey = "project_id"
+)
+
 type User struct {
 	ID          string
 	DisplayName string
