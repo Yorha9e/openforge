@@ -30,7 +30,7 @@ func TestDockerSandboxExecutor_Execute(t *testing.T) {
 		wantErr bool
 	}{
 		{"echo", "echo hello", kernel.ExecOptions{}, "hello", false},
-		{"read-only fs", "touch /tmp/test", kernel.ExecOptions{}, "", true},
+		{"read-only fs", "touch /etc/test", kernel.ExecOptions{}, "", true},
 		{"no network", "curl -s http://example.com", kernel.ExecOptions{}, "", true},
 		{"dangerous blocked", "rm -rf /", kernel.ExecOptions{}, "", true},
 	}
