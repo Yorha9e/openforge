@@ -1,6 +1,11 @@
 package domain
 
-import "time"
+import (
+	"fmt"
+	"time"
+
+	auth "openforge/internal/auth/domain"
+)
 
 type Pipeline struct {
 	ID             string
@@ -11,6 +16,7 @@ type Pipeline struct {
 	CurrentStage   string
 	CreatedBy      string
 	BacktrackCount int
+	Version        int
 	Stages         []Stage
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
@@ -18,27 +24,129 @@ type Pipeline struct {
 
 func NewPipeline(id, projectID, title, createdBy string, files, modules int) *Pipeline {
 	level := ClassifyComplexity(files, modules)
-	return &Pipeline{
+	stages := defaultStages(level)
+	p := &Pipeline{
 		ID:        id,
 		ProjectID: projectID,
 		Title:     title,
 		Level:     level,
 		Status:    "pending",
 		CreatedBy: createdBy,
-		Stages:    defaultStages(level),
+		Version:   1,
+		Stages:    stages,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
 	}
+	if len(stages) > 0 {
+		p.CurrentStage = stages[0].Type
+	}
+	return p
 }
 
 func defaultStages(level string) []Stage {
-	stages := []Stage{
+	if level == "L3" || level == "L4" {
+		return []Stage{
+			{Type: "clarify", Status: "pending"},
+			{Type: "decompose", Status: "pending"},
+			{Type: "impl", Status: "pending"},
+			{Type: "test", Status: "pending"},
+			{Type: "deploy", Status: "pending"},
+			{Type: "verify", Status: "pending"},
+		}
+	}
+	return []Stage{
 		{Type: "clarify", Status: "pending"},
 		{Type: "impl", Status: "pending"},
 		{Type: "test", Status: "pending"},
 		{Type: "deploy", Status: "pending"},
 		{Type: "verify", Status: "pending"},
 	}
-	if level == "L3" || level == "L4" {
-		stages = append([]Stage{{Type: "decompose", Status: "pending"}}, stages...)
+}
+
+// Transition validates and applies a state transition.
+func (p *Pipeline) Transition(action string) error {
+	next, ok := validTransitions[p.Status][action]
+	if !ok {
+		return fmt.Errorf("invalid transition: %q from %q", action, p.Status)
 	}
-	return stages
+	if action == "backtrack" {
+		if p.BacktrackCount >= 3 {
+			return fmt.Errorf("backtrack limit exceeded (3 max)")
+		}
+		p.BacktrackCount++
+	}
+	p.Status = next
+	return nil
+}
+
+// AdvanceStage moves the pipeline to the next stage.
+func (p *Pipeline) AdvanceStage() {
+	currentIdx := p.currentStageIndex()
+	if currentIdx < 0 || currentIdx >= len(p.Stages) {
+		p.Status = "completed"
+		return
+	}
+	p.Stages[currentIdx].Status = "passed"
+	nextIdx := currentIdx + 1
+	if nextIdx >= len(p.Stages) {
+		p.Status = "completed"
+		p.CurrentStage = ""
+		return
+	}
+	p.Stages[nextIdx].Status = "running"
+	p.CurrentStage = p.Stages[nextIdx].Type
+	p.Status = "running"
+}
+
+func (p *Pipeline) currentStageIndex() int {
+	for i, s := range p.Stages {
+		if s.Type == p.CurrentStage {
+			return i
+		}
+	}
+	return -1
+}
+
+// CanBacktrack returns true if the pipeline can still backtrack.
+func (p *Pipeline) CanBacktrack() bool {
+	return p.BacktrackCount < 3
+}
+
+// BuildImplPrompt builds the Agent input prompt for the implementation stage.
+func (p *Pipeline) BuildImplPrompt() string {
+	return fmt.Sprintf("需求: %s\n模块: %+v", p.Title, p.Stages)
+}
+
+// NeedsGate uses PermissionMode to determine if gate approval is required.
+func (p *Pipeline) NeedsGate() bool {
+	mode := auth.SelectMode(p.Level, p.CurrentStage)
+	return mode == auth.PermissionModeDefault
+}
+
+var validTransitions = map[string]map[string]string{
+	"pending": {
+		"start":  "running",
+		"cancel": "cancelled",
+	},
+	"running": {
+		"complete_stage": "awaiting_review",
+		"pause":          "paused",
+		"cancel":         "cancelled",
+		"exceed_token":   "token_exceeded",
+		"backtrack":      "dormant",
+	},
+	"paused": {
+		"resume": "running",
+		"cancel": "cancelled",
+	},
+	"awaiting_review": {
+		"gate_approve": "running",
+		"gate_reject":  "rejected",
+	},
+	"dormant": {
+		"resume": "running",
+	},
+	"token_exceeded": {
+		"resume": "running",
+	},
 }

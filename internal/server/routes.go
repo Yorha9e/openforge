@@ -2,9 +2,12 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"time"
 
 	"openforge/internal/auth/service"
+	"openforge/internal/pipeline/domain"
 	"openforge/internal/shared/profile"
 )
 
@@ -24,12 +27,15 @@ func RegisterRoutes(of *profile.OpenForge, jwtSvc *service.JWTService, cfg *prof
 
 	// Projects (authenticated)
 	mux.HandleFunc("GET /api/projects", authMw(handleListProjects(of)))
-	mux.HandleFunc("GET /api/projects/{id}", authMw(handleGetProject(of)))
 
-	// Pipelines (authenticated)
-	mux.HandleFunc("POST /api/projects/{id}/pipelines", authMw(handleCreatePipeline(of)))
+	// Pipeline (authenticated, real logic)
 	mux.HandleFunc("GET /api/pipelines/{id}", authMw(handleGetPipeline(of)))
-	mux.HandleFunc("GET /api/pipelines/{id}/messages", authMw(handleGetMessages(of)))
+	mux.HandleFunc("POST /api/projects/{id}/pipelines", authMw(handleCreatePipeline(of)))
+
+	// Gate approval
+	mux.HandleFunc("GET /api/review-inbox", authMw(handleReviewInbox(of)))
+	mux.HandleFunc("POST /api/pipelines/{id}/gate/{stage}", authMw(handleApproveGate(of)))
+	mux.HandleFunc("POST /api/pipelines/{id}/gate/{stage}/reject", authMw(handleRejectGate(of)))
 
 	// WebSocket
 	mux.HandleFunc("GET /ws/chat", authMw(handleChatWS(of, jwtSvc)))
@@ -98,34 +104,102 @@ func handleRefresh(jwtSvc *service.JWTService) http.HandlerFunc {
 
 func handleListProjects(of *profile.OpenForge) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, 200, []map[string]string{})
-	}
-}
-
-func handleGetProject(of *profile.OpenForge) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
-		writeJSON(w, 200, map[string]string{"id": id, "name": "Demo Project"})
-	}
-}
-
-func handleCreatePipeline(of *profile.OpenForge) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, 201, map[string]string{"id": "pipe-001", "status": "pending"})
+		projects, err := of.PipelineRepo.ListByProject(r.Context(), "")
+		if err != nil {
+			writeError(w, 500, err.Error())
+			return
+		}
+		writeJSON(w, 200, projects)
 	}
 }
 
 func handleGetPipeline(of *profile.OpenForge) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
-		writeJSON(w, 200, map[string]string{"id": id, "status": "completed"})
+		p, err := of.PipelineRepo.GetByID(r.Context(), id)
+		if err != nil {
+			writeError(w, 404, err.Error())
+			return
+		}
+		writeJSON(w, 200, p)
 	}
 }
 
-func handleGetMessages(of *profile.OpenForge) http.HandlerFunc {
+func handleCreatePipeline(of *profile.OpenForge) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
-		writeJSON(w, 200, map[string]any{"pipeline_id": id, "messages": []any{}})
+		var req struct {
+			Title string `json:"title"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, 400, "invalid body")
+			return
+		}
+		projectID := r.PathValue("id")
+		userID := UserIDFromContext(r.Context())
+		p := domain.NewPipeline(
+			"pipe-"+fmt.Sprintf("%d", time.Now().UnixNano()),
+			projectID, req.Title, userID, 1, 1,
+		)
+		if err := of.PipelineRepo.Create(r.Context(), p); err != nil {
+			writeError(w, 500, err.Error())
+			return
+		}
+		writeJSON(w, 201, p)
+	}
+}
+
+func handleApproveGate(of *profile.OpenForge) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		pipelineID := r.PathValue("id")
+		stage := r.PathValue("stage")
+		actor := UserIDFromContext(r.Context())
+
+		var req struct {
+			Checklist domain.GateChecklist `json:"checklist"`
+			Summary   string               `json:"summary_feedback"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, 400, "invalid body")
+			return
+		}
+		if err := of.GateSvc.Approve(r.Context(), pipelineID, stage, actor, req.Checklist, req.Summary); err != nil {
+			writeError(w, 500, err.Error())
+			return
+		}
+		writeJSON(w, 200, map[string]string{"status": "approved"})
+	}
+}
+
+func handleRejectGate(of *profile.OpenForge) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		pipelineID := r.PathValue("id")
+		stage := r.PathValue("stage")
+		actor := UserIDFromContext(r.Context())
+
+		var req struct {
+			Comments []domain.LineComment `json:"line_comments"`
+			Summary  string               `json:"summary_feedback"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, 400, "invalid body")
+			return
+		}
+		if err := of.GateSvc.Reject(r.Context(), pipelineID, stage, actor, req.Comments, req.Summary); err != nil {
+			writeError(w, 500, err.Error())
+			return
+		}
+		writeJSON(w, 200, map[string]string{"status": "rejected"})
+	}
+}
+
+func handleReviewInbox(of *profile.OpenForge) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		events, err := of.GateSvc.ListPending(r.Context())
+		if err != nil {
+			writeError(w, 500, err.Error())
+			return
+		}
+		writeJSON(w, 200, events)
 	}
 }
 

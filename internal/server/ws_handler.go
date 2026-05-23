@@ -1,4 +1,4 @@
-package server
+﻿package server
 
 import (
 	"context"
@@ -152,8 +152,52 @@ func (c *wsConn) handleMessage(raw []byte) {
 			}
 		}
 
+		pipeline, err := c.of.PipelineRepo.GetByID(ctx, p.PipelineID)
+		if err == nil {
+			c.write(map[string]any{
+				"type": "pipeline.stage_change",
+				"payload": map[string]string{
+					"pipeline_id": pipeline.ID,
+					"stage":       pipeline.CurrentStage,
+					"status":      pipeline.Status,
+				},
+			})
+		}
+
+		if qe.TokenUsed() > 3200 {
+			c.write(map[string]any{
+				"type": "pipeline.token_warning",
+				"payload": map[string]int{
+					"used":   qe.TokenUsed(),
+					"budget": 4096,
+				},
+			})
+		}
+
 	case "chat.stop":
 		// Phase 3: cancel active stream
+
+	case "gate.approve":
+		payloadBytes, _ := json.Marshal(msg.Payload)
+		var gp struct {
+			PipelineID string `json:"pipeline_id"`
+			Stage      string `json:"stage"`
+		}
+		json.Unmarshal(payloadBytes, &gp)
+		c.write(map[string]any{"type": "gate.notify", "payload": map[string]string{
+			"pipeline_id": gp.PipelineID, "stage": gp.Stage, "event": "approved",
+		}})
+
+	case "pipeline.cancel":
+		payloadBytes, _ := json.Marshal(msg.Payload)
+		var cp struct {
+			PipelineID string `json:"pipeline_id"`
+		}
+		json.Unmarshal(payloadBytes, &cp)
+		c.of.PipelineSvc.Cancel(context.Background(), cp.PipelineID)
+		c.write(map[string]any{"type": "pipeline.finished", "payload": map[string]string{
+			"pipeline_id": cp.PipelineID, "status": "cancelled",
+		}})
 
 	case "ping":
 		c.write(map[string]any{"type": "pong"})

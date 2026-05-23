@@ -1,0 +1,125 @@
+package domain
+
+import (
+	"context"
+	"strings"
+	"sync"
+
+	agentport "openforge/internal/agent/port"
+)
+
+// StreamEvent represents a single event emitted during a streaming LLM response.
+type StreamEvent struct {
+	Type    string // "delta", "done", or "error"
+	Content string
+	Error   error
+}
+
+// QueryEngine manages a conversational interaction with an LLM.
+// It holds message history, a reference to the LLM router client, and the
+// configuration used for each request.
+type QueryEngine struct {
+	llmClient  agentport.LLMRouterClient
+	config     agentport.LLMConfig
+	messages   []agentport.Message
+	tokenCount int
+	mu         sync.Mutex
+}
+
+// NewQueryEngine creates a new QueryEngine with the given LLM client and config.
+func NewQueryEngine(llmClient agentport.LLMRouterClient, config agentport.LLMConfig) *QueryEngine {
+	return &QueryEngine{
+		llmClient: llmClient,
+		config:    config,
+	}
+}
+
+// SubmitMessage appends a user message to the conversation history and starts a
+// streaming LLM call. It returns a channel of StreamEvent values.
+//
+// The channel emits zero or more "delta" events (one per chunk), followed by a
+// single "done" event carrying the full assistant response. If the streaming
+// call itself fails immediately, SubmitMessage returns the error and the user
+// message is rolled back from history.
+//
+// Callers must read the channel until it is closed.
+func (qe *QueryEngine) SubmitMessage(ctx context.Context, msg string) (<-chan StreamEvent, error) {
+	qe.mu.Lock()
+	qe.messages = append(qe.messages, agentport.Message{Role: "user", Content: msg})
+	qe.mu.Unlock()
+
+	req := agentport.ChatRequest{
+		Messages: qe.messages,
+		Config:   qe.config,
+	}
+
+	stream, err := qe.llmClient.ChatStream(ctx, req)
+	if err != nil {
+		// Roll back the user message on initialisation failure.
+		qe.mu.Lock()
+		qe.messages = qe.messages[:len(qe.messages)-1]
+		qe.mu.Unlock()
+		return nil, err
+	}
+
+	out := make(chan StreamEvent)
+	go func() {
+		defer close(out)
+
+		// Safety: a nil channel would block range forever.
+		if stream == nil {
+			out <- StreamEvent{Type: "error", Error: errStreamNil}
+			return
+		}
+
+		var full strings.Builder
+		for chunk := range stream {
+			full.WriteString(chunk)
+			out <- StreamEvent{Type: "delta", Content: chunk}
+		}
+
+		responseText := full.String()
+
+		qe.mu.Lock()
+		qe.messages = append(qe.messages, agentport.Message{Role: "assistant", Content: responseText})
+		qe.mu.Unlock()
+
+		out <- StreamEvent{Type: "done", Content: responseText}
+	}()
+
+	return out, nil
+}
+
+// errStreamNil is returned as an error event when the LLM client returns a nil
+// channel without signalling an error.
+var errStreamNil = &streamNilError{}
+
+type streamNilError struct{}
+
+func (e *streamNilError) Error() string { return "llm client returned nil stream channel" }
+
+// TokenUsed returns the total number of tokens consumed across all messages
+// submitted through this engine. Accurate counting depends on the underlying
+// LLM client reporting usage data.
+func (qe *QueryEngine) TokenUsed() int {
+	qe.mu.Lock()
+	defer qe.mu.Unlock()
+	return qe.tokenCount
+}
+
+// Messages returns a copy of the full conversation history.
+func (qe *QueryEngine) Messages() []agentport.Message {
+	qe.mu.Lock()
+	defer qe.mu.Unlock()
+	out := make([]agentport.Message, len(qe.messages))
+	copy(out, qe.messages)
+	return out
+}
+
+// Clear resets the conversation history and token count.
+func (qe *QueryEngine) Clear() {
+	qe.mu.Lock()
+	defer qe.mu.Unlock()
+	qe.messages = nil
+	qe.tokenCount = 0
+}
