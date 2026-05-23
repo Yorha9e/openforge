@@ -74,6 +74,11 @@ export const api = {
 
   getTokenBudget: (projectId: string) =>
     request<any>(`/projects/${projectId}/token-budget`),
+
+  // Settings
+  getSettings: () => request<any>('/settings'),
+  updateSettings: (settings: any) =>
+    request<any>('/settings', { method: 'PUT', body: JSON.stringify(settings) }),
 };
 
 export function wsURL(): string {

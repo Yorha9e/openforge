@@ -7,6 +7,7 @@ import { ChatPanel } from './features/chat/ChatPanel';
 import { ProModePage } from './features/code-review/ProModePage';
 import { ReviewInboxPage } from './features/review-inbox/ReviewInboxPage';
 import { CostDashboardPage } from './features/cost-dashboard/CostDashboardPage';
+import { SettingsPage } from './features/settings/SettingsPage';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { token } = useAuth();
@@ -24,6 +25,7 @@ export function App() {
       <Route path="/project/:id/pipeline/:pid" element={<ProtectedRoute><ProModePage /></ProtectedRoute>} />
       <Route path="/review-inbox" element={<ProtectedRoute><ReviewInboxPage /></ProtectedRoute>} />
       <Route path="/project/:id/costs" element={<ProtectedRoute><CostDashboardPage /></ProtectedRoute>} />
+      <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
     </Routes>
   );
 }
