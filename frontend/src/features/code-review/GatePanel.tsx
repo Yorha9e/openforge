@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { api } from '../../shared/api';
+import { useToast } from '../../shared/toast';
 import { tokens } from '../../shared/design-tokens';
 
 interface Props {
@@ -14,6 +15,7 @@ export function GatePanel({ pipelineId, stage }: Props) {
   const [textareaFocused, setTextareaFocused] = useState(false);
   const [approveHovered, setApproveHovered] = useState(false);
   const [rejectHovered, setRejectHovered] = useState(false);
+  const { toast } = useToast();
 
   const handleApprove = async () => {
     setLoading(true);
@@ -24,7 +26,9 @@ export function GatePanel({ pipelineId, stage }: Props) {
         summary,
       );
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Approval failed');
+      const msg = err instanceof Error ? err.message : 'Approval failed';
+      setError(msg);
+      toast(msg);
     }
     finally { setLoading(false); }
   };
@@ -35,7 +39,9 @@ export function GatePanel({ pipelineId, stage }: Props) {
     try {
       await api.rejectGate(pipelineId, stage, [], summary);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Rejection failed');
+      const msg = err instanceof Error ? err.message : 'Rejection failed';
+      setError(msg);
+      toast(msg);
     }
     finally { setLoading(false); }
   };

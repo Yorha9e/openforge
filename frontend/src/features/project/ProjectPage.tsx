@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { api } from '../../shared/api';
+import { useToast } from '../../shared/toast';
 import { tokens } from '../../shared/design-tokens';
 import { PageSkeleton } from '../../shared/skeleton';
 
 export function ProjectPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const { toast } = useToast();
   const [project, setProject] = useState<any>(null);
   const [title, setTitle] = useState('');
   const [loading, setLoading] = useState(true);
@@ -30,7 +32,9 @@ export function ProjectPage() {
       const pipe = await api.createPipeline(id, title.trim());
       navigate(`/project/${id}/chat?pipeline=${pipe.id}`);
     } catch (err) {
-      setCreateError(err instanceof Error ? err.message : 'Failed to create pipeline');
+      const msg = err instanceof Error ? err.message : 'Failed to create pipeline';
+      setCreateError(msg);
+      toast(msg);
     }
   };
 
