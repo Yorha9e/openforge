@@ -85,9 +85,15 @@ func toProtoRequest(req port.ChatRequest) *agentv1.LLMChatRequest {
 	temp := req.Config.Temperature
 	maxTok := int32(req.Config.MaxTokens)
 
+	var systemPrompt *string
+	if req.SystemPrompt != "" {
+		systemPrompt = &req.SystemPrompt
+	}
+
 	return &agentv1.LLMChatRequest{
-		PipelineId: "cli-session",
-		Messages:   pbMessages,
+		PipelineId:   "cli-session",
+		Messages:     pbMessages,
+		SystemPrompt: systemPrompt,
 		Config: &agentv1.LLMConfig{
 			Provider:    req.Config.Provider,
 			Model:       req.Config.Model,

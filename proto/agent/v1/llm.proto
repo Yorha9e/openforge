@@ -41,6 +41,7 @@ message LLMChatRequest {
   LLMConfig config = 3;
   repeated LLMTool tools = 4;
   optional string tool_choice = 5;
+  optional string system_prompt = 6;
 }
 
 message LLMMessage {

@@ -3,8 +3,9 @@ package port
 import "context"
 
 type ChatRequest struct {
-	Messages []Message
-	Config   LLMConfig
+	Messages      []Message
+	SystemPrompt  string
+	Config        LLMConfig
 }
 
 type Message struct {

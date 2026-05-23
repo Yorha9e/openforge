@@ -254,7 +254,7 @@ func (c *wsConn) getOrCreateEngine(pipelineID string) *domain.QueryEngine {
 		Model:     c.of.Config.LLM.DefaultModel,
 		MaxTokens: 4096,
 	}
-	qe := domain.NewQueryEngine(c.of.LLMRouter, cfg)
+	qe := domain.NewQueryEngine(c.of.LLMRouter, cfg, c.of.PromptBuilder, domain.PipelineContext{PipelineID: pipelineID})
 	c.engines[pipelineID] = qe
 	return qe
 }

@@ -7,6 +7,7 @@ export interface LLMProvider {
 
 export interface ChatRequest {
   messages: Message[];
+  systemPrompt?: string;
   config: LLMConfig;
   tools?: Tool[];
 }

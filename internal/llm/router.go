@@ -47,9 +47,10 @@ func (r *Router) Chat(ctx context.Context, req port.ChatRequest) (*port.ChatResp
 	}
 
 	llmReq := ChatRequest{
-		Model:     entry.ModelID,
-		Messages:  convertMessages(req.Messages),
-		MaxTokens: req.Config.MaxTokens,
+		Model:        entry.ModelID,
+		Messages:     convertMessages(req.Messages),
+		SystemPrompt: req.SystemPrompt,
+		MaxTokens:    req.Config.MaxTokens,
 	}
 
 	resp, err := r.chatWithFallback(ctx, entry, llmReq)
@@ -108,9 +109,10 @@ func (r *Router) ChatStream(ctx context.Context, req port.ChatRequest) (<-chan s
 	}
 
 	llmReq := ChatRequest{
-		Model:     entry.ModelID,
-		Messages:  convertMessages(req.Messages),
-		MaxTokens: req.Config.MaxTokens,
+		Model:        entry.ModelID,
+		Messages:     convertMessages(req.Messages),
+		SystemPrompt: req.SystemPrompt,
+		MaxTokens:    req.Config.MaxTokens,
 	}
 
 	streamCh, err := provider.ChatStream(ctx, llmReq)

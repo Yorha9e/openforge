@@ -30,7 +30,7 @@ func (s *stubLLMClient) ChatStream(ctx context.Context, req port.ChatRequest) (<
 
 func TestQueryEngine_SubmitMessage(t *testing.T) {
 	client := &stubLLMClient{response: "hello"}
-	qe := NewQueryEngine(client, port.LLMConfig{MaxTokens: 4096})
+	qe := NewQueryEngine(client, port.LLMConfig{MaxTokens: 4096}, nil, PipelineContext{})
 
 	if qe.State() != QueryStateIdle {
 		t.Fatalf("initial state = %s, want IDLE", qe.State())
@@ -72,7 +72,7 @@ func TestQueryEngine_SubmitMessage(t *testing.T) {
 
 func TestQueryEngine_ErrorTransitionsToErrorState(t *testing.T) {
 	client := &stubLLMClient{err: errors.New("api down")}
-	qe := NewQueryEngine(client, port.LLMConfig{MaxTokens: 4096})
+	qe := NewQueryEngine(client, port.LLMConfig{MaxTokens: 4096}, nil, PipelineContext{})
 
 	ch, err := qe.SubmitMessage(context.Background(), "hi")
 	if err != nil {
@@ -88,7 +88,7 @@ func TestQueryEngine_ErrorTransitionsToErrorState(t *testing.T) {
 
 func TestQueryEngine_Clear(t *testing.T) {
 	client := &stubLLMClient{response: "ok"}
-	qe := NewQueryEngine(client, port.LLMConfig{MaxTokens: 4096})
+	qe := NewQueryEngine(client, port.LLMConfig{MaxTokens: 4096}, nil, PipelineContext{})
 	// Use a context that can be waited on; SubmitMessage runs the stub synchronously
 	ch, err := qe.SubmitMessage(context.Background(), "hi")
 	if err != nil {

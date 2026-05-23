@@ -12,6 +12,7 @@ import (
 	_ "github.com/lib/pq"
 
 	"openforge/internal/adapter"
+	"openforge/internal/agent/domain"
 	"openforge/internal/llm"
 	pipelineadapter "openforge/internal/pipeline/adapter"
 	"openforge/internal/pipeline/service"
@@ -37,6 +38,7 @@ type OpenForge struct {
 	LLMRouter    *llm.Router
 	LLMRegistry     *llm.Registry
 	Config          *Config
+	PromptBuilder   *domain.PromptBuilder
 
 	PipelineRepo    *pipelineadapter.PGRepository
 	PipelineSvc     *service.PipelineService
@@ -131,6 +133,7 @@ func Bootstrap(cfg *Config) (*OpenForge, error) {
 	})
 	of.DeploySvc = service.NewDeployService(of.CommandExec)
 	of.TokenCostSvc = service.NewTokenCostService(of.PipelineRepo)
+	of.PromptBuilder, _ = domain.NewPromptBuilder("config/prompts/static.xml", nil)
 
 	// Run database migrations
 	migrationsDir := "migrations"

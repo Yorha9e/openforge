@@ -23,24 +23,39 @@ type StreamEvent struct {
 	Error   error
 }
 
+// PipelineContext holds pipeline metadata needed for prompt building.
+type PipelineContext struct {
+	PipelineID     string
+	ProjectID      string
+	Stage          string
+	StageLevel     string
+	PermissionMode string
+	UserRole       string
+}
+
 // QueryEngine manages a conversational interaction with an LLM.
 // It holds message history, a reference to the LLM router client, and the
 // configuration used for each request.
 type QueryEngine struct {
-	llmClient  agentport.LLMRouterClient
-	config     agentport.LLMConfig
-	messages   []agentport.Message
-	tokenCount int
-	state      QueryState
-	mu         sync.Mutex
+	llmClient    agentport.LLMRouterClient
+	config       agentport.LLMConfig
+	messages     []agentport.Message
+	tokenCount   int
+	state        QueryState
+	promptBuilder *PromptBuilder
+	pipelineCtx   PipelineContext
+	mu           sync.Mutex
 }
 
 // NewQueryEngine creates a new QueryEngine with the given LLM client and config.
-func NewQueryEngine(llmClient agentport.LLMRouterClient, config agentport.LLMConfig) *QueryEngine {
+// promptBuilder and pipelineCtx may be zero-valued; system prompt injection is skipped in that case.
+func NewQueryEngine(llmClient agentport.LLMRouterClient, config agentport.LLMConfig, promptBuilder *PromptBuilder, pipelineCtx PipelineContext) *QueryEngine {
 	return &QueryEngine{
-		llmClient: llmClient,
-		config:    config,
-		state:     QueryStateIdle,
+		llmClient:    llmClient,
+		config:       config,
+		state:        QueryStateIdle,
+		promptBuilder: promptBuilder,
+		pipelineCtx:  pipelineCtx,
 	}
 }
 
