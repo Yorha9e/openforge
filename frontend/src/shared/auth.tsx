@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from 'react';
+import { createContext, useContext, useState, useCallback, type ReactNode } from 'react';
 import { api, setToken } from './api';
 
 interface AuthState {
@@ -15,14 +15,16 @@ const AuthContext = createContext<AuthState>({
 });
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [token, setAccessToken] = useState<string | null>(() => localStorage.getItem('of_token'));
+  const [token, setAccessToken] = useState<string | null>(() => {
+    const t = localStorage.getItem('of_token');
+    if (t) setToken(t);
+    return t;
+  });
   const [refreshToken, setRefreshToken] = useState<string | null>(() => localStorage.getItem('of_refresh'));
   const [user, setUser] = useState<{ id: string; role: string } | null>(() => {
     const u = localStorage.getItem('of_user');
     return u ? JSON.parse(u) : null;
   });
-
-  useEffect(() => { setToken(token); }, [token]);
 
   const login = useCallback(async (username: string, password: string) => {
     const result = await api.login(username, password);
