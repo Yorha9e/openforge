@@ -52,6 +52,21 @@ export const api = {
   getPipeline: (id: string) => request<any>(`/pipelines/${id}`),
 
   getMessages: (pipelineId: string) => request<any>(`/pipelines/${pipelineId}/messages`),
+
+  // Gate
+  getReviewInbox: () => request<any[]>('/review-inbox'),
+
+  approveGate: (pipelineId: string, stage: string, checklist: any, summary: string) =>
+    request<any>(`/pipelines/${pipelineId}/gate/${stage}`, {
+      method: 'POST',
+      body: JSON.stringify({ checklist, summary_feedback: summary }),
+    }),
+
+  rejectGate: (pipelineId: string, stage: string, comments: any[], summary: string) =>
+    request<any>(`/pipelines/${pipelineId}/gate/${stage}/reject`, {
+      method: 'POST',
+      body: JSON.stringify({ line_comments: comments, summary_feedback: summary }),
+    }),
 };
 
 export function wsURL(): string {

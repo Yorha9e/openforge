@@ -52,7 +52,31 @@ export function ChatProvider({ pipelineId, children }: { pipelineId: string; chi
       setStreaming('');
       streamingRef.current = '';
     });
-    return () => { unsub1(); unsub2(); unsub3(); };
+    const unsub4 = subscribe('msg.card', (p: any) => {
+      setMessages(prev => [...prev, {
+        id: `card-${++idCounter.current}`,
+        role: 'system',
+        content: `[${p?.card_type || 'card'}] ${p?.title || ''}`,
+        timestamp: Date.now(),
+      }]);
+    });
+    const unsub5 = subscribe('pipeline.stage_change', (p: any) => {
+      setMessages(prev => [...prev, {
+        id: `stage-${++idCounter.current}`,
+        role: 'system',
+        content: `Stage: ${p?.stage} → ${p?.status}`,
+        timestamp: Date.now(),
+      }]);
+    });
+    const unsub6 = subscribe('gate.notify', (p: any) => {
+      setMessages(prev => [...prev, {
+        id: `gate-${++idCounter.current}`,
+        role: 'system',
+        content: `Gate ${p?.stage}: ${p?.event}`,
+        timestamp: Date.now(),
+      }]);
+    });
+    return () => { unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); unsub6(); };
   }, [subscribe]);
 
   const send = useCallback((_pid: string, content: string) => {
