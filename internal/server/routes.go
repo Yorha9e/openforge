@@ -3,7 +3,9 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"openforge/internal/auth/service"
@@ -48,6 +50,23 @@ func RegisterRoutes(of *profile.OpenForge, jwtSvc *service.JWTService, cfg *prof
 	mux.HandleFunc("GET /", handleStatic())
 
 	return CorsMiddleware(SecurityHeadersMiddleware(LoggingMiddleware(mux)))
+}
+
+// sanitizeError returns a user-safe error message, logging the real error.
+// Prevents leaking infrastructure details (DB hosts, ports, connection strings) to the frontend.
+func sanitizeError(err error) string {
+	msg := err.Error()
+	// Database connection details
+	if strings.Contains(msg, "dial tcp") || strings.Contains(msg, "connect") || strings.Contains(msg, "connection refused") {
+		log.Printf("[ERROR] database unavailable: %v", err)
+		return "service temporarily unavailable, please try again later"
+	}
+	// PostgreSQL driver errors
+	if strings.Contains(msg, "pq:") {
+		log.Printf("[ERROR] database error: %v", err)
+		return "request failed, please try again"
+	}
+	return msg
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -110,7 +129,7 @@ func handleListProjects(of *profile.OpenForge) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		projects, err := of.PipelineRepo.ListByProject(r.Context(), "")
 		if err != nil {
-			writeError(w, 500, err.Error())
+			writeError(w, 500, sanitizeError(err))
 			return
 		}
 		if projects == nil {
@@ -148,7 +167,7 @@ func handleCreatePipeline(of *profile.OpenForge) http.HandlerFunc {
 			projectID, req.Title, userID, 1, 1,
 		)
 		if err := of.PipelineRepo.Create(r.Context(), p); err != nil {
-			writeError(w, 500, err.Error())
+			writeError(w, 500, sanitizeError(err))
 			return
 		}
 		writeJSON(w, 201, p)
@@ -170,7 +189,7 @@ func handleApproveGate(of *profile.OpenForge) http.HandlerFunc {
 			return
 		}
 		if err := of.GateSvc.Approve(r.Context(), pipelineID, stage, actor, req.Checklist, req.Summary); err != nil {
-			writeError(w, 500, err.Error())
+			writeError(w, 500, sanitizeError(err))
 			return
 		}
 		writeJSON(w, 200, map[string]string{"status": "approved"})
@@ -192,7 +211,7 @@ func handleRejectGate(of *profile.OpenForge) http.HandlerFunc {
 			return
 		}
 		if err := of.GateSvc.Reject(r.Context(), pipelineID, stage, actor, req.Comments, req.Summary); err != nil {
-			writeError(w, 500, err.Error())
+			writeError(w, 500, sanitizeError(err))
 			return
 		}
 		writeJSON(w, 200, map[string]string{"status": "rejected"})
@@ -203,7 +222,7 @@ func handleReviewInbox(of *profile.OpenForge) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		events, err := of.GateSvc.ListPending(r.Context())
 		if err != nil {
-			writeError(w, 500, err.Error())
+			writeError(w, 500, sanitizeError(err))
 			return
 		}
 		writeJSON(w, 200, events)
@@ -224,7 +243,7 @@ func handleTokenUsage(of *profile.OpenForge) http.HandlerFunc {
 		}
 		rows, err := of.TokenCostSvc.DailyUsage(r.Context(), projectID, days)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			writeError(w, http.StatusInternalServerError, sanitizeError(err))
 			return
 		}
 		writeJSON(w, http.StatusOK, rows)
@@ -236,7 +255,7 @@ func handleTokenBudget(of *profile.OpenForge) http.HandlerFunc {
 		projectID := r.PathValue("id")
 		b, err := of.TokenCostSvc.Budget(r.Context(), projectID)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			writeError(w, http.StatusInternalServerError, sanitizeError(err))
 			return
 		}
 		writeJSON(w, http.StatusOK, b)
