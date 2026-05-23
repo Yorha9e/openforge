@@ -75,6 +75,9 @@ export const api = {
   getTokenBudget: (projectId: string) =>
     request<any>(`/projects/${projectId}/token-budget`),
 
+  // Models
+  listModels: () => request<any[]>('/models'),
+
   // Settings
   getSettings: () => request<any>('/settings'),
   updateSettings: (settings: any) =>

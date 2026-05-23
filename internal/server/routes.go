@@ -43,6 +43,9 @@ func RegisterRoutes(of *profile.OpenForge, jwtSvc *service.JWTService, cfg *prof
 	mux.HandleFunc("GET /api/projects/{id}/token-usage", authMw(handleTokenUsage(of)))
 	mux.HandleFunc("GET /api/projects/{id}/token-budget", authMw(handleTokenBudget(of)))
 
+	// Models
+	mux.HandleFunc("GET /api/models", authMw(handleListModels(of)))
+
 	// WebSocket (auth via first-frame protocol, not HTTP header)
 	mux.HandleFunc("GET /ws/chat", handleChatWS(of, jwtSvc))
 
@@ -262,6 +265,13 @@ func handleTokenBudget(of *profile.OpenForge) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusOK, b)
+	}
+}
+
+func handleListModels(of *profile.OpenForge) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		models := of.LLMRouter.ListModels()
+		writeJSON(w, http.StatusOK, models)
 	}
 }
 

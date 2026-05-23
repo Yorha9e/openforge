@@ -49,8 +49,18 @@ type DatabaseConfig struct {
 
 // LLMConfig holds LLM provider configuration.
 type LLMConfig struct {
-	DefaultProvider string `yaml:"default_provider"`
-	DefaultModel    string `yaml:"default_model"`
+	DefaultProvider string     `yaml:"default_provider"`
+	DefaultModel    string     `yaml:"default_model"`
+	Models          []ModelDef `yaml:"models"`
+}
+
+// ModelDef defines a model entry loaded from YAML.
+type ModelDef struct {
+	Alias    string   `yaml:"alias"`
+	Provider string   `yaml:"provider"`
+	ModelID  string   `yaml:"model_id"`
+	BaseURL  string   `yaml:"base_url"`
+	Fallback []string `yaml:"fallback"`
 }
 
 // GRPCConfig holds gRPC endpoint addresses.

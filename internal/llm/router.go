@@ -1,30 +1,39 @@
 package llm
 
 import (
-	"bufio"
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
-	"strings"
 
 	"openforge/internal/agent/port"
 	"openforge/internal/shared/kernel"
 )
 
 type Router struct {
-	registry *Registry
-	secrets  kernel.SecretStore
-	client   *http.Client
+	registry  *Registry
+	providers map[string]Provider
+	secrets   kernel.SecretStore
 }
 
-func NewRouter(registry *Registry, secrets kernel.SecretStore) *Router {
-	return &Router{registry: registry, secrets: secrets, client: &http.Client{}}
+func NewRouter(reg *Registry, secrets kernel.SecretStore) *Router {
+	return &Router{
+		registry:  reg,
+		providers: make(map[string]Provider),
+		secrets:   secrets,
+	}
 }
 
-func (r *Router) Close() error { return nil }
+// RegisterProvider adds or replaces a provider backend.
+func (r *Router) RegisterProvider(name string, p Provider) {
+	r.providers[name] = p
+}
+
+func (r *Router) getProvider(entry *ModelEntry) (Provider, error) {
+	p, ok := r.providers[entry.Provider]
+	if !ok {
+		return nil, fmt.Errorf("no provider registered for %q", entry.Provider)
+	}
+	return p, nil
+}
 
 func (r *Router) Chat(ctx context.Context, req port.ChatRequest) (*port.ChatResponse, error) {
 	entry, err := r.registry.Lookup(req.Config.Model)
@@ -32,31 +41,59 @@ func (r *Router) Chat(ctx context.Context, req port.ChatRequest) (*port.ChatResp
 		return nil, err
 	}
 
-	apiKey, err := r.secrets.Get(ctx, entry.KeyRef)
-	if err != nil {
-		return nil, fmt.Errorf("api key: %w", err)
+	// Validate provider exists (chatWithFallback re-fetches it)
+	if _, err := r.getProvider(entry); err != nil {
+		return nil, err
 	}
 
-	requestBody := r.buildAnthropicRequestBody(req, entry)
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", entry.BaseURL+"/v1/messages", requestBody)
+	llmReq := ChatRequest{
+		Model:     entry.ModelID,
+		Messages:  convertMessages(req.Messages),
+		MaxTokens: req.Config.MaxTokens,
+	}
+
+	resp, err := r.chatWithFallback(ctx, entry, llmReq)
 	if err != nil {
 		return nil, err
 	}
-	httpReq.Header.Set("x-api-key", string(apiKey))
-	httpReq.Header.Set("anthropic-version", "2023-06-01")
-	httpReq.Header.Set("content-type", "application/json")
 
-	resp, err := r.client.Do(httpReq)
+	return &port.ChatResponse{
+		Content: resp.Content,
+		Usage: port.Usage{
+			InputTokens:  int64(resp.Usage.PromptTokens),
+			OutputTokens: int64(resp.Usage.CompletionTokens),
+		},
+	}, nil
+}
+
+func (r *Router) chatWithFallback(ctx context.Context, entry *ModelEntry, req ChatRequest) (ChatResponse, error) {
+	provider, err := r.getProvider(entry)
 	if err != nil {
-		return nil, fmt.Errorf("llm request: %w", err)
+		return ChatResponse{}, err
 	}
-	defer resp.Body.Close()
 
-	if resp.StatusCode != 200 {
-		b, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("llm %d: %s", resp.StatusCode, string(b))
+	resp, err := provider.Chat(ctx, req)
+	if err == nil {
+		return resp, nil
 	}
-	return r.parseAnthropicResponse(resp.Body)
+
+	for _, fbAlias := range entry.Fallback {
+		fbEntry, lookupErr := r.registry.Lookup(fbAlias)
+		if lookupErr != nil {
+			continue
+		}
+		fbReq := req
+		fbReq.Model = fbEntry.ModelID
+		fbProvider, fbErr := r.getProvider(fbEntry)
+		if fbErr != nil {
+			continue
+		}
+		fbResp, fbErr := fbProvider.Chat(ctx, fbReq)
+		if fbErr == nil {
+			return fbResp, nil
+		}
+	}
+	return ChatResponse{}, fmt.Errorf("all providers exhausted: %w", err)
 }
 
 func (r *Router) ChatStream(ctx context.Context, req port.ChatRequest) (<-chan string, error) {
@@ -65,95 +102,62 @@ func (r *Router) ChatStream(ctx context.Context, req port.ChatRequest) (<-chan s
 		return nil, err
 	}
 
-	apiKey, err := r.secrets.Get(ctx, entry.KeyRef)
-	if err != nil {
-		return nil, fmt.Errorf("api key: %w", err)
-	}
-
-	bodyMap := r.buildAnthropicRequestBodyMap(req, entry)
-	bodyMap["stream"] = true
-	bodyBytes, err := json.Marshal(bodyMap)
+	provider, err := r.getProvider(entry)
 	if err != nil {
 		return nil, err
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", entry.BaseURL+"/v1/messages", bytes.NewReader(bodyBytes))
+	llmReq := ChatRequest{
+		Model:     entry.ModelID,
+		Messages:  convertMessages(req.Messages),
+		MaxTokens: req.Config.MaxTokens,
+	}
+
+	streamCh, err := provider.ChatStream(ctx, llmReq)
 	if err != nil {
 		return nil, err
 	}
-	httpReq.Header.Set("x-api-key", string(apiKey))
-	httpReq.Header.Set("anthropic-version", "2023-06-01")
-	httpReq.Header.Set("content-type", "application/json")
 
-	resp, err := r.client.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("llm stream: %w", err)
-	}
-	if resp.StatusCode != 200 {
-		b, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		return nil, fmt.Errorf("llm stream %d: %s", resp.StatusCode, string(b))
-	}
-
+	// Convert <-chan StreamChunk to <-chan string for backward compatibility
 	ch := make(chan string, 64)
-	go r.streamSSE(resp.Body, ch)
+	go func() {
+		defer close(ch)
+		for chunk := range streamCh {
+			if chunk.Delta != "" {
+				ch <- chunk.Delta
+			}
+		}
+	}()
 	return ch, nil
 }
 
-func (r *Router) buildAnthropicRequestBody(req port.ChatRequest, entry *ModelEntry) *bytes.Buffer {
-	bodyMap := r.buildAnthropicRequestBodyMap(req, entry)
-	b, _ := json.Marshal(bodyMap)
-	return bytes.NewBuffer(b)
+func (r *Router) Close() error { return nil }
+
+// ModelInfo is a lightweight model descriptor for the API.
+type ModelInfo struct {
+	Alias    string `json:"alias"`
+	Provider string `json:"provider"`
+	ModelID  string `json:"model_id"`
 }
 
-func (r *Router) buildAnthropicRequestBodyMap(req port.ChatRequest, entry *ModelEntry) map[string]interface{} {
-	messages := make([]map[string]interface{}, len(req.Messages))
-	for i, m := range req.Messages {
-		messages[i] = map[string]interface{}{"role": m.Role, "content": m.Content}
+// ListModels returns all registered model entries for the model selector API.
+func (r *Router) ListModels() []ModelInfo {
+	entries := r.registry.List()
+	result := make([]ModelInfo, 0, len(entries))
+	for _, e := range entries {
+		result = append(result, ModelInfo{
+			Alias:    e.Alias,
+			Provider: e.Provider,
+			ModelID:  e.ModelID,
+		})
 	}
-	return map[string]interface{}{
-		"model":      entry.ModelID,
-		"max_tokens": req.Config.MaxTokens,
-		"messages":   messages,
-	}
+	return result
 }
 
-func (r *Router) parseAnthropicResponse(body io.Reader) (*port.ChatResponse, error) {
-	var result struct {
-		Content []struct {
-			Text string `json:"text"`
-		} `json:"content"`
+func convertMessages(msgs []port.Message) []Message {
+	out := make([]Message, len(msgs))
+	for i, m := range msgs {
+		out[i] = Message{Role: m.Role, Content: m.Content}
 	}
-	if err := json.NewDecoder(body).Decode(&result); err != nil {
-		return nil, err
-	}
-	var text string
-	for _, c := range result.Content {
-		text += c.Text
-	}
-	return &port.ChatResponse{Content: text}, nil
-}
-
-func (r *Router) streamSSE(body io.ReadCloser, ch chan<- string) {
-	defer body.Close()
-	defer close(ch)
-	scanner := bufio.NewScanner(body)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if !strings.HasPrefix(line, "data: ") {
-			continue
-		}
-		data := strings.TrimPrefix(line, "data: ")
-		var event struct {
-			Type  string `json:"type"`
-			Delta struct {
-				Text string `json:"text"`
-			} `json:"delta"`
-		}
-		if json.Unmarshal([]byte(data), &event) == nil {
-			if event.Type == "content_block_delta" && event.Delta.Text != "" {
-				ch <- event.Delta.Text
-			}
-		}
-	}
+	return out
 }

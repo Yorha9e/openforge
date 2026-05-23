@@ -9,6 +9,8 @@ import { connectNodeAdapter } from "@connectrpc/connect-node";
 import { create } from "@bufbuild/protobuf";
 
 import { AnthropicProvider } from "./llm/providers/anthropic.js";
+import { DeepSeekProvider } from "./llm/providers/deepseek.js";
+import { OpenAIProvider } from "./llm/providers/openai.js";
 import { TokenMeter } from "./llm/token_meter.js";
 import { ModelSelector } from "./llm/domain/model_selector.js";
 
@@ -46,6 +48,14 @@ if (baseURL) {
 }
 
 const anthropic = new AnthropicProvider(apiKey, baseURL);
+const deepseek = new DeepSeekProvider(
+  process.env.DEEPSEEK_BASE_URL ?? "https://api.deepseek.com/anthropic",
+  process.env.DEEPSEEK_API_KEY ?? apiKey,
+);
+const openai = new OpenAIProvider(
+  process.env.OPENAI_BASE_URL ?? "https://api.openai.com",
+  process.env.OPENAI_API_KEY ?? "",
+);
 const tokenMeter = new TokenMeter();
 tokenMeter.start();
 

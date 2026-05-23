@@ -78,7 +78,36 @@ func Bootstrap(cfg *Config) (*OpenForge, error) {
 	of.CommandExec = newCommandExecutor(cfg)
 	llmRegistry := llm.NewRegistry()
 	of.LLMRegistry = llmRegistry
+
+	// Load model definitions from profile YAML (overrides hardcoded seeds).
+	if len(cfg.LLM.Models) > 0 {
+		modelDefs := make([]llm.ModelDef, len(cfg.LLM.Models))
+		for i, m := range cfg.LLM.Models {
+			modelDefs[i] = llm.ModelDef{
+				Alias:    m.Alias,
+				Provider: m.Provider,
+				ModelID:  m.ModelID,
+				BaseURL:  m.BaseURL,
+				Fallback: m.Fallback,
+			}
+		}
+		llmRegistry.LoadFromConfig(modelDefs)
+	}
+
 	of.LLMRouter = llm.NewRouter(llmRegistry, of.Secrets)
+
+	// Register LLM providers (keys resolved at bootstrap time).
+	antAPIKey, _ := of.Secrets.Get(context.Background(), "ANTHROPIC_AUTH_TOKEN")
+	dsAPIKey, errDS := of.Secrets.Get(context.Background(), "DEEPSEEK_AUTH_TOKEN")
+	if errDS != nil {
+		dsAPIKey = antAPIKey // fallback: DeepSeek reuses Anthropic key
+	}
+	of.LLMRouter.RegisterProvider("anthropic", llm.NewAnthropicProvider(
+		"https://api.anthropic.com", string(antAPIKey)))
+	of.LLMRouter.RegisterProvider("deepseek", llm.NewDeepSeekProvider(
+		"https://api.deepseek.com/anthropic", string(dsAPIKey)))
+	of.LLMRouter.RegisterProvider("openai", llm.NewOpenAIProvider(
+		"https://api.openai.com", string(antAPIKey))) // TODO: use OPENAI_API_KEY in production
 
 	db, err := sql.Open("postgres", cfg.Database.DSN())
 	if err != nil {

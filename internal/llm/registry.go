@@ -72,3 +72,44 @@ func (r *Registry) Register(e *ModelEntry) {
 	defer r.mu.Unlock()
 	r.entries[e.Alias] = e
 }
+
+// LoadFromConfig populates the registry from profile config.
+// This replaces the hardcoded seed entries.
+func (r *Registry) LoadFromConfig(models []ModelDef) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, m := range models {
+		r.entries[m.Alias] = &ModelEntry{
+			Alias:    m.Alias,
+			Provider: m.Provider,
+			ModelID:  m.ModelID,
+			BaseURL:  m.BaseURL,
+			KeyRef:   "ANTHROPIC_AUTH_TOKEN",
+			Fallback: m.Fallback,
+			FeatureFlags: FeatureFlags{
+				SupportsToolUse:   true,
+				SupportsStreaming: true,
+				MaxTokens:         200000,
+			},
+		}
+	}
+}
+
+// ModelDef defines a model entry for loading from config (avoids circular import).
+type ModelDef struct {
+	Alias    string
+	Provider string
+	ModelID  string
+	BaseURL  string
+	Fallback []string
+}
+
+func (r *Registry) List() []*ModelEntry {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	result := make([]*ModelEntry, 0, len(r.entries))
+	for _, e := range r.entries {
+		result = append(result, e)
+	}
+	return result
+}
