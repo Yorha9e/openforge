@@ -37,6 +37,10 @@ func RegisterRoutes(of *profile.OpenForge, jwtSvc *service.JWTService, cfg *prof
 	mux.HandleFunc("POST /api/pipelines/{id}/gate/{stage}", authMw(handleApproveGate(of)))
 	mux.HandleFunc("POST /api/pipelines/{id}/gate/{stage}/reject", authMw(handleRejectGate(of)))
 
+	// Token/Cost
+	mux.HandleFunc("GET /api/projects/{id}/token-usage", authMw(handleTokenUsage(of)))
+	mux.HandleFunc("GET /api/projects/{id}/token-budget", authMw(handleTokenBudget(of)))
+
 	// WebSocket
 	mux.HandleFunc("GET /ws/chat", authMw(handleChatWS(of, jwtSvc)))
 
@@ -200,6 +204,39 @@ func handleReviewInbox(of *profile.OpenForge) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, 200, events)
+	}
+}
+
+// --- Token/Cost endpoints ---
+
+func handleTokenUsage(of *profile.OpenForge) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		projectID := r.PathValue("id")
+		days := 30
+		if d := r.URL.Query().Get("days"); d != "" {
+			if _, err := fmt.Sscanf(d, "%d", &days); err != nil {
+				writeError(w, http.StatusBadRequest, "invalid days parameter")
+				return
+			}
+		}
+		rows, err := of.TokenCostSvc.DailyUsage(r.Context(), projectID, days)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, rows)
+	}
+}
+
+func handleTokenBudget(of *profile.OpenForge) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		projectID := r.PathValue("id")
+		b, err := of.TokenCostSvc.Budget(r.Context(), projectID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, b)
 	}
 }
 

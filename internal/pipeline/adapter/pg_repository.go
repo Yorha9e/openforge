@@ -11,6 +11,8 @@ import (
 	"openforge/internal/pipeline/port"
 )
 
+var _ port.TokenCostRepository = (*PGRepository)(nil)
+
 type PGRepository struct {
 	db *sql.DB
 }
@@ -184,4 +186,82 @@ func (r *PGRepository) ReleaseClaim(ctx context.Context, pipelineID, stage, acto
 		WHERE pipeline_id = $1 AND stage = $2 AND event = 'claimed' AND actor = $3
 	`, pipelineID, stage, actor)
 	return err
+}
+
+// --- TokenCostRepository ---
+
+func (r *PGRepository) AggregateByDay(ctx context.Context, projectID string, days int) ([]port.TokenCostRow, error) {
+	query := fmt.Sprintf("SELECT DATE(timestamp) as day, project_id, provider, model, SUM(prompt_tokens), SUM(completion_tokens), SUM(estimated_cost) FROM token_usage WHERE project_id = $1 AND timestamp >= NOW() - INTERVAL '%d days' GROUP BY day, project_id, provider, model ORDER BY day DESC", days)
+	rows, err := r.db.QueryContext(ctx, query, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []port.TokenCostRow
+	for rows.Next() {
+		var row port.TokenCostRow
+		if err := rows.Scan(&row.Date, &row.ProjectID, &row.Provider, &row.Model,
+			&row.PromptTokens, &row.CompletionTokens, &row.EstimatedCost); err != nil {
+			return nil, err
+		}
+		result = append(result, row)
+	}
+	return result, nil
+}
+
+func (r *PGRepository) AggregateByModel(ctx context.Context, projectID string, days int) ([]port.TokenCostRow, error) {
+	query := fmt.Sprintf("SELECT '' as day, project_id, provider, model, SUM(prompt_tokens), SUM(completion_tokens), SUM(estimated_cost) FROM token_usage WHERE project_id = $1 AND timestamp >= NOW() - INTERVAL '%d days' GROUP BY project_id, provider, model ORDER BY SUM(estimated_cost) DESC", days)
+	rows, err := r.db.QueryContext(ctx, query, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []port.TokenCostRow
+	for rows.Next() {
+		var row port.TokenCostRow
+		if err := rows.Scan(&row.Date, &row.ProjectID, &row.Provider, &row.Model,
+			&row.PromptTokens, &row.CompletionTokens, &row.EstimatedCost); err != nil {
+			return nil, err
+		}
+		result = append(result, row)
+	}
+	return result, nil
+}
+
+func (r *PGRepository) GetProjectBudget(ctx context.Context, projectID string) (*port.ProjectBudget, error) {
+	var b port.ProjectBudget
+	err := r.db.QueryRowContext(ctx, `
+		SELECT project_id, COALESCE(token_limit, 50000000), COALESCE(cost_limit_dollars, 500.0),
+			COALESCE(current_tokens, 0), COALESCE(current_cost, 0), COALESCE(period_end, NOW())
+		FROM cost_quota WHERE project_id = $1
+	`, projectID).Scan(&b.ProjectID, &b.MonthlyLimit, &b.CostLimit,
+		&b.CurrentUsage, &b.CurrentCost, &b.ResetAt)
+	if err == sql.ErrNoRows {
+		return &port.ProjectBudget{
+			ProjectID:    projectID,
+			MonthlyLimit: 50000000,
+			CostLimit:    500.0,
+			ResetAt:      nextMonthReset(),
+		}, nil
+	}
+	return &b, err
+}
+
+func (r *PGRepository) GetCurrentMonthUsage(ctx context.Context, projectID string) (int64, float64, error) {
+	var tokens int64
+	var cost float64
+	err := r.db.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(prompt_tokens + completion_tokens), 0),
+		       COALESCE(SUM(estimated_cost), 0)
+		FROM token_usage
+		WHERE project_id = $1 AND timestamp >= date_trunc('month', NOW())
+	`, projectID).Scan(&tokens, &cost)
+	return tokens, cost, err
+}
+
+func nextMonthReset() time.Time {
+	now := time.Now()
+	return time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()).AddDate(0, 1, 0)
 }
