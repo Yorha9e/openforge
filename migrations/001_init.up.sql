@@ -1,7 +1,7 @@
 -- 001_init.up.sql — Phase 1 tables
 
 -- 1. Project & users
-CREATE TABLE project (
+CREATE TABLE IF NOT EXISTS project (
     id          TEXT CONSTRAINT pk_project PRIMARY KEY,
     name        VARCHAR(255) NOT NULL,
     git_url     VARCHAR(512) NOT NULL,
@@ -13,7 +13,7 @@ CREATE TABLE project (
     config      JSONB NOT NULL DEFAULT '{}'
 );
 
-CREATE TABLE "user" (
+CREATE TABLE IF NOT EXISTS"user" (
     id          VARCHAR(320) PRIMARY KEY,
     display_name VARCHAR(128) NOT NULL,
     avatar_url  VARCHAR(512),
@@ -22,7 +22,7 @@ CREATE TABLE "user" (
     last_login  TIMESTAMPTZ
 );
 
-CREATE TABLE user_role (
+CREATE TABLE IF NOT EXISTS user_role (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id     VARCHAR(320) NOT NULL REFERENCES "user"(id),
     project_id  TEXT NOT NULL REFERENCES project(id),
@@ -32,7 +32,7 @@ CREATE TABLE user_role (
     UNIQUE(user_id, project_id)
 );
 
-CREATE TABLE module_ownership (
+CREATE TABLE IF NOT EXISTS module_ownership (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     project_id  TEXT NOT NULL REFERENCES project(id),
     module_name VARCHAR(64) NOT NULL,
@@ -45,7 +45,7 @@ CREATE TABLE module_ownership (
 );
 
 -- 2. Pipeline core
-CREATE TABLE pipeline (
+CREATE TABLE IF NOT EXISTS pipeline (
     id              TEXT PRIMARY KEY,
     project_id      TEXT NOT NULL REFERENCES project(id),
     parent_pipeline_id TEXT REFERENCES pipeline(id),
@@ -70,7 +70,7 @@ CREATE INDEX idx_pipeline_project_status ON pipeline(project_id, status);
 CREATE INDEX idx_pipeline_parent ON pipeline(parent_pipeline_id);
 CREATE INDEX idx_pipeline_created_by ON pipeline(created_by, created_at);
 
-CREATE TABLE pipeline_stage (
+CREATE TABLE IF NOT EXISTS pipeline_stage (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     pipeline_id     TEXT NOT NULL REFERENCES pipeline(id),
     stage           VARCHAR(10) NOT NULL CHECK (stage IN ('clarify','decompose','impl','test','deploy','verify')),
@@ -91,7 +91,7 @@ CREATE TABLE pipeline_stage (
 
 CREATE INDEX idx_pipeline_stage_pipeline ON pipeline_stage(pipeline_id);
 
-CREATE TABLE gate_event (
+CREATE TABLE IF NOT EXISTS gate_event (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     pipeline_id     TEXT NOT NULL REFERENCES pipeline(id),
     stage           VARCHAR(8) NOT NULL,
@@ -112,7 +112,7 @@ CREATE INDEX idx_gate_event_pipeline ON gate_event(pipeline_id);
 CREATE INDEX idx_gate_event_actor ON gate_event(actor, event, created_at);
 
 -- 3. Checkpoints
-CREATE TABLE checkpoint (
+CREATE TABLE IF NOT EXISTS checkpoint (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     pipeline_id     TEXT NOT NULL REFERENCES pipeline(id),
     stage           VARCHAR(8) NOT NULL,
@@ -125,7 +125,7 @@ CREATE TABLE checkpoint (
 CREATE INDEX idx_checkpoint_pipeline_stage ON checkpoint(pipeline_id, stage DESC);
 
 -- 4. Conversation
-CREATE TABLE conversation_message (
+CREATE TABLE IF NOT EXISTS conversation_message (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     pipeline_id     TEXT NOT NULL REFERENCES pipeline(id),
     branch_id       VARCHAR(32) NOT NULL DEFAULT 'main',
@@ -141,7 +141,7 @@ CREATE TABLE conversation_message (
     UNIQUE(pipeline_id, branch_id, msg_seq)
 );
 
-CREATE TABLE conversation_branch (
+CREATE TABLE IF NOT EXISTS conversation_branch (
     id              VARCHAR(32) PRIMARY KEY,
     pipeline_id     TEXT NOT NULL REFERENCES pipeline(id),
     parent_branch   VARCHAR(32) NOT NULL DEFAULT 'main',
@@ -153,7 +153,7 @@ CREATE TABLE conversation_branch (
 );
 
 -- 5. File locks
-CREATE TABLE file_lock (
+CREATE TABLE IF NOT EXISTS file_lock (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     pipeline_id     TEXT NOT NULL REFERENCES pipeline(id),
     project_id      TEXT NOT NULL REFERENCES project(id),
@@ -168,7 +168,7 @@ CREATE TABLE file_lock (
 CREATE INDEX idx_file_lock_project ON file_lock(project_id);
 
 -- 6. Token usage (partitioned)
-CREATE TABLE token_usage (
+CREATE TABLE IF NOT EXISTS token_usage (
     id              BIGSERIAL NOT NULL,
     pipeline_id     TEXT NOT NULL,
     project_id      TEXT NOT NULL REFERENCES project(id),
@@ -182,15 +182,15 @@ CREATE TABLE token_usage (
     PRIMARY KEY (id, created_at)
 ) PARTITION BY RANGE (created_at);
 
-CREATE TABLE token_usage_2026_05 PARTITION OF token_usage
+CREATE TABLE IF NOT EXISTS token_usage_2026_05 PARTITION OF token_usage
     FOR VALUES FROM ('2026-05-01') TO ('2026-06-01');
-CREATE TABLE token_usage_2026_06 PARTITION OF token_usage
+CREATE TABLE IF NOT EXISTS token_usage_2026_06 PARTITION OF token_usage
     FOR VALUES FROM ('2026-06-01') TO ('2026-07-01');
 
 CREATE INDEX idx_token_usage_pipeline ON token_usage(pipeline_id);
 CREATE INDEX idx_token_usage_project ON token_usage(project_id, created_at);
 
-CREATE TABLE cost_quota (
+CREATE TABLE IF NOT EXISTS cost_quota (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     project_id      TEXT NOT NULL REFERENCES project(id),
     month           VARCHAR(7) NOT NULL CHECK (month ~ '^\d{4}-\d{2}$'),
@@ -202,7 +202,7 @@ CREATE TABLE cost_quota (
 );
 
 -- 7. Audit log (WORM, partitioned)
-CREATE TABLE audit_log (
+CREATE TABLE IF NOT EXISTS audit_log (
     id              UUID DEFAULT gen_random_uuid() NOT NULL,
     event           VARCHAR(64) NOT NULL,
     actor           VARCHAR(320) NOT NULL,
@@ -222,16 +222,16 @@ CREATE TABLE audit_log (
     PRIMARY KEY (id, created_at)
 ) PARTITION BY RANGE (created_at);
 
-CREATE TABLE audit_log_2026_05 PARTITION OF audit_log
+CREATE TABLE IF NOT EXISTS audit_log_2026_05 PARTITION OF audit_log
     FOR VALUES FROM ('2026-05-01') TO ('2026-06-01');
-CREATE TABLE audit_log_2026_06 PARTITION OF audit_log
+CREATE TABLE IF NOT EXISTS audit_log_2026_06 PARTITION OF audit_log
     FOR VALUES FROM ('2026-06-01') TO ('2026-07-01');
 
 CREATE INDEX idx_audit_log_created ON audit_log(created_at);
 CREATE INDEX idx_audit_log_actor ON audit_log(actor, created_at);
 
 -- 8. Feature flags
-CREATE TABLE feature_flag (
+CREATE TABLE IF NOT EXISTS feature_flag (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name            VARCHAR(64) NOT NULL UNIQUE,
     owner           VARCHAR(128) NOT NULL,
@@ -245,7 +245,7 @@ CREATE TABLE feature_flag (
 );
 
 -- 9. Task queue
-CREATE TABLE task_queue (
+CREATE TABLE IF NOT EXISTS task_queue (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     pipeline_id     TEXT NOT NULL,
     project_id      TEXT NOT NULL,
