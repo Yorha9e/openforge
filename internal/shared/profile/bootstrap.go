@@ -39,6 +39,8 @@ type OpenForge struct {
 	LLMRegistry     *llm.Registry
 	Config          *Config
 	PromptBuilder   *domain.PromptBuilder
+	SkillLoader     *domain.SkillLoader
+	CapabilityInjector *domain.CapabilityInjector
 
 	PipelineRepo    *pipelineadapter.PGRepository
 	PipelineSvc     *service.PipelineService
@@ -134,6 +136,15 @@ func Bootstrap(cfg *Config) (*OpenForge, error) {
 	of.DeploySvc = service.NewDeployService(of.CommandExec)
 	of.TokenCostSvc = service.NewTokenCostService(of.PipelineRepo)
 	of.PromptBuilder, _ = domain.NewPromptBuilder("config/prompts/static.xml", nil)
+
+	// Phase 6.5: Skill system initialization
+	of.SkillLoader, _ = domain.NewSkillLoader([]string{
+		"config/skills/global",
+		".openforge/team-skills",
+		".openforge/skills",
+	})
+	of.CapabilityInjector = domain.NewCapabilityInjector(of.SkillLoader, &domain.HardcodedToolRegistry{})
+	of.PromptBuilder.SetCapabilityInjector(of.CapabilityInjector)
 
 	// Run database migrations
 	migrationsDir := "migrations"

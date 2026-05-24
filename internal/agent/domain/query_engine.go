@@ -2,6 +2,7 @@ package domain
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 
@@ -37,14 +38,15 @@ type PipelineContext struct {
 // It holds message history, a reference to the LLM router client, and the
 // configuration used for each request.
 type QueryEngine struct {
-	llmClient    agentport.LLMRouterClient
-	config       agentport.LLMConfig
-	messages     []agentport.Message
-	tokenCount   int
-	state        QueryState
+	llmClient     agentport.LLMRouterClient
+	config        agentport.LLMConfig
+	messages      []agentport.Message
+	tokenCount    int
+	state         QueryState
 	promptBuilder *PromptBuilder
 	pipelineCtx   PipelineContext
-	mu           sync.Mutex
+	forceSkill    string
+	mu            sync.Mutex
 }
 
 // NewQueryEngine creates a new QueryEngine with the given LLM client and config.
@@ -76,6 +78,17 @@ func (qe *QueryEngine) State() QueryState {
 //
 // Callers must read the channel until it is closed.
 func (qe *QueryEngine) SubmitMessage(ctx context.Context, msg string) (<-chan StreamEvent, error) {
+	// Parse /skill <name> command
+	if strings.HasPrefix(msg, "/skill ") {
+		skillName := strings.TrimSpace(strings.TrimPrefix(msg, "/skill "))
+		if skillName != "" {
+			qe.mu.Lock()
+			qe.forceSkill = skillName
+			qe.mu.Unlock()
+			msg = fmt.Sprintf("Activate skill: %s", skillName)
+		}
+	}
+
 	qe.mu.Lock()
 	qe.messages = append(qe.messages, agentport.Message{Role: "user", Content: msg})
 	qe.mu.Unlock()
@@ -150,6 +163,27 @@ func (qe *QueryEngine) Messages() []agentport.Message {
 	out := make([]agentport.Message, len(qe.messages))
 	copy(out, qe.messages)
 	return out
+}
+
+// SetForceSkill sets the force skill name for the next prompt build.
+func (qe *QueryEngine) SetForceSkill(name string) {
+	qe.mu.Lock()
+	defer qe.mu.Unlock()
+	qe.forceSkill = name
+}
+
+// ForceSkill returns the current force skill name (empty if none).
+func (qe *QueryEngine) ForceSkill() string {
+	qe.mu.Lock()
+	defer qe.mu.Unlock()
+	return qe.forceSkill
+}
+
+// ClearForceSkill clears the force skill after prompt build consumes it.
+func (qe *QueryEngine) ClearForceSkill() {
+	qe.mu.Lock()
+	defer qe.mu.Unlock()
+	qe.forceSkill = ""
 }
 
 // Clear resets the conversation history and token count.

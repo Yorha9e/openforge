@@ -18,12 +18,13 @@ import (
 type Message = agentport.Message
 
 // PromptBuilder constructs structured prompts for LLM interactions.
-// Simplified architecture: L1 (static.xml) → L2 (project fusion) → L4 (conversation).
+// Architecture: L1 (static.xml) → L2 (project fusion) → Capability (Skill+Tool) → L4 (conversation).
 type PromptBuilder struct {
-	l1Content string          // static.xml in-memory cache, loaded at startup
-	l2Builder *L2Builder
-	metrics   *PromptMetrics
-	mu        sync.RWMutex
+	l1Content    string          // static.xml in-memory cache, loaded at startup
+	l2Builder    *L2Builder
+	capInjector  *CapabilityInjector
+	metrics      *PromptMetrics
+	mu           sync.RWMutex
 }
 
 // L2Builder handles all L2 content assembly.
@@ -201,14 +202,40 @@ func (pb *PromptBuilder) Build(ctx context.Context, req *BuildRequest) (*Prompt,
 		return nil, fmt.Errorf("l2 build: %w", err)
 	}
 
-	// 2. Tool injection
-	toolText, toolDefs := InjectTools(req.Stage, req.PermissionMode)
+	// 2. Capability layer: Skill + Tool unified injection
+	var capXML string
+	var toolDefs []ToolDefinition
+	if pb.capInjector != nil {
+		capResult, err := pb.capInjector.Inject(ctx, CapabilityRequest{
+			PipelineID:     req.PipelineID,
+			ProjectID:      req.ProjectID,
+			Stage:          req.Stage,
+			UserMessage:    req.UserMessage,
+			PermissionMode: req.PermissionMode,
+			TokenBudget:    100000, // Phase 7: from BuildRequest.TokenBudget
+		})
+		if err == nil && capResult != nil {
+			capXML = pb.capInjector.BuildCapabilityXML(capResult)
+			for _, t := range capResult.Tools {
+				toolDefs = append(toolDefs, ToolDefinition{
+					Name:        t.Name,
+					Description: t.Description,
+					ReadOnly:    t.ReadOnly,
+					InputSchema: t.InputSchema,
+				})
+			}
+		}
+	}
+	// Fallback: if CapabilityInjector not set, use hardcoded tools
+	if len(toolDefs) == 0 {
+		_, toolDefs = InjectTools(req.Stage, req.PermissionMode)
+	}
 
 	// 3. L4 conversation summary
 	l4Summary := buildL4Summary(req.ConversationHistory)
 
-	// 4. Assemble System: L2 + Tools + L4Summary + L1 (L1 last, non-overridable)
-	systemPrompt := strings.Join([]string{l2Content, toolText, l4Summary, pb.l1Content}, "\n")
+	// 4. Assemble System: L2 + Capability + L4Summary + L1 (L1 last, non-overridable)
+	systemPrompt := strings.Join([]string{l2Content, capXML, l4Summary, pb.l1Content}, "\n")
 
 	// 5. Security sanitization
 	systemPrompt = sanitizePrompt(systemPrompt)
@@ -234,6 +261,13 @@ func (pb *PromptBuilder) GetMetrics() *PromptMetrics {
 	pb.mu.RLock()
 	defer pb.mu.RUnlock()
 	return pb.metrics
+}
+
+// SetCapabilityInjector sets the CapabilityInjector for Skill+Tool unified injection.
+func (pb *PromptBuilder) SetCapabilityInjector(ci *CapabilityInjector) {
+	pb.mu.Lock()
+	defer pb.mu.Unlock()
+	pb.capInjector = ci
 }
 
 // ============================================================

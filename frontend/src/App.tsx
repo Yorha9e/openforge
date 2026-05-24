@@ -12,6 +12,7 @@ import { OnboardingFlow } from './features/onboarding/OnboardingFlow';
 import { ErrorPage } from './features/errors/ErrorPage';
 import { CircuitBreakerPage } from './features/errors/CircuitBreakerPage';
 import { AdminPage } from './features/admin/AdminPage';
+import { SkillPanel } from './features/admin/SkillPanel';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { token } = useAuth();
@@ -42,6 +43,7 @@ export function App() {
       <Route path="/error" element={<ErrorPage />} />
       <Route path="/circuit-breaker" element={<ProtectedRoute><CircuitBreakerPage /></ProtectedRoute>} />
       <Route path="/admin" element={<AdminRoute><AdminPage /></AdminRoute>} />
+      <Route path="/admin/skills" element={<AdminRoute><SkillPanel /></AdminRoute>} />
     </Routes>
   );
 }

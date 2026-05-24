@@ -1,0 +1,20 @@
+skills:
+  - name: conduit-backend
+    version: "1.0.0"
+    file: conduit-backend.md
+    base_priority: 80
+    current_priority: 80.0
+    enabled: true
+    is_latest: true
+    deprecated: false
+    published_at: "2026-05-24T00:00:00Z"
+
+  - name: conduit-frontend
+    version: "1.0.0"
+    file: conduit-frontend.md
+    base_priority: 80
+    current_priority: 80.0
+    enabled: true
+    is_latest: true
+    deprecated: false
+    published_at: "2026-05-24T00:00:00Z"
