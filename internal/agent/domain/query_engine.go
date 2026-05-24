@@ -91,11 +91,33 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, msg string) (<-chan St
 
 	qe.mu.Lock()
 	qe.messages = append(qe.messages, agentport.Message{Role: "user", Content: msg})
+	qe.tokenCount += len(msg) / 4
+	history := make([]agentport.Message, len(qe.messages))
+	copy(history, qe.messages)
 	qe.mu.Unlock()
 
+	// Build system prompt via PromptBuilder (L1→L2→Capability→L4)
+	var systemPrompt string
+	if qe.promptBuilder != nil {
+		buildReq := &BuildRequest{
+			PipelineID:         qe.pipelineCtx.PipelineID,
+			ProjectID:          qe.pipelineCtx.ProjectID,
+			Stage:              qe.pipelineCtx.Stage,
+			StageLevel:         qe.pipelineCtx.StageLevel,
+			PermissionMode:     qe.pipelineCtx.PermissionMode,
+			UserRole:           qe.pipelineCtx.UserRole,
+			UserMessage:        msg,
+			ConversationHistory: history,
+		}
+		if prompt, err := qe.promptBuilder.Build(context.Background(), buildReq); err == nil {
+			systemPrompt = prompt.System
+		}
+	}
+
 	req := agentport.ChatRequest{
-		Messages: qe.messages,
-		Config:   qe.config,
+		Messages:     history,
+		SystemPrompt: systemPrompt,
+		Config:       qe.config,
 	}
 
 	stream, err := qe.llmClient.ChatStream(ctx, req)

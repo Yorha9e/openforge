@@ -249,12 +249,38 @@ func (c *wsConn) getOrCreateEngine(pipelineID string) *domain.QueryEngine {
 	if qe, ok := c.engines[pipelineID]; ok {
 		return qe
 	}
+
+	ctx := domain.PipelineContext{
+		PipelineID:     pipelineID,
+		Stage:          "impl",
+		StageLevel:     "L2",
+		PermissionMode: "auto",
+	}
+
+	// Try to resolve pipeline metadata from DB
+	if p, err := c.of.PipelineRepo.GetByID(context.Background(), pipelineID); err == nil && p != nil {
+		ctx.ProjectID = p.ProjectID
+		if p.CurrentStage != "" {
+			ctx.Stage = p.CurrentStage
+		}
+		switch p.Level {
+		case "L1":
+			ctx.StageLevel = "L1"
+		case "L3":
+			ctx.StageLevel = "L3"
+		case "L4":
+			ctx.StageLevel = "L4"
+		default:
+			ctx.StageLevel = "L2"
+		}
+	}
+
 	cfg := agentport.LLMConfig{
 		Provider:  c.of.Config.LLM.DefaultProvider,
 		Model:     c.of.Config.LLM.DefaultModel,
 		MaxTokens: 4096,
 	}
-	qe := domain.NewQueryEngine(c.of.LLMRouter, cfg, c.of.PromptBuilder, domain.PipelineContext{PipelineID: pipelineID})
+	qe := domain.NewQueryEngine(c.of.LLMRouter, cfg, c.of.PromptBuilder, ctx)
 	c.engines[pipelineID] = qe
 	return qe
 }
