@@ -28,6 +28,132 @@ func (s *stubLLMClient) ChatStream(ctx context.Context, req port.ChatRequest) (<
 	return ch, nil
 }
 
+// capturingLLMClient captures the ChatRequest for assertion.
+type capturingLLMClient struct {
+	lastSystemPrompt string
+	lastMessages     []port.Message
+	response         string
+}
+
+func (c *capturingLLMClient) Chat(ctx context.Context, req port.ChatRequest) (*port.ChatResponse, error) {
+	c.lastSystemPrompt = req.SystemPrompt
+	c.lastMessages = req.Messages
+	return &port.ChatResponse{Content: c.response}, nil
+}
+
+func (c *capturingLLMClient) ChatStream(ctx context.Context, req port.ChatRequest) (<-chan string, error) {
+	c.lastSystemPrompt = req.SystemPrompt
+	c.lastMessages = req.Messages
+	ch := make(chan string, 1)
+	ch <- c.response
+	close(ch)
+	return ch, nil
+}
+
+func TestPromptAssembly_FullChain(t *testing.T) {
+	// 1. Create a PromptBuilder with real static.xml
+	pb, err := NewPromptBuilder("../../../config/prompts/static.xml", nil)
+	if err != nil {
+		t.Fatalf("NewPromptBuilder: %v", err)
+	}
+
+	// 2. Create SkillLoader with seed skills
+	sl, err := NewSkillLoader([]string{"../../../config/skills/global"})
+	if err != nil {
+		t.Fatalf("NewSkillLoader: %v", err)
+	}
+	defer sl.Stop()
+
+	// 3. Wire CapabilityInjector
+	ci := NewCapabilityInjector(sl, &HardcodedToolRegistry{})
+	pb.SetCapabilityInjector(ci)
+
+	// 4. Create QueryEngine with capturing client
+	client := &capturingLLMClient{response: "I'll help you add a login endpoint."}
+	qe := NewQueryEngine(client, port.LLMConfig{
+		Model: "deepseek", MaxTokens: 4096,
+	}, pb, PipelineContext{
+		PipelineID:     "pipe-test-1",
+		ProjectID:      "proj-A",
+		Stage:          "impl",
+		StageLevel:     "L2",
+		PermissionMode: "auto",
+	})
+
+	// 5. Submit a message
+	_, err = qe.SubmitMessage(context.Background(), "add a login endpoint for the backend")
+	if err != nil {
+		t.Fatalf("SubmitMessage: %v", err)
+	}
+
+	sys := client.lastSystemPrompt
+
+	// 6. Verify all 4 layers are present
+	t.Run("L1_static_xml", func(t *testing.T) {
+		if !containsStr(sys, "OpenForge") {
+			t.Error("missing L1 identity: OpenForge")
+		}
+		if !containsStr(sys, "Never bypass the Gate") {
+			t.Error("missing L1 security: Gate rule")
+		}
+		if !containsStr(sys, "NO COMMENTS unless asked") {
+			t.Error("missing L1 code convention")
+		}
+	})
+
+	t.Run("L2_project_stage", func(t *testing.T) {
+		if !containsStr(sys, "pipeline_id") {
+			t.Error("missing L2 metadata: pipeline_id")
+		}
+		if !containsStr(sys, "stage_instructions") && !containsStr(sys, "Execute according") {
+			t.Error("missing L2 stage instruction")
+		}
+	})
+
+	t.Run("Capability_skills", func(t *testing.T) {
+		if !containsStr(sys, "conduit-backend") {
+			t.Error("missing Capability layer: conduit-backend skill")
+		}
+	})
+
+	t.Run("Capability_tools", func(t *testing.T) {
+		if !containsStr(sys, "read_file") && !containsStr(sys, "read_file") {
+			t.Error("missing Capability tools: read_file")
+		}
+		if !containsStr(sys, "bash") {
+			t.Error("missing Capability tools: bash")
+		}
+	})
+
+	t.Run("L4_conversation", func(t *testing.T) {
+		if !containsStr(sys, "conversation_summary") {
+			t.Error("missing L4 conversation summary")
+			t.Logf("SystemPrompt length: %d chars\n\n%s", len(sys), sys)
+		}
+	})
+
+	t.Run("prompt_not_empty", func(t *testing.T) {
+		if len(sys) == 0 {
+			t.Fatal("SystemPrompt is empty — LLM would receive no context!")
+		}
+	})
+
+	t.Run("messages_count", func(t *testing.T) {
+		if len(client.lastMessages) != 1 {
+			t.Errorf("expected 1 user message, got %d", len(client.lastMessages))
+		}
+	})
+}
+
+func containsStr(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}
+
 func TestQueryEngine_SubmitMessage(t *testing.T) {
 	client := &stubLLMClient{response: "hello"}
 	qe := NewQueryEngine(client, port.LLMConfig{MaxTokens: 4096}, nil, PipelineContext{})
