@@ -145,6 +145,131 @@ func TestPromptAssembly_FullChain(t *testing.T) {
 	})
 }
 
+func TestPromptAssembly_MultiTurnConversation(t *testing.T) {
+	pb, err := NewPromptBuilder("../../../config/prompts/static.xml", nil)
+	if err != nil {
+		t.Fatalf("NewPromptBuilder: %v", err)
+	}
+
+	client := &capturingLLMClient{response: "ok"}
+	qe := NewQueryEngine(client, port.LLMConfig{
+		Model: "deepseek", MaxTokens: 4096,
+	}, pb, PipelineContext{
+		PipelineID:     "pipe-test-1",
+		ProjectID:      "proj-A",
+		Stage:          "impl",
+		StageLevel:     "L2",
+		PermissionMode: "auto",
+	})
+
+	// Turn 1: user asks a question
+	ch1, err := qe.SubmitMessage(context.Background(), "add a login endpoint")
+	if err != nil {
+		t.Fatalf("turn 1: %v", err)
+	}
+	// Drain the response
+	for range ch1 {
+	}
+
+	// Verify turn 1: 1 user message + 1 assistant reply = 2 messages total
+	t.Logf("After turn 1: %d messages, SystemPrompt=%d chars", len(client.lastMessages), len(client.lastSystemPrompt))
+
+	// Turn 2: user asks a follow-up
+	ch2, err := qe.SubmitMessage(context.Background(), "also add rate limiting")
+	if err != nil {
+		t.Fatalf("turn 2: %v", err)
+	}
+	for range ch2 {
+	}
+
+	sys := client.lastSystemPrompt
+
+	t.Run("turn2_has_3_messages", func(t *testing.T) {
+		// user1, assistant1, user2 = 3 messages sent to LLM
+		if len(client.lastMessages) != 3 {
+			t.Errorf("expected 3 messages (user+assistant+user), got %d", len(client.lastMessages))
+			for i, m := range client.lastMessages {
+				t.Logf("  msg[%d]: role=%s content=%q", i, m.Role, truncateStr(m.Content, 60))
+			}
+		}
+	})
+
+	t.Run("turn2_messages_contain_history", func(t *testing.T) {
+		if len(client.lastMessages) < 2 {
+			t.Fatal("too few messages")
+		}
+		if client.lastMessages[0].Role != "user" || client.lastMessages[0].Content != "add a login endpoint" {
+			t.Errorf("msg[0] should be first user message, got role=%s content=%q", client.lastMessages[0].Role, client.lastMessages[0].Content)
+		}
+		if client.lastMessages[1].Role != "assistant" {
+			t.Errorf("msg[1] should be assistant reply, got role=%s", client.lastMessages[1].Role)
+		}
+		if client.lastMessages[2].Role != "user" || client.lastMessages[2].Content != "also add rate limiting" {
+			t.Errorf("msg[2] should be second user message, got role=%s content=%q", client.lastMessages[2].Role, client.lastMessages[2].Content)
+		}
+	})
+
+	t.Run("turn2_L4_summary_has_history", func(t *testing.T) {
+		if !containsStr(sys, "add a login endpoint") {
+			t.Error("L4 conversation_summary missing first user message")
+		}
+		if !containsStr(sys, "conversation_summary") {
+			t.Error("L4 conversation_summary tag missing")
+		}
+	})
+}
+
+func TestPromptAssembly_EmptyHistory(t *testing.T) {
+	pb, err := NewPromptBuilder("../../../config/prompts/static.xml", nil)
+	if err != nil {
+		t.Fatalf("NewPromptBuilder: %v", err)
+	}
+
+	client := &capturingLLMClient{response: "ok"}
+	qe := NewQueryEngine(client, port.LLMConfig{
+		Model: "deepseek", MaxTokens: 4096,
+	}, pb, PipelineContext{
+		PipelineID:     "pipe-test-1",
+		ProjectID:      "proj-A",
+		Stage:          "clarify",
+		StageLevel:     "L3",
+		PermissionMode: "plan",
+	})
+
+	// Very first message — no prior history
+	ch, err := qe.SubmitMessage(context.Background(), "analyze the project structure")
+	if err != nil {
+		t.Fatalf("SubmitMessage: %v", err)
+	}
+	for range ch {
+	}
+
+	sys := client.lastSystemPrompt
+
+	t.Run("first_msg_L4_has_one_msg", func(t *testing.T) {
+		if !containsStr(sys, "analyze the project structure") {
+			t.Error("L4 conversation_summary missing the only user message")
+			t.Logf("SystemPrompt:\n%s", sys)
+		}
+	})
+
+	t.Run("first_msg_sent_to_llm", func(t *testing.T) {
+		if len(client.lastMessages) != 1 {
+			t.Errorf("expected 1 message, got %d", len(client.lastMessages))
+		}
+		if client.lastMessages[0].Content != "analyze the project structure" {
+			t.Errorf("wrong content: %q", client.lastMessages[0].Content)
+		}
+	})
+}
+
+func truncateStr(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
+}
+
 func containsStr(s, substr string) bool {
 	for i := 0; i <= len(s)-len(substr); i++ {
 		if s[i:i+len(substr)] == substr {
