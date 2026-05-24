@@ -42,7 +42,7 @@ export function ProModePage() {
   const components = {
     chat: (_props: IDockviewPanelProps) => (
       <div style={{ height: '100%', overflow: 'hidden' }}>
-        <ChatPanel />
+        <ChatPanel embedded />
       </div>
     ),
     diff: (_props: IDockviewPanelProps) => (
