@@ -29,13 +29,21 @@ func RegisterRoutes(of *profile.OpenForge, jwtSvc *service.JWTService, cfg *prof
 	mux.HandleFunc("POST /api/auth/login", handleLogin(jwtSvc, cfg))
 	mux.HandleFunc("POST /api/auth/refresh", handleRefresh(jwtSvc))
 
-	// Phase 6.5: Skill admin endpoints
-	RegisterSkillRoutes(mux, of)
-
-	// RBAC helper — wraps authMw with role requirement
+	// RBAC helpers
 	withRole := func(role string, next http.HandlerFunc) http.HandlerFunc {
 		return authMw(rbacmw.RequireRoleMiddleware(role, next))
 	}
+	withRoles := func(roles []string, next http.HandlerFunc) http.HandlerFunc {
+		return authMw(rbacmw.RequireRolesMiddleware(roles, next))
+	}
+
+	// Admin-only wrapper
+	withAdmin := func(next http.HandlerFunc) http.HandlerFunc {
+		return authMw(rbacmw.RequireRoleMiddleware("admin", next))
+	}
+
+	// Phase 6.5: Skill endpoints (admin or auth required)
+	RegisterSkillRoutes(mux, of, withAdmin, authMw)
 
 	// Projects (auth + role)
 	mux.HandleFunc("GET /api/projects", withRole("observer", handleListProjects(of)))
@@ -44,10 +52,10 @@ func RegisterRoutes(of *profile.OpenForge, jwtSvc *service.JWTService, cfg *prof
 	mux.HandleFunc("GET /api/pipelines/{id}", withRole("observer", handleGetPipeline(of)))
 	mux.HandleFunc("POST /api/projects/{id}/pipelines", withRole("pm", handleCreatePipeline(of)))
 
-	// Gate approval (dev_lead)
-	mux.HandleFunc("GET /api/review-inbox", withRole("dev_lead", handleReviewInbox(of)))
-	mux.HandleFunc("POST /api/pipelines/{id}/gate/{stage}", withRole("dev_lead", handleApproveGate(of)))
-	mux.HandleFunc("POST /api/pipelines/{id}/gate/{stage}/reject", withRole("dev_lead", handleRejectGate(of)))
+	// Gate approval (pm + dev_lead)
+	mux.HandleFunc("GET /api/review-inbox", withRoles([]string{"pm", "dev_lead"}, handleReviewInbox(of)))
+	mux.HandleFunc("POST /api/pipelines/{id}/gate/{stage}", withRoles([]string{"pm", "dev_lead"}, handleApproveGate(of)))
+	mux.HandleFunc("POST /api/pipelines/{id}/gate/{stage}/reject", withRoles([]string{"pm", "dev_lead"}, handleRejectGate(of)))
 
 	// Pipeline fork (pm)
 	mux.HandleFunc("POST /api/pipelines/{id}/fork", withRole("pm", handleForkPipeline(of)))

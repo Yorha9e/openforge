@@ -9,77 +9,74 @@ import (
 )
 
 // RegisterSkillRoutes registers skill admin REST endpoints.
-func RegisterSkillRoutes(mux *http.ServeMux, of *profile.OpenForge) {
-	mux.HandleFunc("/api/admin/skills", func(w http.ResponseWriter, r *http.Request) {
-		handleSkillsList(of, w, r)
-	})
-	mux.HandleFunc("/api/admin/skills/", func(w http.ResponseWriter, r *http.Request) {
-		handleSkillDetail(of, w, r)
-	})
-	mux.HandleFunc("/api/pipelines/", func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, "/skills") {
-			handlePipelineSkills(of, w, r)
+// adminMw wraps handlers with auth + admin role requirement.
+func RegisterSkillRoutes(mux *http.ServeMux, of *profile.OpenForge, adminMw func(http.HandlerFunc) http.HandlerFunc, authMw func(http.HandlerFunc) http.HandlerFunc) {
+	// Admin-only routes
+	mux.HandleFunc("GET /api/admin/skills", adminMw(handleSkillsList(of)))
+	mux.HandleFunc("GET /api/admin/skills/{name}", adminMw(handleSkillDetail(of)))
+	mux.HandleFunc("GET /api/admin/skills/pending-deprecations", adminMw(handlePendingDeprecations(of)))
+	// Pipeline skills: any authenticated user
+	mux.HandleFunc("GET /api/pipelines/{pid}/skills", authMw(handlePipelineSkills(of)))
+}
+
+func handleSkillsList(of *profile.OpenForge) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if of.SkillLoader == nil {
+			writeJSON(w, http.StatusOK, []any{})
 			return
 		}
-		http.NotFound(w, r)
-	})
+		skills := of.SkillLoader.GetAllSkills()
+		result := make([]map[string]any, 0, len(skills))
+		for _, s := range skills {
+			result = append(result, skillToMap(s))
+		}
+		writeJSON(w, http.StatusOK, result)
+	}
 }
 
-func handleSkillsList(of *profile.OpenForge, w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
+func handleSkillDetail(of *profile.OpenForge) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		name := r.PathValue("name")
+		if name == "" {
+			http.Error(w, "skill name required", http.StatusBadRequest)
+			return
+		}
+		if strings.Contains(name, "/") {
+			name = name[:strings.Index(name, "/")]
+		}
+		if of.SkillLoader == nil {
+			http.Error(w, "skill loader not available", http.StatusServiceUnavailable)
+			return
+		}
+		skill, err := of.SkillLoader.MatchByName(name)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		writeJSON(w, http.StatusOK, skillToMap(*skill))
 	}
-
-	if of.SkillLoader == nil {
-		writeJSON(w, http.StatusOK, []interface{}{})
-		return
-	}
-
-	skills := of.SkillLoader.GetAllSkills()
-	result := make([]map[string]interface{}, 0, len(skills))
-	for _, s := range skills {
-		result = append(result, skillToMap(s))
-	}
-	writeJSON(w, http.StatusOK, result)
 }
 
-func handleSkillDetail(of *profile.OpenForge, w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
+func handlePendingDeprecations(of *profile.OpenForge) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if of.SkillLoader == nil {
+			writeJSON(w, http.StatusOK, []any{})
+			return
+		}
+		var pending []map[string]any
+		for _, s := range of.SkillLoader.GetAllSkills() {
+			if s.Deprecated {
+				pending = append(pending, skillToMap(s))
+			}
+		}
+		writeJSON(w, http.StatusOK, pending)
 	}
-
-	name := strings.TrimPrefix(r.URL.Path, "/api/admin/skills/")
-	if name == "" {
-		http.Error(w, "skill name required", http.StatusBadRequest)
-		return
-	}
-	name = strings.TrimSuffix(name, "/")
-	if idx := strings.Index(name, "/"); idx >= 0 {
-		name = name[:idx]
-	}
-
-	if of.SkillLoader == nil {
-		http.Error(w, "skill loader not available", http.StatusServiceUnavailable)
-		return
-	}
-
-	skill, err := of.SkillLoader.MatchByName(name)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
-		return
-	}
-
-	writeJSON(w, http.StatusOK, skillToMap(*skill))
 }
 
-func handlePipelineSkills(of *profile.OpenForge, w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
+func handlePipelineSkills(of *profile.OpenForge) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, []any{})
 	}
-	writeJSON(w, http.StatusOK, []interface{}{})
 }
 
 func skillToMap(s domain.Skill) map[string]interface{} {
