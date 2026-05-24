@@ -114,8 +114,16 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, msg string) (<-chan St
 		}
 	}
 
+	// Limit messages to recent rounds to avoid context overflow.
+	// The full conversation context is available in the L4 summary.
+	const maxMessages = 40 // ~20 rounds
+	trimmedHistory := history
+	if len(trimmedHistory) > maxMessages {
+		trimmedHistory = trimmedHistory[len(trimmedHistory)-maxMessages:]
+	}
+
 	req := agentport.ChatRequest{
-		Messages:     history,
+		Messages:     trimmedHistory,
 		SystemPrompt: systemPrompt,
 		Config:       qe.config,
 	}

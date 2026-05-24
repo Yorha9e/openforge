@@ -358,25 +358,71 @@ func (pl *ProjectPrefsLoader) GetStageOverride(projectID, stage, level string) s
 
 // buildL4Summary builds a conversation summary for the SystemPrompt.
 // Messages arrays are fully managed by QueryEngine independently.
+// buildL4Summary builds the conversation context for SystemPrompt.
+// Keeps the last keepRounds rounds (1 round = user+assistant exchange) as-is,
+// and compresses older messages into a brief summary to fit within the context window.
 func buildL4Summary(history []Message) string {
 	if len(history) == 0 {
 		return ""
 	}
+
+	const keepRounds = 10        // last N rounds kept verbatim
+	const maxMessagesPerRound = 2 // user + assistant
+	const maxContentLen = 200     // per-message truncation
+
+	keepCount := keepRounds * maxMessagesPerRound
 	recent := history
-	if len(recent) > 10 {
-		recent = recent[len(recent)-10:]
+	older := []Message{}
+
+	if len(history) > keepCount {
+		older = history[:len(history)-keepCount]
+		recent = history[len(history)-keepCount:]
 	}
+
 	var b strings.Builder
 	b.WriteString("<conversation_summary>\n")
-	for i, msg := range recent {
-		content := msg.Content
-		if len(content) > 200 {
-			content = content[:200] + "..."
+
+	// Compress older messages into a brief summary
+	if len(older) > 0 {
+		roundCount := (len(older) + 1) / 2
+		userMsgs := 0
+		assistantMsgs := 0
+		for _, m := range older {
+			switch m.Role {
+			case "user":
+				userMsgs++
+			case "assistant":
+				assistantMsgs++
+			}
 		}
-		b.WriteString(fmt.Sprintf("<msg seq=\"%d\" role=\"%s\">%s</msg>\n", i+1, msg.Role, content))
+		b.WriteString(fmt.Sprintf("<compressed rounds=\"%d\" user_msgs=\"%d\" assistant_msgs=\"%d\">\n", roundCount, userMsgs, assistantMsgs))
+		// Keep the gist of older messages: first and last
+		if len(older) > 0 {
+			first := older[0]
+			b.WriteString(fmt.Sprintf("<first role=\"%s\">%s</first>\n", first.Role, truncateContent(first.Content, maxContentLen)))
+		}
+		if len(older) > 1 {
+			last := older[len(older)-1]
+			b.WriteString(fmt.Sprintf("<last role=\"%s\">%s</last>\n", last.Role, truncateContent(last.Content, maxContentLen)))
+		}
+		b.WriteString("</compressed>\n")
+	}
+
+	// Recent rounds kept verbatim
+	for i, msg := range recent {
+		globalSeq := len(older) + i + 1
+		b.WriteString(fmt.Sprintf("<msg seq=\"%d\" role=\"%s\">%s</msg>\n",
+			globalSeq, msg.Role, truncateContent(msg.Content, maxContentLen)))
 	}
 	b.WriteString("</conversation_summary>")
 	return b.String()
+}
+
+func truncateContent(content string, maxLen int) string {
+	if len(content) <= maxLen {
+		return content
+	}
+	return content[:maxLen] + "..."
 }
 
 // ============================================================

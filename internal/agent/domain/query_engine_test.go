@@ -3,6 +3,7 @@ package domain
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"openforge/internal/agent/port"
@@ -215,6 +216,61 @@ func TestPromptAssembly_MultiTurnConversation(t *testing.T) {
 		}
 		if !containsStr(sys, "conversation_summary") {
 			t.Error("L4 conversation_summary tag missing")
+		}
+	})
+}
+
+func TestPromptAssembly_LongConversationCompression(t *testing.T) {
+	pb, err := NewPromptBuilder("../../../config/prompts/static.xml", nil)
+	if err != nil {
+		t.Fatalf("NewPromptBuilder: %v", err)
+	}
+
+	client := &capturingLLMClient{response: "ok"}
+	qe := NewQueryEngine(client, port.LLMConfig{
+		Model: "deepseek", MaxTokens: 4096,
+	}, pb, PipelineContext{
+		PipelineID:     "pipe-test-1",
+		ProjectID:      "proj-A",
+		Stage:          "impl",
+		StageLevel:     "L2",
+		PermissionMode: "auto",
+	})
+
+	// Simulate 15 rounds (30 messages) — exceeds 10 round keep window
+	for i := 0; i < 15; i++ {
+		ch, err := qe.SubmitMessage(context.Background(), fmt.Sprintf("turn %d request", i))
+		if err != nil {
+			t.Fatalf("round %d: %v", i, err)
+		}
+		for range ch {
+		}
+	}
+
+	sys := client.lastSystemPrompt
+
+	t.Run("compressed_section_present", func(t *testing.T) {
+		if !containsStr(sys, "<compressed") {
+			t.Error("missing <compressed> block for older rounds")
+		}
+		if !containsStr(sys, "rounds=") {
+			t.Error("missing rounds count in compressed block")
+		}
+	})
+
+	t.Run("recent_rounds_kept", func(t *testing.T) {
+		// The last few messages should still be verbatim in L4
+		if !containsStr(sys, "turn 14 request") {
+			t.Error("missing recent message verbatim in L4 summary")
+			t.Logf("SystemPrompt last 500 chars:\n%s", sys[len(sys)-500:])
+		}
+	})
+
+	t.Run("messages_trimmed", func(t *testing.T) {
+		// 15 rounds × 2 = 30 messages, but max 40 → should have all 30
+		// Actually 15×2+1=31 (last submission adds 1 user msg, assistant not yet stored)
+		if len(client.lastMessages) < 15 {
+			t.Errorf("expected at least 15 messages in context, got %d", len(client.lastMessages))
 		}
 	})
 }
