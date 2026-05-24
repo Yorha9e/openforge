@@ -29,6 +29,9 @@ func RegisterRoutes(of *profile.OpenForge, jwtSvc *service.JWTService, cfg *prof
 	mux.HandleFunc("POST /api/auth/login", handleLogin(jwtSvc, cfg))
 	mux.HandleFunc("POST /api/auth/refresh", handleRefresh(jwtSvc))
 
+	// Phase 6.5: Skill admin endpoints
+	RegisterSkillRoutes(mux, of)
+
 	// RBAC helper — wraps authMw with role requirement
 	withRole := func(role string, next http.HandlerFunc) http.HandlerFunc {
 		return authMw(rbacmw.RequireRoleMiddleware(role, next))
@@ -104,26 +107,35 @@ func handleLogin(jwtSvc *service.JWTService, cfg *profile.Config) http.HandlerFu
 		var req struct {
 			Username string `json:"username"`
 			Password string `json:"password"`
-			Role     string `json:"role"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, 400, "invalid request body")
 			return
 		}
-		if req.Username == "" {
-			writeError(w, 400, "username required")
+		if req.Username == "" || req.Password == "" {
+			writeError(w, 400, "username and password required")
 			return
 		}
-		role := req.Role
-		if role == "" {
-			role = "pm" // default for dev mode
+
+		// Authenticate against builtin users (dev/prod-jwt mode)
+		user, ok := cfg.Auth.Authenticate(req.Username, req.Password)
+		if !ok {
+			writeError(w, 401, "invalid credentials")
+			return
 		}
-		token, err := jwtSvc.Issue(req.Username, role, "")
+
+		token, err := jwtSvc.Issue(user.Username, user.Role, "")
 		if err != nil {
 			writeError(w, 500, "failed to issue token")
 			return
 		}
-		writeJSON(w, 200, token)
+		writeJSON(w, 200, map[string]any{
+			"access_token":  token.AccessToken,
+			"refresh_token": token.RefreshToken,
+			"expires_in":    token.ExpiresIn,
+			"display_name":  user.DisplayName,
+			"role":          user.Role,
+		})
 	}
 }
 

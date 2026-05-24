@@ -34,8 +34,32 @@ type Config struct {
 
 // AuthConfig holds authentication provider configuration.
 type AuthConfig struct {
-	Provider string     `yaml:"provider"` // "jwt" (default) | "oidc"
-	OIDC     OIDCConfig `yaml:"oidc"`
+	Provider     string        `yaml:"provider"` // "jwt" (default) | "oidc"
+	OIDC         OIDCConfig    `yaml:"oidc"`
+	BuiltinUsers []BuiltinUser `yaml:"builtin_users"`
+}
+
+// BuiltinUser is a statically configured user (dev/small-team mode).
+type BuiltinUser struct {
+	Username     string `yaml:"username"`
+	PasswordHash string `yaml:"password_hash"` // bcrypt
+	DisplayName  string `yaml:"display_name"`
+	Role         string `yaml:"role"`
+}
+
+// Authenticate checks a username/password against the builtin user list.
+// Returns the user and true if matched, or zero-value and false.
+func (a AuthConfig) Authenticate(username, password string) (*BuiltinUser, bool) {
+	for i := range a.BuiltinUsers {
+		u := &a.BuiltinUsers[i]
+		if u.Username == username {
+			if CheckPassword(password, u.PasswordHash) {
+				return u, true
+			}
+			return nil, false // user exists but wrong password
+		}
+	}
+	return nil, false
 }
 
 // OIDCConfig holds OIDC provider connection parameters.

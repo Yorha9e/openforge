@@ -67,3 +67,12 @@ auth:
     client_id: ""
     client_secret: ""
     redirect_url: ""
+  builtin_users:
+    - username: admin
+      display_name: "Admin"
+      role: admin
+      password_hash: "$2a$10$e1lkCyWKt5Hn1eZRLkVtxesDCqNYVNicuZU5U.e8do4Fymo2TGK.K"  # admin123
+    - username: pm
+      display_name: "Product Manager"
+      role: pm
+      password_hash: "$2a$10$Rp/ogaMYlNMsRbymNKOAbO6Xympo2Ssn0tPibp4i5u7y/gksgeXd2"  # pm123
