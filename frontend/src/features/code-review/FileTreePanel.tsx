@@ -1,44 +1,46 @@
 import { useState } from 'react';
 import { tokens } from '../../shared/design-tokens';
 
-interface FileNode {
+export interface ChangedFile {
   path: string;
   status: 'added' | 'modified' | 'deleted';
 }
 
-const DEMO_FILES: FileNode[] = [
-  { path: 'src/components/Header.tsx', status: 'modified' },
-  { path: 'src/utils/api.ts', status: 'modified' },
-  { path: 'src/pages/Home.tsx', status: 'added' },
-];
+interface FileTreePanelProps {
+  files?: ChangedFile[];
+  onSelectFile?: (file: ChangedFile) => void;
+  selectedFile?: string;
+}
 
 const statusColors: Record<string, string> = { added: tokens.cta, modified: tokens.warning, deleted: tokens.error };
 
-export function FileTreePanel() {
-  const [selected, setSelected] = useState<string | null>(null);
+export function FileTreePanel({ files, onSelectFile, selectedFile }: FileTreePanelProps) {
   const [hovered, setHovered] = useState<string | null>(null);
+  const displayFiles = files && files.length > 0 ? files : [{ path: 'No changed files yet', status: 'modified' as const }];
 
   return (
     <div role="tree" aria-label="Changed files">
-      <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 8, color: tokens.muted, fontFamily: tokens.fontHeading }}>Changed Files</h3>
-      {DEMO_FILES.map(f => (
+      <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 8, color: tokens.muted, fontFamily: tokens.fontHeading }}>
+        Changed Files ({files?.length ?? 0})
+      </h3>
+      {displayFiles.map(f => (
         <div
           key={f.path}
           role="treeitem"
-          aria-selected={selected === f.path}
-          onClick={() => setSelected(f.path)}
+          aria-selected={selectedFile === f.path}
+          onClick={() => onSelectFile?.(f)}
           onMouseEnter={() => setHovered(f.path)}
           onMouseLeave={() => setHovered(null)}
           style={{
             padding: '4px 8px', cursor: 'pointer', borderRadius: 4,
             fontSize: 13, color: tokens.text,
-            background: selected === f.path ? tokens.surface : hovered === f.path ? tokens.border : 'transparent',
+            background: selectedFile === f.path ? tokens.surface : hovered === f.path ? tokens.border : 'transparent',
             display: 'flex', alignItems: 'center', gap: 6,
             transition: tokens.transition,
           }}
         >
-          <span style={{ color: statusColors[f.status], fontSize: 10 }} aria-hidden="true">&#9679;</span>
-          <span>{f.path}</span>
+          <span style={{ color: statusColors[f.status], fontSize: 10 }} aria-hidden="true">{'●'}</span>
+          <span style={{ fontFamily: "'Fira Code', monospace", overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.path}</span>
         </div>
       ))}
     </div>

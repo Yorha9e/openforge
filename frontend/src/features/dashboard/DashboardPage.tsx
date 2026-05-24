@@ -94,6 +94,7 @@ export function DashboardPage() {
   const [logoutHovered, setLogoutHovered] = useState(false);
   const [showContent, setShowContent] = useState(false);
   const [stats, setStats] = useState<DashboardStats>({ projectCount: 0, skillCount: 0, pendingReviews: 0 });
+  const [systemStatus, setSystemStatus] = useState<{ phase: string; profile: string; health: string; models: number; skills: number } | null>(null);
 
   useEffect(() => {
     const minDelay = new Promise(r => setTimeout(r, 600));
@@ -101,6 +102,10 @@ export function DashboardPage() {
       api.listProjects().then(p => setProjects(Array.isArray(p) ? p : [])),
       fetchSkillCount().then(c => setStats(s => ({ ...s, skillCount: c }))),
       fetchReviewCount().then(c => setStats(s => ({ ...s, pendingReviews: c }))),
+      fetch('/api/health').then(r => r.json()).then(d => d.status).catch(() => 'unknown'),
+      fetch('/api/admin/status').then(r => r.json()).then((d: any) => setSystemStatus({
+        phase: d.phase, profile: d.profile, health: 'ok', models: d.models, skills: d.skills,
+      })).catch(() => {}),
     ]).catch(err => setError(err instanceof Error ? err.message : 'Failed to load'));
     Promise.all([fetchData, minDelay]).finally(() => {
       setLoading(false);
@@ -184,6 +189,24 @@ export function DashboardPage() {
             <StatCard label="Pending Reviews" value={stats.pendingReviews} to="/review-inbox" accent={tokens.warning} />
             <StatCard label="Pipelines Active" value={0} to="/" accent="#3b82f6" />
           </div>
+
+          {/* System Status Bar */}
+          {systemStatus && (
+            <div style={{
+              display: 'flex', flexWrap: 'wrap', gap: 16, marginBottom: 24, padding: '10px 16px',
+              background: tokens.surface, borderRadius: 8, border: `1px solid ${tokens.border}`,
+              fontSize: 12, color: tokens.muted, alignItems: 'center',
+            }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ width: 8, height: 8, borderRadius: '50%', background: tokens.cta, display: 'inline-block' }} />
+                {systemStatus.phase} · {systemStatus.profile}
+              </span>
+              <span style={{ color: tokens.border }}>|</span>
+              <span>{systemStatus.skills} skills</span>
+              <span style={{ color: tokens.border }}>|</span>
+              <span>{systemStatus.models} models</span>
+            </div>
+          )}
 
           {/* Quick Nav */}
           <div style={{
