@@ -8,21 +8,21 @@ import (
 )
 
 type Pipeline struct {
-	ID               string
-	ProjectID        string
-	Title            string
-	Level            string
-	Status           string
-	CurrentStage     string
-	CreatedBy        string
-	BacktrackCount   int
-	Version          int
-	Stages           []Stage
+	ID               string         `json:"id"`
+	ProjectID        string         `json:"project_id"`
+	Title            string         `json:"title"`
+	Level            string         `json:"level"`
+	Status           string         `json:"status"`
+	CurrentStage     string         `json:"current_stage"`
+	CreatedBy        string         `json:"created_by"`
+	BacktrackCount   int            `json:"backtrack_count"`
+	Version          int            `json:"version"`
+	Stages           []Stage        `json:"stages"`
 	ParentPipelineID *string        `json:"parent_pipeline_id,omitempty"`
 	Region           string         `json:"region"`
 	Config           PipelineConfig `json:"config"`
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	CreatedAt        time.Time      `json:"created_at"`
+	UpdatedAt        time.Time      `json:"updated_at"`
 }
 
 // PipelineConfig holds the configuration snapshot for a pipeline.
