@@ -17,6 +17,13 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const res = await fetch(`${BASE}${path}`, { ...options, headers });
   if (res.status === 401) {
     authToken = null;
+    localStorage.removeItem('of_token');
+    localStorage.removeItem('of_refresh');
+    localStorage.removeItem('of_user');
+    // Not on login page already — redirect silently
+    if (!window.location.pathname.startsWith('/login')) {
+      window.location.href = '/login';
+    }
     throw new Error('Unauthorized');
   }
   if (!res.ok) {
