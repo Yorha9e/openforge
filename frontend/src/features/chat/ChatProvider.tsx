@@ -60,23 +60,8 @@ export function ChatProvider({ pipelineId, children }: { pipelineId: string; chi
         timestamp: Date.now(),
       }]);
     });
-    const unsub5 = subscribe('pipeline.stage_change', (p: any) => {
-      setMessages(prev => [...prev, {
-        id: `stage-${++idCounter.current}`,
-        role: 'system',
-        content: `Stage: ${p?.stage} → ${p?.status}`,
-        timestamp: Date.now(),
-      }]);
-    });
-    const unsub6 = subscribe('gate.notify', (p: any) => {
-      setMessages(prev => [...prev, {
-        id: `gate-${++idCounter.current}`,
-        role: 'system',
-        content: `Gate ${p?.stage}: ${p?.event}`,
-        timestamp: Date.now(),
-      }]);
-    });
-    return () => { unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); unsub6(); };
+    // Pipeline stage/gate events are shown in the progress indicator, not as chat messages.
+    return () => { unsub1(); unsub2(); unsub3(); unsub4(); };
   }, [subscribe]);
 
   const send = useCallback((_pid: string, content: string) => {
