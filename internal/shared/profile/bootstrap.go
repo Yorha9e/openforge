@@ -39,8 +39,9 @@ type OpenForge struct {
 	LLMRegistry     *llm.Registry
 	Config          *Config
 	PromptBuilder   *domain.PromptBuilder
-	SkillLoader     *domain.SkillLoader
-	CapabilityInjector *domain.CapabilityInjector
+	SkillLoader         *domain.SkillLoader
+	CapabilityInjector  *domain.CapabilityInjector
+	PriorityEngine      *domain.UnifiedPriorityEngine
 
 	PipelineRepo    *pipelineadapter.PGRepository
 	PipelineSvc     *service.PipelineService
@@ -145,6 +146,8 @@ func Bootstrap(cfg *Config) (*OpenForge, error) {
 	})
 	of.CapabilityInjector = domain.NewCapabilityInjector(of.SkillLoader, &domain.HardcodedToolRegistry{})
 	of.PromptBuilder.SetCapabilityInjector(of.CapabilityInjector)
+	of.PriorityEngine = domain.NewUnifiedPriorityEngine(of.SkillLoader, nil)
+	of.PriorityEngine.Start()
 
 	// Run database migrations
 	migrationsDir := "migrations"
