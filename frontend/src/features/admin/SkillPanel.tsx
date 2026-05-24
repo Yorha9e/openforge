@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { tokens } from '../../shared/design-tokens';
+import { api } from '../../shared/api';
 
 interface SkillEntry {
   name: string;
@@ -27,8 +28,7 @@ export function SkillPanel() {
   const [priorityEdits, setPriorityEdits] = useState<Record<string, number>>({});
 
   useEffect(() => {
-    fetch('/api/admin/skills')
-      .then(r => { if (!r.ok) throw new Error(r.statusText); return r.json(); })
+    api.listSkills()
       .then((data: SkillEntry[]) => { setSkills(Array.isArray(data) ? data : []); })
       .catch(err => setError(err instanceof Error ? err.message : 'Failed'))
       .finally(() => setLoading(false));

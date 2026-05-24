@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useAuth, useRole } from '../../shared/auth';
+import { api } from '../../shared/api';
 
 interface SystemStatus {
   rbac: 'active' | 'degraded';
@@ -17,11 +18,13 @@ export function AdminPage() {
   useEffect(() => {
     async function fetchStatus() {
       try {
-        const resp = await fetch('/api/admin/status');
-        if (resp.ok) {
-          const data = await resp.json();
-          setStatus(data);
-        }
+        const data = await api.getAdminStatus();
+        setStatus({
+          rbac: data.rbac || 'active',
+          oidc: data.oidc || 'disabled',
+          auditChain: 'healthy',
+          phase: data.phase || 'Phase 6.5',
+        });
       } catch {
         setStatus({
           rbac: 'active',

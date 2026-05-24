@@ -73,15 +73,13 @@ function NavIcon({ children, to, label, external }: { children: React.ReactNode;
 }
 
 function fetchSkillCount(): Promise<number> {
-  return fetch('/api/admin/skills')
-    .then(r => r.json())
+  return api.listSkills()
     .then((data: any[]) => (Array.isArray(data) ? data.length : 0))
     .catch(() => 0);
 }
 
 function fetchReviewCount(): Promise<number> {
-  return fetch('/api/review-inbox')
-    .then(r => r.json())
+  return api.getReviewInbox()
     .then((data: any) => (Array.isArray(data) ? data.length : 0))
     .catch(() => 0);
 }
@@ -106,8 +104,8 @@ export function DashboardPage() {
       api.listProjects().then(p => setProjects(Array.isArray(p) ? p : [])),
       fetchSkillCount().then(c => setStats(s => ({ ...s, skillCount: c }))),
       fetchReviewCount().then(c => setStats(s => ({ ...s, pendingReviews: c }))),
-      fetch('/api/health').then(r => r.json()).then(d => d.status).catch(() => 'unknown'),
-      fetch('/api/admin/status').then(r => r.json()).then((d: any) => setSystemStatus({
+      api.getHealth().then((d: any) => d.status).catch(() => 'unknown'),
+      api.getAdminStatus().then((d: any) => setSystemStatus({
         phase: d.phase, profile: d.profile, health: 'ok', models: d.models, skills: d.skills,
       })).catch(() => {}),
     ]).catch(err => setError(err instanceof Error ? err.message : 'Failed to load'));

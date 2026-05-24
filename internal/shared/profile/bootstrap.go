@@ -144,10 +144,12 @@ func Bootstrap(cfg *Config) (*OpenForge, error) {
 		".openforge/team-skills",
 		".openforge/skills",
 	})
-	of.CapabilityInjector = domain.NewCapabilityInjector(of.SkillLoader, &domain.HardcodedToolRegistry{})
-	of.PromptBuilder.SetCapabilityInjector(of.CapabilityInjector)
-	of.PriorityEngine = domain.NewUnifiedPriorityEngine(of.SkillLoader, nil)
-	of.PriorityEngine.Start()
+	if of.SkillLoader != nil && of.PromptBuilder != nil {
+		of.CapabilityInjector = domain.NewCapabilityInjector(of.SkillLoader, &domain.HardcodedToolRegistry{})
+		of.PromptBuilder.SetCapabilityInjector(of.CapabilityInjector)
+		of.PriorityEngine = domain.NewUnifiedPriorityEngine(of.SkillLoader, nil)
+		of.PriorityEngine.Start()
+	}
 
 	// Run database migrations
 	migrationsDir := "migrations"

@@ -6,6 +6,7 @@ import { MessageInput } from './MessageInput';
 import { ModelSelector } from './ModelSelector';
 import { AgentPanel, AgentInfo } from './AgentPanel';
 import { SkillBadge } from './SkillBadge';
+import { api } from '../../shared/api';
 import { tokens } from '../../shared/design-tokens';
 
 function useAgents(_pipelineId: string): AgentInfo[] {
@@ -16,8 +17,7 @@ function useActiveSkills() {
   const [skills, setSkills] = useState<Array<{name: string; version: string; source: string}>>([]);
 
   useEffect(() => {
-    fetch('/api/admin/skills')
-      .then(r => r.json())
+    api.listSkills()
       .then((data: any[]) => {
         if (Array.isArray(data)) {
           setSkills(data.filter(s => s.enabled && !s.deprecated));

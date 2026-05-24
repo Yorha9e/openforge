@@ -88,6 +88,15 @@ export const api = {
   getSettings: () => request<any>('/settings'),
   updateSettings: (settings: any) =>
     request<any>('/settings', { method: 'PUT', body: JSON.stringify(settings) }),
+
+  // Skills
+  listSkills: () => request<any[]>('/admin/skills'),
+
+  // Admin
+  getAdminStatus: () => request<any>('/admin/status'),
+
+  // Health (public, but use request helper for consistency)
+  getHealth: () => request<any>('/health'),
 };
 
 export function wsURL(): string {
