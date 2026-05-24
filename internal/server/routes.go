@@ -47,6 +47,8 @@ func RegisterRoutes(of *profile.OpenForge, jwtSvc *service.JWTService, cfg *prof
 
 	// Projects (auth + role)
 	mux.HandleFunc("GET /api/projects", withRole("observer", handleListProjects(of)))
+	mux.HandleFunc("GET /api/projects/{id}", withRole("observer", handleGetProject(of)))
+	mux.HandleFunc("POST /api/projects", withRole("pm", handleCreateProject(of)))
 
 	// Pipeline (auth + role)
 	mux.HandleFunc("GET /api/pipelines/{id}", withRole("observer", handleGetPipeline(of)))
@@ -182,15 +184,80 @@ func handleRefresh(jwtSvc *service.JWTService) http.HandlerFunc {
 
 func handleListProjects(of *profile.OpenForge) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		projects, err := of.PipelineRepo.ListByProject(r.Context(), "")
+		rows, err := of.DB.QueryContext(r.Context(),
+			`SELECT id, name, git_url, created_at FROM project WHERE deleted_at IS NULL ORDER BY created_at DESC`)
 		if err != nil {
 			writeError(w, 500, sanitizeError(err))
 			return
 		}
+		defer rows.Close()
+		type project struct {
+			ID        string `json:"id"`
+			Name      string `json:"name"`
+			GitURL    string `json:"git_url"`
+			CreatedAt string `json:"created_at"`
+		}
+		var projects []project
+		for rows.Next() {
+			var p project
+			if err := rows.Scan(&p.ID, &p.Name, &p.GitURL, &p.CreatedAt); err != nil {
+				writeError(w, 500, sanitizeError(err))
+				return
+			}
+			projects = append(projects, p)
+		}
 		if projects == nil {
-			projects = []*domain.Pipeline{}
+			projects = []project{}
 		}
 		writeJSON(w, 200, projects)
+	}
+}
+
+func handleCreateProject(of *profile.OpenForge) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Name   string `json:"name"`
+			GitURL string `json:"git_url"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, 400, "invalid body")
+			return
+		}
+		if req.Name == "" {
+			writeError(w, 400, "name required")
+			return
+		}
+		projectID := fmt.Sprintf("proj-%d", time.Now().UnixNano())
+		_, err := of.DB.ExecContext(r.Context(),
+			`INSERT INTO project (id, name, git_url, repo_type, template) VALUES ($1, $2, $3, 'custom', 'custom')`,
+			projectID, req.Name, req.GitURL)
+		if err != nil {
+			writeError(w, 500, sanitizeError(err))
+			return
+		}
+		writeJSON(w, 201, map[string]any{
+			"id": projectID, "name": req.Name, "git_url": req.GitURL,
+		})
+	}
+}
+
+func handleGetProject(of *profile.OpenForge) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		var p struct {
+			ID        string `json:"id"`
+			Name      string `json:"name"`
+			GitURL    string `json:"git_url"`
+			CreatedAt string `json:"created_at"`
+		}
+		err := of.DB.QueryRowContext(r.Context(),
+			`SELECT id, name, git_url, created_at FROM project WHERE id = $1 AND deleted_at IS NULL`, id).
+			Scan(&p.ID, &p.Name, &p.GitURL, &p.CreatedAt)
+		if err != nil {
+			writeError(w, 404, "project not found")
+			return
+		}
+		writeJSON(w, 200, p)
 	}
 }
 

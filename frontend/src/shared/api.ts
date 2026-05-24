@@ -43,6 +43,12 @@ export const api = {
 
   getProject: (id: string) => request<any>(`/projects/${id}`),
 
+  createProject: (name: string, gitUrl: string) =>
+    request<any>('/projects', {
+      method: 'POST',
+      body: JSON.stringify({ name, git_url: gitUrl }),
+    }),
+
   createPipeline: (projectId: string, title: string) =>
     request<any>(`/projects/${projectId}/pipelines`, {
       method: 'POST',

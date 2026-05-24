@@ -93,6 +93,10 @@ export function DashboardPage() {
   const [error, setError] = useState<string | null>(null);
   const [logoutHovered, setLogoutHovered] = useState(false);
   const [showContent, setShowContent] = useState(false);
+  const [showCreate, setShowCreate] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [newGitUrl, setNewGitUrl] = useState('');
+  const [creating, setCreating] = useState(false);
   const [stats, setStats] = useState<DashboardStats>({ projectCount: 0, skillCount: 0, pendingReviews: 0 });
   const [systemStatus, setSystemStatus] = useState<{ phase: string; profile: string; health: string; models: number; skills: number } | null>(null);
 
@@ -112,6 +116,20 @@ export function DashboardPage() {
       setShowContent(true);
     });
   }, []);
+
+  const handleCreateProject = async () => {
+    if (!newName.trim()) return;
+    setCreating(true);
+    try {
+      const gitUrl = newGitUrl.trim() || `https://github.com/user/${newName.trim().toLowerCase().replace(/\s+/g, '-')}`;
+      const p = await api.createProject(newName.trim(), gitUrl);
+      setProjects(prev => [p, ...prev]);
+      setShowCreate(false); setNewName(''); setNewGitUrl('');
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create project');
+    } finally { setCreating(false); }
+  };
 
   useEffect(() => {
     setStats(s => ({ ...s, projectCount: projects.length }));
@@ -221,12 +239,38 @@ export function DashboardPage() {
           </div>
 
           {/* Projects Section */}
-          <div style={{ marginBottom: 8 }}>
-            <h2 style={{
-              fontSize: 22, fontWeight: 700, fontFamily: tokens.fontHeading,
-              margin: '0 0 20px 0', color: tokens.text,
-            }}>Projects</h2>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+            <h2 style={{ fontSize: 22, fontWeight: 700, fontFamily: tokens.fontHeading, margin: 0, color: tokens.text }}>Projects</h2>
+            <button
+              onClick={() => setShowCreate(!showCreate)}
+              style={{
+                padding: '8px 16px', background: tokens.cta, color: tokens.ctaText, border: 'none', borderRadius: 6,
+                cursor: 'pointer', fontWeight: 500, fontSize: 13, transition: tokens.transition,
+              }}>
+              + New Project
+            </button>
           </div>
+
+          {showCreate && (
+            <div style={{ background: tokens.surface, border: `1px solid ${tokens.border}`, borderRadius: 8, padding: 16, marginBottom: 20 }}>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <input type="text" placeholder="Project name" value={newName}
+                  onChange={e => setNewName(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleCreateProject()}
+                  style={{ flex: '1 1 200px', padding: '8px 12px', background: tokens.bg, border: `1px solid ${tokens.border}`, borderRadius: 4, color: tokens.text, fontSize: 14, outline: 'none' }} />
+                <input type="text" placeholder="Git URL (optional)" value={newGitUrl}
+                  onChange={e => setNewGitUrl(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleCreateProject()}
+                  style={{ flex: '1 1 300px', padding: '8px 12px', background: tokens.bg, border: `1px solid ${tokens.border}`, borderRadius: 4, color: tokens.text, fontSize: 14, outline: 'none' }} />
+                <button
+                  onClick={handleCreateProject}
+                  disabled={creating || !newName.trim()}
+                  style={{ padding: '8px 20px', background: tokens.cta, color: tokens.ctaText, border: 'none', borderRadius: 4, cursor: creating ? 'default' : 'pointer', fontWeight: 500, opacity: creating || !newName.trim() ? 0.5 : 1 }}>
+                  {creating ? 'Creating...' : 'Create'}
+                </button>
+              </div>
+            </div>
+          )}
 
           {projects.length === 0 ? (
             <div style={{
