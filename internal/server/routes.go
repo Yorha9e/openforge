@@ -67,6 +67,16 @@ func RegisterRoutes(of *profile.OpenForge, jwtSvc *service.JWTService, cfg *prof
 	// Models (observer)
 	mux.HandleFunc("GET /api/models", withRole("observer", handleListModels(of)))
 
+	// Settings (auth)
+	mux.HandleFunc("GET /api/user/settings", authMw(handleGetSettings()))
+	mux.HandleFunc("PUT /api/user/settings", authMw(handleUpdateSettings()))
+
+	// Admin status (admin)
+	mux.HandleFunc("GET /api/admin/status", withAdmin(handleAdminStatus(of, cfg)))
+
+	// Pipeline messages (observer)
+	mux.HandleFunc("GET /api/pipelines/{pid}/messages", withRole("observer", handleGetMessages(of)))
+
 	// OIDC (conditionally registered when auth.provider is "oidc")
 	if cfg.Auth.Provider == "oidc" {
 		oidcProvider := authadapter.NewOIDCProvider(cfg.Auth.OIDC)
@@ -330,6 +340,100 @@ func handleForkPipeline(of *profile.OpenForge) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, 201, child)
+	}
+}
+
+// --- Settings (in-memory, per-session) ---
+
+type userSettings struct {
+	Notifications map[string]bool `json:"notifications"`
+	DefaultLayout string          `json:"default_layout"`
+	Theme         string          `json:"theme"`
+	FontSize      int             `json:"font_size"`
+}
+
+var defaultSettings = userSettings{
+	Notifications: map[string]bool{"pipeline": true, "gate": true, "token": true, "weekly_report": false},
+	DefaultLayout: "simple",
+	Theme:         "dark",
+	FontSize:      14,
+}
+
+// Session-scoped settings store (in-memory, lost on restart — Phase 7: persist to DB).
+var settingsStore = map[string]*userSettings{}
+
+func getSettingsStore(userID string) *userSettings {
+	if s, ok := settingsStore[userID]; ok {
+		return s
+	}
+	cp := defaultSettings
+	cp.Notifications = make(map[string]bool)
+	for k, v := range defaultSettings.Notifications {
+		cp.Notifications[k] = v
+	}
+	settingsStore[userID] = &cp
+	return &cp
+}
+
+func handleGetSettings() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		s := getSettingsStore(UserIDFromContext(r.Context()))
+		writeJSON(w, 200, s)
+	}
+}
+
+func handleUpdateSettings() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req userSettings
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, 400, "invalid body")
+			return
+		}
+		s := getSettingsStore(UserIDFromContext(r.Context()))
+		if req.Notifications != nil {
+			s.Notifications = req.Notifications
+		}
+		if req.DefaultLayout != "" {
+			s.DefaultLayout = req.DefaultLayout
+		}
+		if req.Theme != "" {
+			s.Theme = req.Theme
+		}
+		if req.FontSize > 0 {
+			s.FontSize = req.FontSize
+		}
+		writeJSON(w, 200, s)
+	}
+}
+
+// --- Admin status ---
+
+func handleAdminStatus(of *profile.OpenForge, cfg *profile.Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		skillCount := 0
+		if of.SkillLoader != nil {
+			skillCount = len(of.SkillLoader.GetAllSkills())
+		}
+		writeJSON(w, 200, map[string]any{
+			"phase":           "Phase 6.5",
+			"profile":          cfg.Profile,
+			"tier":             cfg.SecurityTier,
+			"skills":           skillCount,
+			"rbac":             "active",
+			"oidc":             map[bool]string{true: "enabled", false: "disabled"}[cfg.Auth.Provider == "oidc"],
+			"auth_provider":    cfg.Auth.Provider,
+			"models":           len(of.LLMRouter.ListModels()),
+		})
+	}
+}
+
+// --- Pipeline messages ---
+
+func handleGetMessages(of *profile.OpenForge) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Phase 7: read from conversation_message table
+		// Phase 6.5: return empty — messages are ephemeral (WS only)
+		writeJSON(w, 200, []any{})
 	}
 }
 
