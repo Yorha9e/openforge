@@ -123,16 +123,16 @@ func TestFormatToolResultXML(t *testing.T) {
 
 	xml := formatToolResultXML(r)
 
-	if !containsString(xml, "tool=\"bash\"") {
+	if !containsStr(xml, "tool=\"bash\"") {
 		t.Errorf("missing tool name: %s", xml)
 	}
-	if !containsString(xml, "status=\"success\"") {
+	if !containsStr(xml, "status=\"success\"") {
 		t.Errorf("missing status: %s", xml)
 	}
-	if !containsString(xml, "Build completed") {
+	if !containsStr(xml, "Build completed") {
 		t.Errorf("missing output: %s", xml)
 	}
-	if !containsString(xml, "duration_ms=\"1234\"") {
+	if !containsStr(xml, "duration_ms=\"1234\"") {
 		t.Errorf("missing duration: %s", xml)
 	}
 }
@@ -145,10 +145,10 @@ func TestFormatToolResultXML_WithError(t *testing.T) {
 
 	xml := formatToolResultXML(r)
 
-	if !containsString(xml, "error_code=\"MODEL_HALLUCINATION\"") {
+	if !containsStr(xml, "error_code=\"MODEL_HALLUCINATION\"") {
 		t.Errorf("missing error_code: %s", xml)
 	}
-	if !containsString(xml, "retries=\"3\"") {
+	if !containsStr(xml, "retries=\"3\"") {
 		t.Errorf("missing retries: %s", xml)
 	}
 }
