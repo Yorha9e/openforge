@@ -1,0 +1,23 @@
+{
+  "nav.dashboard": "Dashboard",
+  "nav.settings": "Settings",
+  "nav.skills": "Skills",
+  "nav.projects": "Projects",
+  "nav.review": "Review Inbox",
+  "nav.admin": "Admin",
+  "chat.placeholder": "Type a message…",
+  "chat.send": "Send",
+  "common.loading": "Loading…",
+  "common.error": "Something went wrong",
+  "common.save": "Save",
+  "common.cancel": "Cancel",
+  "common.delete": "Delete",
+  "common.search": "Search",
+  "common.noResults": "No results",
+  "admin.title": "Admin Panel",
+  "admin.session": "Current Session",
+  "admin.rbac": "RBAC Middleware",
+  "admin.oidc": "OIDC Provider",
+  "deployments.empty": "No deployments yet.",
+  "requirements.empty": "No requirements yet."
+}

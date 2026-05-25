@@ -1,0 +1,23 @@
+{
+  "nav.dashboard": "仪表盘",
+  "nav.settings": "设置",
+  "nav.skills": "技能",
+  "nav.projects": "项目",
+  "nav.review": "评审收件箱",
+  "nav.admin": "管理",
+  "chat.placeholder": "输入消息…",
+  "chat.send": "发送",
+  "common.loading": "加载中…",
+  "common.error": "出错了",
+  "common.save": "保存",
+  "common.cancel": "取消",
+  "common.delete": "删除",
+  "common.search": "搜索",
+  "common.noResults": "无结果",
+  "admin.title": "管理面板",
+  "admin.session": "当前会话",
+  "admin.rbac": "RBAC 中间件",
+  "admin.oidc": "OIDC 提供商",
+  "deployments.empty": "暂无部署。",
+  "requirements.empty": "暂无需求。"
+}
