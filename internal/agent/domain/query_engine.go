@@ -354,30 +354,71 @@ func (qe *QueryEngine) buildPrompt(userMsg string, messages []agentport.Message)
 	if err != nil || prompt == nil {
 		return ""
 	}
-	return prompt.System
+	system := prompt.System
+	// Append tool descriptions so the LLM knows what tools are available
+	if len(qe.toolRegistry) > 0 {
+		system += "\n\n" + FormatToolsForPrompt(qe.toolRegistry)
+	}
+	return system
 }
 
 // parseToolCalls extracts tool calls from LLM content.
-// Phase 7.5: heuristic from Anthropic tool_use patterns. Phase 8: structured content blocks.
+// Handles Anthropic tool_use content blocks — looks for tool_use JSON in the response.
 func parseToolCalls(content string) []ToolCallParsed {
 	var calls []ToolCallParsed
+
+	// Try to parse as an Anthropic content block array first
+	var blocks []struct {
+		Type  string                 `json:"type"`
+		Name  string                 `json:"name"`
+		Input map[string]interface{} `json:"input"`
+	}
+	if err := json.Unmarshal([]byte(content), &blocks); err == nil {
+		for _, b := range blocks {
+			if b.Type == "tool_use" && b.Name != "" {
+				calls = append(calls, ToolCallParsed{
+					ID: fmt.Sprintf("toolu-%d", len(calls)), Name: b.Name, Args: b.Input,
+				})
+			}
+		}
+		if len(calls) > 0 {
+			return calls
+		}
+	}
+
+	// Fallback: heuristic scan for tool_use patterns in the text
 	idx := 0
 	for {
-		start := strings.Index(content[idx:], `"name"`)
+		start := strings.Index(content[idx:], `"tool_use"`)
 		if start < 0 {
+			start = strings.Index(content[idx:], `"name"`)
+			if start < 0 {
+				break
+			}
+		}
+		start += idx + 1
+		if start >= len(content) {
 			break
 		}
-		start += idx + len(`"name"`)
-		rest := strings.TrimLeft(content[start:], `": `)
+		// Find the tool name near this position
+		rest := content[start:]
+		nameIdx := strings.Index(rest, `"name"`)
+		if nameIdx < 0 {
+			break
+		}
+		rest = rest[nameIdx+len(`"name"`):]
+		rest = strings.TrimLeft(rest, `": `)
 		nameEnd := strings.IndexAny(rest, `",}`)
 		if nameEnd < 0 {
 			break
 		}
 		name := strings.TrimSpace(rest[:nameEnd])
-		if name != "" {
-			calls = append(calls, ToolCallParsed{ID: fmt.Sprintf("toolu-%d", len(calls)), Name: name, Args: make(map[string]interface{})})
+		if name != "" && len(name) < 50 {
+			calls = append(calls, ToolCallParsed{
+				ID: fmt.Sprintf("toolu-%d", len(calls)), Name: name, Args: make(map[string]interface{}),
+			})
 		}
-		idx = start + nameEnd
+		idx = start + nameIdx + len(`"name"`) + nameEnd
 		if len(calls) >= 20 {
 			break
 		}

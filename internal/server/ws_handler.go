@@ -281,6 +281,7 @@ func (c *wsConn) getOrCreateEngine(pipelineID string) *domain.QueryEngine {
 		MaxTokens: 4096,
 	}
 	qe := domain.NewQueryEngine(c.of.LLMRouter, cfg, c.of.PromptBuilder, ctx)
+		qe.SetToolRegistry(domain.DefaultToolRegistry())
 	c.engines[pipelineID] = qe
 	return qe
 }
