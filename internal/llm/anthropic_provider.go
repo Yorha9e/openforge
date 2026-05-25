@@ -70,15 +70,12 @@ func (p *AnthropicProvider) buildRequestBody(req ChatRequest, stream bool) []byt
 	messages := make([]map[string]string, 0, len(req.Messages))
 	for _, m := range req.Messages {
 		role := m.Role
-		// Map OpenForge roles to Anthropic-supported roles.
-		// Anthropic API only allows "user" and "assistant" in the messages array.
 		switch role {
 		case "user", "assistant":
-			// allowed as-is
 		case "tool":
-			role = "user" // tool results must be sent as user messages
+			role = "user"
 		default:
-			continue // skip system/other roles — these go in the top-level system field
+			continue
 		}
 		messages = append(messages, map[string]string{"role": role, "content": m.Content})
 	}
@@ -90,10 +87,9 @@ func (p *AnthropicProvider) buildRequestBody(req ChatRequest, stream bool) []byt
 	}
 	if req.SystemPrompt != "" {
 		payload["system"] = req.SystemPrompt
-		if len(req.Tools) > 0 {
-			payload["tools"] = req.Tools
-		}
-
+	}
+	if len(req.Tools) > 0 {
+		payload["tools"] = req.Tools
 	}
 	b, _ := json.Marshal(payload)
 	return b
@@ -110,10 +106,14 @@ func (p *AnthropicProvider) parseResponse(r io.Reader) (ChatResponse, error) {
 	if err != nil {
 		return ChatResponse{}, err
 	}
+
 	var result struct {
-		Content    []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
+		Content []struct {
+			Type  string                 `json:"type"`
+			Text  string                 `json:"text"`
+			Name  string                 `json:"name"`
+			Input map[string]interface{} `json:"input"`
+			ID    string                 `json:"id"`
 		} `json:"content"`
 		StopReason string `json:"stop_reason"`
 		Usage      struct {
@@ -122,19 +122,30 @@ func (p *AnthropicProvider) parseResponse(r io.Reader) (ChatResponse, error) {
 		} `json:"usage"`
 	}
 	if err := json.Unmarshal(body, &result); err == nil && len(result.Content) > 0 {
-		// Concatenate all text blocks (DeepSeek may return thinking blocks first)
 		var textParts []string
+		var toolUseParts []map[string]interface{}
 		for _, c := range result.Content {
 			if c.Type == "text" || c.Type == "" {
 				textParts = append(textParts, c.Text)
 			}
+			if c.Type == "tool_use" {
+				toolUseParts = append(toolUseParts, map[string]interface{}{
+					"type": "tool_use", "name": c.Name, "input": c.Input, "id": c.ID,
+				})
+			}
+		}
+		content := strings.Join(textParts, "")
+		if len(toolUseParts) > 0 {
+			toolJSON, _ := json.Marshal(toolUseParts)
+			content += string(toolJSON)
 		}
 		return ChatResponse{
-			Content:    strings.Join(textParts, ""),
+			Content:    content,
 			StopReason: result.StopReason,
 			Usage:      Usage{PromptTokens: result.Usage.InputTokens, CompletionTokens: result.Usage.OutputTokens},
 		}, nil
 	}
+
 	var openaiResp struct {
 		Choices []struct {
 			Message      struct{ Content string `json:"content"` } `json:"message"`
@@ -147,7 +158,9 @@ func (p *AnthropicProvider) parseResponse(r io.Reader) (ChatResponse, error) {
 	}
 	if err := json.Unmarshal(body, &openaiResp); err == nil && len(openaiResp.Choices) > 0 {
 		sr := openaiResp.Choices[0].FinishReason
-		if sr == "stop" { sr = "end_turn" }
+		if sr == "stop" {
+			sr = "end_turn"
+		}
 		return ChatResponse{
 			Content:    openaiResp.Choices[0].Message.Content,
 			StopReason: sr,
@@ -156,7 +169,6 @@ func (p *AnthropicProvider) parseResponse(r io.Reader) (ChatResponse, error) {
 	}
 	return ChatResponse{Content: string(body), StopReason: "end_turn"}, nil
 }
-
 
 func (p *AnthropicProvider) readSSE(r io.ReadCloser, ch chan<- StreamChunk) {
 	defer close(ch)
@@ -169,7 +181,6 @@ func (p *AnthropicProvider) readSSE(r io.ReadCloser, ch chan<- StreamChunk) {
 		}
 		data := strings.TrimPrefix(line, "data: ")
 
-		// Parse event type first
 		var eventType struct {
 			Type string `json:"type"`
 		}
