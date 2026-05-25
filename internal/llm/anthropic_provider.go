@@ -123,19 +123,53 @@ func (p *AnthropicProvider) readSSE(r io.ReadCloser, ch chan<- StreamChunk) {
 			continue
 		}
 		data := strings.TrimPrefix(line, "data: ")
-		var ev struct {
-			Type    string `json:"type"`
-			Delta   struct{ Text string `json:"text"` }
-			Message struct{ StopReason string `json:"stop_reason"` }
+
+		// Parse event type first
+		var eventType struct {
+			Type string `json:"type"`
 		}
-		if err := json.Unmarshal([]byte(data), &ev); err != nil {
+		if err := json.Unmarshal([]byte(data), &eventType); err != nil {
 			continue
 		}
-		switch ev.Type {
+
+		switch eventType.Type {
 		case "content_block_delta":
-			ch <- StreamChunk{Delta: ev.Delta.Text}
-		case "message_stop":
-			ch <- StreamChunk{StopReason: ev.Message.StopReason}
+			var ev struct {
+				Delta struct {
+					Text string `json:"text"`
+				} `json:"delta"`
+			}
+			if err := json.Unmarshal([]byte(data), &ev); err != nil {
+				continue
+			}
+			if ev.Delta.Text != "" {
+				ch <- StreamChunk{Delta: ev.Delta.Text}
+			}
+
+		case "message_delta":
+			var ev struct {
+				Delta struct {
+					StopReason string `json:"stop_reason"`
+				} `json:"delta"`
+				Usage struct {
+					InputTokens  int `json:"input_tokens"`
+					OutputTokens int `json:"output_tokens"`
+				} `json:"usage"`
+			}
+			if err := json.Unmarshal([]byte(data), &ev); err != nil {
+				continue
+			}
+			sc := StreamChunk{}
+			if ev.Delta.StopReason != "" {
+				sc.StopReason = ev.Delta.StopReason
+			}
+			if ev.Usage.InputTokens > 0 || ev.Usage.OutputTokens > 0 {
+				sc.Usage = &Usage{
+					PromptTokens:     ev.Usage.InputTokens,
+					CompletionTokens: ev.Usage.OutputTokens,
+				}
+			}
+			ch <- sc
 		}
 	}
 }

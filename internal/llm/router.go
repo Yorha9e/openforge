@@ -59,8 +59,9 @@ func (r *Router) Chat(ctx context.Context, req port.ChatRequest) (*port.ChatResp
 	}
 
 	return &port.ChatResponse{
-		Content: resp.Content,
-		Usage: port.Usage{
+		Content:    resp.Content,
+		StopReason: resp.StopReason,
+		Usage: &port.Usage{
 			InputTokens:  int64(resp.Usage.PromptTokens),
 			OutputTokens: int64(resp.Usage.CompletionTokens),
 		},
@@ -97,7 +98,7 @@ func (r *Router) chatWithFallback(ctx context.Context, entry *ModelEntry, req Ch
 	return ChatResponse{}, fmt.Errorf("all providers exhausted: %w", err)
 }
 
-func (r *Router) ChatStream(ctx context.Context, req port.ChatRequest) (<-chan string, error) {
+func (r *Router) ChatStream(ctx context.Context, req port.ChatRequest) (<-chan port.StreamChunk, error) {
 	entry, err := r.registry.Lookup(req.Config.Model)
 	if err != nil {
 		return nil, err
@@ -120,13 +121,22 @@ func (r *Router) ChatStream(ctx context.Context, req port.ChatRequest) (<-chan s
 		return nil, err
 	}
 
-	// Convert <-chan StreamChunk to <-chan string for backward compatibility
-	ch := make(chan string, 64)
+	// Convert <-chan llm.StreamChunk to <-chan port.StreamChunk
+	ch := make(chan port.StreamChunk, 64)
 	go func() {
 		defer close(ch)
 		for chunk := range streamCh {
-			if chunk.Delta != "" {
-				ch <- chunk.Delta
+			var usage *port.Usage
+			if chunk.Usage != nil {
+				usage = &port.Usage{
+					InputTokens:  int64(chunk.Usage.PromptTokens),
+					OutputTokens: int64(chunk.Usage.CompletionTokens),
+				}
+			}
+			ch <- port.StreamChunk{
+				Delta:        chunk.Delta,
+				FinishReason: chunk.StopReason,
+				Usage:        usage,
 			}
 		}
 	}()

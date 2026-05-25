@@ -33,6 +33,7 @@ type Usage struct {
 type StreamChunk struct {
 	Delta      string
 	StopReason string
+	Usage      *Usage // message_delta events carry usage
 }
 
 // Provider abstracts an LLM provider backend.

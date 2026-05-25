@@ -39,21 +39,21 @@ func (c *LLMClient) Chat(ctx context.Context, req port.ChatRequest) (*port.ChatR
 	return fromProtoResponse(pbResp.Msg), nil
 }
 
-// ChatStream sends a server-streaming Chat request and returns a channel of text deltas.
-func (c *LLMClient) ChatStream(ctx context.Context, req port.ChatRequest) (<-chan string, error) {
+// ChatStream sends a server-streaming Chat request and returns a channel of deltas.
+func (c *LLMClient) ChatStream(ctx context.Context, req port.ChatRequest) (<-chan port.StreamChunk, error) {
 	pbReq := toProtoRequest(req)
 	connectReq := connect.NewRequest(pbReq)
 	stream, err := c.client.ChatStream(ctx, connectReq)
 	if err != nil {
 		return nil, fmt.Errorf("connect chat stream: %w", err)
 	}
-	ch := make(chan string, 64)
+	ch := make(chan port.StreamChunk, 64)
 	go func() {
 		defer close(ch)
 		for stream.Receive() {
 			msg := stream.Msg()
 			if msg.Delta != nil && msg.Delta.Text != nil {
-				ch <- *msg.Delta.Text
+				ch <- port.StreamChunk{Delta: *msg.Delta.Text}
 			}
 		}
 	}()
@@ -112,8 +112,9 @@ func fromProtoResponse(pbResp *agentv1.LLMChatResponse) *port.ChatResponse {
 			resp.Content += *block.Text
 		}
 	}
+	resp.StopReason = pbResp.StopReason
 	if pbResp.Usage != nil {
-		resp.Usage = port.Usage{
+		resp.Usage = &port.Usage{
 			InputTokens:  pbResp.Usage.InputTokens,
 			OutputTokens: pbResp.Usage.OutputTokens,
 		}

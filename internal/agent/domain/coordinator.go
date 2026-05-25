@@ -126,7 +126,7 @@ func (c *AgentCoordinator) Chat(ctx context.Context, messages []port.Message, co
 	return resp.Content, nil
 }
 
-func (c *AgentCoordinator) ChatStream(ctx context.Context, messages []port.Message, config port.LLMConfig) (<-chan string, error) {
+func (c *AgentCoordinator) ChatStream(ctx context.Context, messages []port.Message, config port.LLMConfig) (<-chan port.StreamChunk, error) {
 	return c.llmClient.ChatStream(ctx, port.ChatRequest{Messages: messages, Config: config})
 }
 

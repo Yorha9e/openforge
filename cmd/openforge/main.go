@@ -104,9 +104,9 @@ func main() {
 		}
 
 		var fullResponse strings.Builder
-		for text := range ch {
-			fmt.Print(text)
-			fullResponse.WriteString(text)
+		for chunk := range ch {
+			fmt.Print(chunk.Delta)
+			fullResponse.WriteString(chunk.Delta)
 		}
 		fmt.Println()
 		fmt.Println()
