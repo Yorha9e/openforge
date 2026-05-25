@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -201,14 +202,40 @@ func (c *chainSecretStore) Get(ctx context.Context, key string) ([]byte, error) 
 	return nil, fmt.Errorf("chain: all %d stores failed for %q: %w", len(c.stores), key, lastErr)
 }
 
-type envfileSecretStore struct{}
+type envfileSecretStore struct {
+	dotenv map[string]string
+}
+
+func newEnvfileSecretStore() *envfileSecretStore {
+	s := &envfileSecretStore{dotenv: make(map[string]string)}
+	for _, path := range []string{".env", "../.env", "../../.env"} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			parts := strings.SplitN(line, "=", 2)
+			if len(parts) == 2 {
+				s.dotenv[strings.TrimSpace(parts[0])] = strings.Trim(strings.TrimSpace(parts[1]), "'\"")
+			}
+		}
+		break
+	}
+	return s
+}
 
 func (s *envfileSecretStore) Get(_ context.Context, key string) ([]byte, error) {
-	val := os.Getenv(key)
-	if val == "" {
-		return nil, fmt.Errorf("env var %q not set", key)
+	if val := os.Getenv(key); val != "" {
+		return []byte(val), nil
 	}
-	return []byte(val), nil
+	if val, ok := s.dotenv[key]; ok && val != "" {
+		return []byte(val), nil
+	}
+	return nil, fmt.Errorf("env var %q not set (check .env file or environment)", key)
 }
 
 func newSecretStore(cfg *Config) kernel.SecretStore {
@@ -217,14 +244,14 @@ func newSecretStore(cfg *Config) kernel.SecretStore {
 	// implementation so it takes priority over env.
 	switch cfg.SecretStore {
 	case "envfile":
-		stores = []kernel.SecretStore{&envfileSecretStore{}}
+		stores = []kernel.SecretStore{newEnvfileSecretStore()}
 	case "vault-sidecar", "vault-ha":
 		// Future: primary = Vault, fallback = env for local dev convenience.
 		stores = []kernel.SecretStore{
-			&envfileSecretStore{}, // fallback only until real Vault adapter exists
+			newEnvfileSecretStore(), // fallback only until real Vault adapter exists
 		}
 	default:
-		stores = []kernel.SecretStore{&envfileSecretStore{}}
+		stores = []kernel.SecretStore{newEnvfileSecretStore()}
 	}
 	if len(stores) == 1 {
 		return stores[0]
