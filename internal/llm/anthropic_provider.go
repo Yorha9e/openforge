@@ -102,27 +102,47 @@ func (p *AnthropicProvider) setHeaders(req *http.Request) {
 }
 
 func (p *AnthropicProvider) parseResponse(r io.Reader) (ChatResponse, error) {
+	body, err := io.ReadAll(r)
+	if err != nil {
+		return ChatResponse{}, err
+	}
 	var result struct {
-		Content    []struct{ Text string }
+		Content    []struct{ Text string `json:"text"` } `json:"content"`
 		StopReason string `json:"stop_reason"`
 		Usage      struct {
 			InputTokens  int `json:"input_tokens"`
 			OutputTokens int `json:"output_tokens"`
-		}
+		} `json:"usage"`
 	}
-	if err := json.NewDecoder(r).Decode(&result); err != nil {
-		return ChatResponse{}, err
+	if err := json.Unmarshal(body, &result); err == nil && len(result.Content) > 0 {
+		return ChatResponse{
+			Content:    result.Content[0].Text,
+			StopReason: result.StopReason,
+			Usage:      Usage{PromptTokens: result.Usage.InputTokens, CompletionTokens: result.Usage.OutputTokens},
+		}, nil
 	}
-	text := ""
-	if len(result.Content) > 0 {
-		text = result.Content[0].Text
+	var openaiResp struct {
+		Choices []struct {
+			Message      struct{ Content string `json:"content"` } `json:"message"`
+			FinishReason string `json:"finish_reason"`
+		} `json:"choices"`
+		Usage struct {
+			PromptTokens     int `json:"prompt_tokens"`
+			CompletionTokens int `json:"completion_tokens"`
+		} `json:"usage"`
 	}
-	return ChatResponse{
-		Content:    text,
-		StopReason: result.StopReason,
-		Usage:      Usage{PromptTokens: result.Usage.InputTokens, CompletionTokens: result.Usage.OutputTokens},
-	}, nil
+	if err := json.Unmarshal(body, &openaiResp); err == nil && len(openaiResp.Choices) > 0 {
+		sr := openaiResp.Choices[0].FinishReason
+		if sr == "stop" { sr = "end_turn" }
+		return ChatResponse{
+			Content:    openaiResp.Choices[0].Message.Content,
+			StopReason: sr,
+			Usage:      Usage{PromptTokens: openaiResp.Usage.PromptTokens, CompletionTokens: openaiResp.Usage.CompletionTokens},
+		}, nil
+	}
+	return ChatResponse{Content: string(body), StopReason: "end_turn"}, nil
 }
+
 
 func (p *AnthropicProvider) readSSE(r io.ReadCloser, ch chan<- StreamChunk) {
 	defer close(ch)
