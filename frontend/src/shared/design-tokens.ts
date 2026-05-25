@@ -1,3 +1,10 @@
+/**
+ * Design tokens for the OpenForge dark theme.
+ *
+ * @deprecated Use ThemeProvider + useTheme() from `theme-provider.tsx` instead.
+ * The ThemeProvider dynamically resolves tokens for dark, light, and high-contrast
+ * themes, and is the preferred way to access themed values throughout the app.
+ */
 export const tokens = {
   bg: '#0F172A',
   surface: '#1E293B',

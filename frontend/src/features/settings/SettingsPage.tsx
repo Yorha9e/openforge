@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../../shared/api';
+import { useTheme, type Theme } from '../../shared/theme-provider';
 
 interface Settings {
   notifications: {
@@ -10,7 +11,7 @@ interface Settings {
   };
   layout: {
     editorFontSize: number;
-    theme: 'dark' | 'light';
+    theme: Theme;
     defaultViewMode: 'simple' | 'pro';
   };
   language: {
@@ -83,6 +84,7 @@ function SettingsCard({ title, children }: { title: string; children: React.Reac
 }
 
 export function SettingsPage() {
+  const { theme, setTheme } = useTheme();
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -237,8 +239,12 @@ export function SettingsPage() {
             <div>
               <label style={{ display: 'block', fontSize: 13, color: '#94a3b8', marginBottom: 6 }}>Theme</label>
               <select
-                value={settings.layout.theme}
-                onChange={e => updateNested('layout', 'theme', e.target.value as 'dark' | 'light')}
+                value={theme}
+                onChange={e => {
+                  const t = e.target.value as Theme;
+                  setTheme(t);
+                  updateNested('layout', 'theme', t);
+                }}
                 style={{
                   width: '100%', background: '#0F172A', border: '1px solid #334155',
                   borderRadius: 4, padding: '8px 12px', color: '#F8FAFC', fontSize: 13,
@@ -247,6 +253,7 @@ export function SettingsPage() {
               >
                 <option value="dark">Dark</option>
                 <option value="light">Light</option>
+                <option value="high-contrast">High Contrast</option>
               </select>
             </div>
             <div>
