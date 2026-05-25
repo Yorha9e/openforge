@@ -18,13 +18,13 @@ func (s *stubLLMClient) Chat(ctx context.Context, req port.ChatRequest) (*port.C
 	return &port.ChatResponse{Content: s.response}, s.err
 }
 
-func (s *stubLLMClient) ChatStream(ctx context.Context, req port.ChatRequest) (<-chan string, error) {
+func (s *stubLLMClient) ChatStream(ctx context.Context, req port.ChatRequest) (<-chan port.StreamChunk, error) {
 	if s.err != nil {
 		// Return nil channel so QueryEngine's nil-channel safety emits error event
 		return nil, nil
 	}
-	ch := make(chan string, 1)
-	ch <- s.response
+	ch := make(chan port.StreamChunk, 1)
+	ch <- port.StreamChunk{Delta: s.response, FinishReason: "end_turn"}
 	close(ch)
 	return ch, nil
 }
@@ -42,11 +42,11 @@ func (c *capturingLLMClient) Chat(ctx context.Context, req port.ChatRequest) (*p
 	return &port.ChatResponse{Content: c.response}, nil
 }
 
-func (c *capturingLLMClient) ChatStream(ctx context.Context, req port.ChatRequest) (<-chan string, error) {
+func (c *capturingLLMClient) ChatStream(ctx context.Context, req port.ChatRequest) (<-chan port.StreamChunk, error) {
 	c.lastSystemPrompt = req.SystemPrompt
 	c.lastMessages = req.Messages
-	ch := make(chan string, 1)
-	ch <- c.response
+	ch := make(chan port.StreamChunk, 1)
+	ch <- port.StreamChunk{Delta: c.response, FinishReason: "end_turn"}
 	close(ch)
 	return ch, nil
 }

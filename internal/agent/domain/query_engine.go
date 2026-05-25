@@ -149,8 +149,8 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, msg string) (<-chan St
 
 		var full strings.Builder
 		for chunk := range stream {
-			full.WriteString(chunk)
-			out <- StreamEvent{Type: "delta", Content: chunk}
+			full.WriteString(chunk.Delta)
+			out <- StreamEvent{Type: "delta", Content: chunk.Delta}
 		}
 
 		responseText := full.String()

@@ -23,9 +23,10 @@ type LLMConfig struct {
 }
 
 type ChatResponse struct {
-	ID      string
-	Content string
-	Usage   Usage
+	ID           string
+	Content      string
+	StopReason   string // "end_turn" | "tool_use" | "max_tokens" | "stop_sequence"
+	Usage        *Usage
 }
 
 type Usage struct {
@@ -33,7 +34,13 @@ type Usage struct {
 	OutputTokens int64
 }
 
+type StreamChunk struct {
+	Delta        string
+	FinishReason string // final chunk carries stop_reason
+	Usage        *Usage // final chunk may carry usage
+}
+
 type LLMRouterClient interface {
 	Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error)
-	ChatStream(ctx context.Context, req ChatRequest) (<-chan string, error)
+	ChatStream(ctx context.Context, req ChatRequest) (<-chan StreamChunk, error)
 }
