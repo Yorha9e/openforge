@@ -61,7 +61,44 @@ export function ChatProvider({ pipelineId, children }: { pipelineId: string; chi
       }]);
     });
     // Pipeline stage/gate events are shown in the progress indicator, not as chat messages.
-    return () => { unsub1(); unsub2(); unsub3(); unsub4(); };
+
+    // Tool execution events
+    const unsub5 = subscribe('tool.start', (p: any) => {
+      setMessages(prev => [...prev, {
+        id: `tool-start-${++idCounter.current}`,
+        role: 'system',
+        content: `Running ${p?.tool_name}...`,
+        timestamp: Date.now(),
+      }]);
+    });
+    const unsub6 = subscribe('tool.done', (p: any) => {
+      setMessages(prev => [...prev, {
+        id: `tool-done-${++idCounter.current}`,
+        role: 'system',
+        content: `${p?.tool_name}: ${p?.status} (${p?.duration_ms}ms)`,
+        timestamp: Date.now(),
+      }]);
+    });
+    const unsub7 = subscribe('tool.error', (p: any) => {
+      setMessages(prev => [...prev, {
+        id: `tool-err-${++idCounter.current}`,
+        role: 'system',
+        content: `${p?.tool_name} failed: ${p?.error_code} — ${p?.message}`,
+        timestamp: Date.now(),
+      }]);
+    });
+
+    // Context compression notification
+    const unsub8 = subscribe('context.compress', (p: any) => {
+      setMessages(prev => [...prev, {
+        id: `compress-${++idCounter.current}`,
+        role: 'system',
+        content: `Context compressed: ${p?.before_tokens} → ${p?.after_tokens} tokens (${p?.rounds_compressed} rounds)`,
+        timestamp: Date.now(),
+      }]);
+    });
+
+    return () => { unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); unsub6(); unsub7(); unsub8(); };
   }, [subscribe]);
 
   const send = useCallback((_pid: string, content: string) => {
