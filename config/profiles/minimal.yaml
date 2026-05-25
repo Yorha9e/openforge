@@ -14,6 +14,7 @@ disaster_recovery: local-backup
 load_balancer: none
 notifier: stdout
 command_executor: local-shell
+dependency_cache: none  # minimal 无共享缓存, 每 sandbox 独立下载
 
 docker:
   host: "unix:///var/run/docker.sock"
