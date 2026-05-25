@@ -67,9 +67,20 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, req ChatRequest) (<-
 }
 
 func (p *AnthropicProvider) buildRequestBody(req ChatRequest, stream bool) []byte {
-	messages := make([]map[string]string, len(req.Messages))
-	for i, m := range req.Messages {
-		messages[i] = map[string]string{"role": m.Role, "content": m.Content}
+	messages := make([]map[string]string, 0, len(req.Messages))
+	for _, m := range req.Messages {
+		role := m.Role
+		// Map OpenForge roles to Anthropic-supported roles.
+		// Anthropic API only allows "user" and "assistant" in the messages array.
+		switch role {
+		case "user", "assistant":
+			// allowed as-is
+		case "tool":
+			role = "user" // tool results must be sent as user messages
+		default:
+			continue // skip system/other roles — these go in the top-level system field
+		}
+		messages = append(messages, map[string]string{"role": role, "content": m.Content})
 	}
 	payload := map[string]interface{}{
 		"model":      req.Model,
