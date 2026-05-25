@@ -1,22 +1,79 @@
-# standard.yaml — single-AZ K8s, 50-200 person team
+# standard.yaml — single-AZ K8s, 50-200 person mid-size team
 profile: standard
 security_tier: prod
 
 secret_store: vault-sidecar
-container_runtime: docker-api
-object_store: minio-single
+container_runtime: docker
+object_store: minio
 task_queue: redis-streams
 event_bus: redis-pubsub
-cache: redis-single
-telemetry: prometheus
+cache: redis
+telemetry: prometheus-loki
 service_registry: dns-srv
-disaster_recovery: pg-standby
+disaster_recovery: pg-streaming
 load_balancer: nginx
-notifier: feishu-webhook
+notifier: feishu
+command_executor: docker-sandbox
+
+docker:
+  host: "unix:///var/run/docker.sock"
+  api_version: "1.45"
 
 database:
-  host: of-pg-primary.internal
+  host: of-postgres-primary
   port: 5432
   user: openforge
+  password: ${DB_PASSWORD}
   dbname: openforge
   sslmode: require
+
+redis:
+  host: of-redis
+  port: 6379
+
+llm:
+  default_provider: deepseek
+  default_model: deepseek
+  models:
+    - alias: opus
+      provider: anthropic
+      model_id: claude-opus-4-7-20250514
+      base_url: https://api.anthropic.com
+      fallback: [sonnet, deepseek]
+    - alias: sonnet
+      provider: anthropic
+      model_id: claude-sonnet-4-6-20250514
+      base_url: https://api.anthropic.com
+      fallback: [haiku, deepseek]
+    - alias: haiku
+      provider: anthropic
+      model_id: claude-haiku-4-5-20251001
+      base_url: https://api.anthropic.com
+    - alias: deepseek
+      provider: deepseek
+      model_id: deepseek-v4-pro[1m]
+      base_url: https://api.deepseek.com/anthropic
+      fallback: [sonnet]
+
+grpc:
+  nodejs_io_addr: of-nodejs-io:50051
+  coordinator_addr: of-coordinator:50052
+
+jwt:
+  secret: ${JWT_SECRET}
+  access_ttl: "1h"
+  refresh_ttl: "24h"
+
+auth:
+  provider: jwt
+  oidc:
+    enabled: false
+    issuer_url: ""
+    client_id: ""
+    client_secret: ""
+    redirect_url: ""
+  builtin_users:
+    - username: admin
+      display_name: "Admin"
+      role: admin
+      password_hash: ${ADMIN_PASSWORD_HASH}
