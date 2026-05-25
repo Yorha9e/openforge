@@ -26,8 +26,8 @@ runLLMLoop(ctx, messages):
     ├─ 3. 解析 stop_reason:
     │   ├─ "end_turn"  → 模型自然结束, break
     │   └─ "tool_use"  →
-    │       ├─ 并行组: IsConcurrencySafe()==true → goroutine 并发
-    │       ├─ 串行组: IsConcurrencySafe()==false → 顺序执行
+    │       ├─ 并行组: ToolRegistry[tc.Name].IsConcurrencySafe==true → goroutine 并发
+    │       ├─ 串行组: ToolRegistry[tc.Name].IsConcurrencySafe==false → 顺序执行
     │       ├─ 输出: 结构化 FormattedToolResult
     │       ├─ 失败: MapToolErrorToFailureCode → ClassifyAndRecover
     │       └─ messages += tool_results
@@ -58,7 +58,21 @@ IDLE → AWAITING_LLM → AWAITING_TOOLS → IDLE
 3. 达到 50 轮硬上限 (安全兜底, WARN 日志)
 4. context_overflow 且二次压缩仍超
 
-### 1.4 与现有 SubmitMessage 的兼容
+### 1.4 Round 定义
+
+一轮 = user message + assistant response + N 个 tool_result (0 或多个):
+
+```go
+type Round struct {
+    User      Message   // 用户消息
+    Assistant Message   // LLM 回复 (可能包含 tool_use)
+    Tools     []Message // 0 或多个 tool_result
+}
+```
+
+压缩和 context window 管理以 Round 为单位, 保留最近 N 个 Round。
+
+### 1.5 与现有 SubmitMessage 的兼容
 
 `SubmitMessage` 外部接口不变。内部改为调用 `runLLMLoop`。返回的 `StreamEvent` 增加 `"tool_start"` 和 `"tool_done"` 类型,前端可实时展示。
 
@@ -66,16 +80,31 @@ IDLE → AWAITING_LLM → AWAITING_TOOLS → IDLE
 
 ## §2 并行工具执行
 
-### 2.1 分组逻辑
+### 2.1 ToolRegistry + ToolMeta
+
+在 `tool_executor.go` 中定义工具注册表。每个已注册工具通过 name lookup:
 
 ```go
-func partition(toolCalls []ToolCallParsed) []ToolCallGroup {
-    // Tool.IsConcurrencySafe() == true → parallel group
-    // Tool.IsConcurrencySafe() == false → individual serial groups
+type ToolMeta struct {
+    Name              string
+    IsConcurrencySafe bool
+    Timeout           time.Duration
+    Executor          func(ctx context.Context, args map[string]interface{}) (string, error)
+}
+
+type ToolRegistry map[string]ToolMeta
+```
+
+### 2.2 分组逻辑
+
+```go
+func (reg ToolRegistry) partition(toolCalls []ToolCallParsed) []ToolCallGroup {
+    // reg[tc.Name].IsConcurrencySafe == true → parallel group
+    // reg[tc.Name].IsConcurrencySafe == false → individual serial groups
 }
 ```
 
-### 2.2 执行策略
+### 2.3 执行策略
 
 | 工具类型 | 执行方式 | 示例 |
 |---------|---------|------|
@@ -84,9 +113,36 @@ func partition(toolCalls []ToolCallParsed) []ToolCallGroup {
 
 并发组内任一工具报错 → 兄弟工具继续,不级联中止。串行组按调用顺序执行,前一个失败不阻断后一个(所有结果都反馈给 LLM)。
 
-### 2.3 超时控制
+### 2.4 并发数量限制
 
-每个 tool 独立 60s 超时,超时 → SIGTERM → 2s → SIGKILL。超时结果作为错误反馈给 LLM。
+限制并发 goroutine 数量 (默认 8), 超过排队等待:
+
+```go
+const maxParallel = 8
+var sem = make(chan struct{}, maxParallel)
+
+func (reg ToolRegistry) executeParallel(tools []ToolCallParsed) []FormattedToolResult {
+    var wg sync.WaitGroup
+    results := make([]FormattedToolResult, len(tools))
+    for i, tc := range tools {
+        wg.Add(1)
+        go func(idx int, tc ToolCallParsed) {
+            defer wg.Done()
+            sem <- struct{}{}        // acquire
+            defer func() { <-sem }() // release
+            results[idx] = reg.executeOne(tc)
+        }(i, tc)
+    }
+    wg.Wait()
+    return results
+}
+```
+
+**不是**限制单次 tool_use 调用的数量 — 一次可以请求任意数量的只读工具, 但 goroutine 并发数受 semaphore 限制。
+
+### 2.5 超时控制
+
+每个 tool 使用 `ToolMeta.Timeout` (独立配置, 默认 60s)。超时 → ctx.Cancel → 返回 timeout error 给 LLM。
 
 ---
 
@@ -210,7 +266,7 @@ Format as structured bullet points.
 ```go
 // 优先: API 返回的 usage
 if response.Usage != nil {
-    qe.tokenUsed = response.Usage.InputTokens + response.Usage.OutputTokens
+    qe.tokenUsed += response.Usage.InputTokens + response.Usage.OutputTokens
     // 注: 累加而非替代, 非首次调用需 +=
 }
 
@@ -235,7 +291,21 @@ else {
 
 ## §7 溢出处理
 
-### 7.1 与检查点系统集成
+### 7.1 QueryEngine 新增字段
+
+```go
+type QueryEngine struct {
+    // ... 现有字段 (llmClient, config, messages, tokenCount, state, promptBuilder, pipelineCtx, forceSkill, mu)
+
+    toolRegistry    ToolRegistry        // 工具注册表
+    roundCount      int32               // 当前轮数
+    checkpointSeq   int32               // 检查点序号
+    checkpointCache []*Checkpoint       // 内存最近 3 个检查点
+    checkpointRepo  CheckpointRepository // PG 异步持久化
+}
+```
+
+### 7.2 与检查点系统集成
 
 ```go
 func (qe *QueryEngine) saveCheckpoint(reason string) {
@@ -266,7 +336,7 @@ func (qe *QueryEngine) saveCheckpoint(reason string) {
 }
 ```
 
-### 7.2 恢复路径
+### 7.3 恢复路径
 
 服务重启 → `recoverFlyingPipelines()` 扫描 PG `WHERE status='running'` → 从 Checkpoint 恢复 `Messages + TokenUsed + RoundCount` → `QueryEngine.Resume()`。
 
@@ -339,7 +409,7 @@ agent:
 
   tool:
     timeout_ms: 60000
-    parallel_max: 8              # 最大并发 tool 数
+    parallel_max: 8              # 最大并发 goroutine 数 (超过排队)
 
   compression:
     summary_model: haiku          # 摘要专用模型
