@@ -93,6 +93,23 @@ func (qe *QueryEngine) SetToolRegistry(reg ToolRegistry) {
 	qe.toolRegistry = reg
 }
 
+func (qe *QueryEngine) buildToolDefs() []agentport.ToolDef {
+	qe.mu.Lock()
+	defer qe.mu.Unlock()
+	defs := make([]agentport.ToolDef, 0, len(qe.toolRegistry))
+	for _, meta := range qe.toolRegistry {
+		defs = append(defs, agentport.ToolDef{
+			Name:        meta.Name,
+			Description: meta.Name + " tool",
+			InputSchema: map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{"input": map[string]string{"type": "string"}},
+			},
+		})
+	}
+	return defs
+}
+
 // SetCompressor sets the context compressor for long conversations.
 func (qe *QueryEngine) SetCompressor(comp *Compressor) {
 	qe.mu.Lock()
@@ -152,6 +169,7 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, msg string) (<-chan St
 		Messages:     trimmed,
 		SystemPrompt: systemPrompt,
 		Config:       qe.config,
+		Tools:        qe.buildToolDefs(),
 	})
 	if err != nil {
 		qe.mu.Lock()
@@ -294,6 +312,7 @@ func (qe *QueryEngine) runToolLoop(ctx context.Context, out chan<- StreamEvent, 
 			Messages:     trimmed,
 			SystemPrompt: systemPrompt,
 			Config:       qe.config,
+			Tools:        qe.buildToolDefs(),
 		})
 		if err != nil {
 			out <- StreamEvent{Type: "error", Error: fmt.Errorf("LLM call failed: %w", err)}

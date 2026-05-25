@@ -8,6 +8,14 @@ type ChatRequest struct {
 	Messages     []Message
 	MaxTokens    int
 	SystemPrompt string
+	Tools        []ToolDef // Anthropic tool definitions
+}
+
+// ToolDef is a tool definition for the LLM.
+type ToolDef struct {
+	Name        string                 `json:"name"`
+	Description string                 `json:"description"`
+	InputSchema map[string]interface{} `json:"input_schema"`
 }
 
 // Message is a normalized chat message.

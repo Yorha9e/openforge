@@ -47,6 +47,7 @@ func (r *Router) Chat(ctx context.Context, req port.ChatRequest) (*port.ChatResp
 	}
 
 	llmReq := ChatRequest{
+		Tools:        convertTools(req.Tools),
 		Model:        entry.ModelID,
 		Messages:     convertMessages(req.Messages),
 		SystemPrompt: req.SystemPrompt,
@@ -110,6 +111,7 @@ func (r *Router) ChatStream(ctx context.Context, req port.ChatRequest) (<-chan p
 	}
 
 	llmReq := ChatRequest{
+		Tools:        convertTools(req.Tools),
 		Model:        entry.ModelID,
 		Messages:     convertMessages(req.Messages),
 		SystemPrompt: req.SystemPrompt,
@@ -170,6 +172,14 @@ func convertMessages(msgs []port.Message) []Message {
 	out := make([]Message, len(msgs))
 	for i, m := range msgs {
 		out[i] = Message{Role: m.Role, Content: m.Content}
+	}
+	return out
+}
+
+func convertTools(tools []port.ToolDef) []ToolDef {
+	out := make([]ToolDef, len(tools))
+	for i, t := range tools {
+		out[i] = ToolDef{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema}
 	}
 	return out
 }

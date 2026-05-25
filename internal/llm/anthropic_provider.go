@@ -90,6 +90,10 @@ func (p *AnthropicProvider) buildRequestBody(req ChatRequest, stream bool) []byt
 	}
 	if req.SystemPrompt != "" {
 		payload["system"] = req.SystemPrompt
+		if len(req.Tools) > 0 {
+			payload["tools"] = req.Tools
+		}
+
 	}
 	b, _ := json.Marshal(payload)
 	return b
