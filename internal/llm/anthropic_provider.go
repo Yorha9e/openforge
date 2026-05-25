@@ -107,7 +107,10 @@ func (p *AnthropicProvider) parseResponse(r io.Reader) (ChatResponse, error) {
 		return ChatResponse{}, err
 	}
 	var result struct {
-		Content    []struct{ Text string `json:"text"` } `json:"content"`
+		Content    []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
 		StopReason string `json:"stop_reason"`
 		Usage      struct {
 			InputTokens  int `json:"input_tokens"`
@@ -115,8 +118,15 @@ func (p *AnthropicProvider) parseResponse(r io.Reader) (ChatResponse, error) {
 		} `json:"usage"`
 	}
 	if err := json.Unmarshal(body, &result); err == nil && len(result.Content) > 0 {
+		// Concatenate all text blocks (DeepSeek may return thinking blocks first)
+		var textParts []string
+		for _, c := range result.Content {
+			if c.Type == "text" || c.Type == "" {
+				textParts = append(textParts, c.Text)
+			}
+		}
 		return ChatResponse{
-			Content:    result.Content[0].Text,
+			Content:    strings.Join(textParts, ""),
 			StopReason: result.StopReason,
 			Usage:      Usage{PromptTokens: result.Usage.InputTokens, CompletionTokens: result.Usage.OutputTokens},
 		}, nil
