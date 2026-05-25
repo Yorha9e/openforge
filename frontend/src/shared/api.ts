@@ -101,6 +101,7 @@ export const api = {
 
   // Admin
   getAdminStatus: () => request<any>('/admin/status'),
+  listExperiments: () => request<any[]>('/admin/experiments'),
 
   // Health (public, but use request helper for consistency)
   getHealth: () => request<any>('/health'),
