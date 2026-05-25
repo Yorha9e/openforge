@@ -1,6 +1,10 @@
 package domain
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+	"time"
+)
 
 type FailureCode string
 
@@ -92,6 +96,43 @@ func ClassifyAndRecover(code FailureCode, attempt int) RecoveryResult {
 
 	// Layer 4: FATAL
 	return RecoveryResult{ActionEscalate, fmt.Sprintf("FATAL: %s", code)}
+}
+
+// ToolErrorPolicy defines retry behavior for tool execution.
+type ToolErrorPolicy struct {
+	MaxRetries    int
+	RetryDelay    time.Duration
+	BackoffFactor float64
+}
+
+// DefaultToolErrorPolicy returns a sensible default error policy.
+func DefaultToolErrorPolicy() ToolErrorPolicy {
+	return ToolErrorPolicy{
+		MaxRetries:    3,
+		RetryDelay:    1 * time.Second,
+		BackoffFactor: 2.0,
+	}
+}
+
+// MapToolErrorToFailureCode classifies a tool error into a FailureCode.
+func MapToolErrorToFailureCode(err error) FailureCode {
+	errStr := err.Error()
+	switch {
+	case strings.Contains(errStr, "timeout") || strings.Contains(errStr, "deadline exceeded"):
+		return FailAPITimeout
+	case strings.Contains(errStr, "rate limit") || strings.Contains(errStr, "too many requests"):
+		return FailRateLimited
+	case strings.Contains(errStr, "context") || strings.Contains(errStr, "token limit"):
+		return FailContextOverflow
+	case strings.Contains(errStr, "quota") || strings.Contains(errStr, "token budget"):
+		return FailTokenQuotaExceeded
+	case strings.Contains(errStr, "hallucination") || strings.Contains(errStr, "invalid tool"):
+		return FailModelHallucination
+	case strings.Contains(errStr, "dependency"):
+		return FailDependencyConflict
+	default:
+		return FailUnknown
+	}
 }
 
 // IsRetryable returns true if the failure can be retried at a lower layer.

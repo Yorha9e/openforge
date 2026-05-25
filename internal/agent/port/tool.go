@@ -15,10 +15,10 @@ type Tool[Input any, Output any] interface {
 // StreamingTool adds streaming execution capability.
 type StreamingTool[Input any, Output any] interface {
 	Tool[Input, Output]
-	ExecuteStream(ctx context.Context, input Input) (<-chan StreamChunk[Output], error)
+	ExecuteStream(ctx context.Context, input Input) (<-chan ToolStreamChunk[Output], error)
 }
 
-type StreamChunk[T any] struct {
+type ToolStreamChunk[T any] struct {
 	Value T
 	Err   error
 	Done  bool

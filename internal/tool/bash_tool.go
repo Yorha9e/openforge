@@ -49,7 +49,7 @@ func (t *BashTool) Execute(ctx context.Context, input BashInput) (kernel.ExecOut
 	})
 }
 
-func (t *BashTool) ExecuteStream(ctx context.Context, input BashInput) (<-chan agentport.StreamChunk[kernel.ExecOutput], error) {
+func (t *BashTool) ExecuteStream(ctx context.Context, input BashInput) (<-chan agentport.ToolStreamChunk[kernel.ExecOutput], error) {
 	ch, err := t.executor.ExecuteStream(ctx, input.Command, kernel.ExecOptions{
 		WorkDir: input.WorkDir,
 		Timeout: time.Duration(input.TimeoutMs) * time.Millisecond,
@@ -58,11 +58,11 @@ func (t *BashTool) ExecuteStream(ctx context.Context, input BashInput) (<-chan a
 		return nil, err
 	}
 
-	out := make(chan agentport.StreamChunk[kernel.ExecOutput], 64)
+	out := make(chan agentport.ToolStreamChunk[kernel.ExecOutput], 64)
 	go func() {
 		defer close(out)
 		for chunk := range ch {
-			out <- agentport.StreamChunk[kernel.ExecOutput]{
+			out <- agentport.ToolStreamChunk[kernel.ExecOutput]{
 				Value: kernel.ExecOutput{Stdout: chunk.Delta, Stderr: chunk.Stream},
 			}
 		}
