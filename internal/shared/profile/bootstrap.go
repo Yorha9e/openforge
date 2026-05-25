@@ -12,6 +12,7 @@ import (
 	_ "github.com/lib/pq"
 
 	"openforge/internal/adapter"
+	agentadapter "openforge/internal/agent/adapter"
 	"openforge/internal/agent/domain"
 	"openforge/internal/llm"
 	pipelineadapter "openforge/internal/pipeline/adapter"
@@ -42,6 +43,12 @@ type OpenForge struct {
 	SkillLoader         *domain.SkillLoader
 	CapabilityInjector  *domain.CapabilityInjector
 	PriorityEngine      *domain.UnifiedPriorityEngine
+
+	// Phase 7: Learning engine components
+	PreferenceStore    *agentadapter.PGPreferenceStore
+	TrajectoryStore    *agentadapter.PGTrajectoryStore
+	LLMPriorityQueue   *domain.LLMPriorityQueue
+	RetrospectiveGen   *domain.RetrospectiveGenerator
 
 	PipelineRepo    *pipelineadapter.PGRepository
 	PipelineSvc     *service.PipelineService
@@ -150,6 +157,12 @@ func Bootstrap(cfg *Config) (*OpenForge, error) {
 		of.PriorityEngine = domain.NewUnifiedPriorityEngine(of.SkillLoader, nil)
 		of.PriorityEngine.Start()
 	}
+
+		// Phase 7: Learning engine components
+		of.PreferenceStore = agentadapter.NewPGPreferenceStore(db)
+		of.TrajectoryStore = agentadapter.NewPGTrajectoryStore(db)
+		of.LLMPriorityQueue = domain.NewLLMPriorityQueue()
+		of.RetrospectiveGen = domain.NewRetrospectiveGenerator(nil, of.TrajectoryStore, of.PreferenceStore)
 
 	// Run database migrations
 	migrationsDir := "migrations"

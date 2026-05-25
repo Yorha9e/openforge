@@ -14,6 +14,7 @@ import (
 // UnifiedPriorityEngine recalculates skill priorities daily and manages deprecation.
 type UnifiedPriorityEngine struct {
 	skillLoader *SkillLoader
+	trajStore   TrajectoryStore
 	config      *SkillEngineConfig
 	mu          sync.Mutex
 	stopCh      chan struct{}
@@ -84,6 +85,13 @@ func DefaultSkillEngineConfig() *SkillEngineConfig {
 	cfg.Skill.Watch.DebounceMs = 1000
 	cfg.Skill.Watch.PollFallbackS = 30
 	return cfg
+}
+
+// SetTrajectoryStore wires the trajectory store for LearningFactor (Phase 7).
+func (upe *UnifiedPriorityEngine) SetTrajectoryStore(store TrajectoryStore) {
+	upe.mu.Lock()
+	defer upe.mu.Unlock()
+	upe.trajStore = store
 }
 
 // NewUnifiedPriorityEngine creates a new priority engine.
