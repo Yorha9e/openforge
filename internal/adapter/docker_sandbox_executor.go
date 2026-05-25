@@ -11,6 +11,24 @@ import (
 	"openforge/internal/shared/kernel"
 )
 
+// Security layer identifiers for the 5-layer Docker sandbox defense model (§6.2).
+const (
+	SecurityLayerTrivy     = iota + 1 // L1: Pre-flight vulnerability scan via Trivy
+	SecurityLayerHardening             // L2: Read-only rootfs, cap-drop, cgroup limits
+	SecurityLayerSeccomp               // L3: Seccomp syscall filter profile (JSON path)
+	SecurityLayerNetwork               // L4: Network isolation + registry allowlist
+	SecurityLayerValidate              // L5: Dangerous command pattern blocking
+)
+
+// Default sandbox security configuration values.
+const (
+	DefaultMemory     = "2g"                      // Memory limit (L2)
+	DefaultCPU        = "2"                        // CPU limit (L2)
+	DefaultPids       = 100                        // PIDs limit (L2)
+	DefaultNetwork    = "none"                     // Network mode (L4)
+	DefaultTrivyImage = "aquasec/trivy:latest"     // Trivy scanner image (L1)
+)
+
 // execLookPath is replaceable in tests.
 var execLookPath = exec.LookPath
 
@@ -20,8 +38,10 @@ type DockerSandboxConfig struct {
 	MemoryMB    int
 	CPUs        int
 	MaxPids     int
-	NetworkMode string
-	Timeout     time.Duration
+	NetworkMode      string
+	SeccompProfile   string   // Path to seccomp JSON profile (L3)
+	RegistryWhitelist []string // Allowed image registries (L4)
+	Timeout          time.Duration
 }
 
 // dangerousPatterns matches commands that are hard-blocked.
@@ -42,8 +62,10 @@ func defaultDockerSandboxConfig() DockerSandboxConfig {
 		MemoryMB:    2048,
 		CPUs:        2,
 		MaxPids:     100,
-		NetworkMode: "none",
-		Timeout:     30 * time.Second,
+		NetworkMode:      DefaultNetwork,
+		SeccompProfile:   "",     // opt-in; requires explicit profile path
+		RegistryWhitelist: nil,   // opt-in; nil = all registries allowed
+		Timeout:          30 * time.Second,
 	}
 }
 
@@ -59,6 +81,9 @@ type DockerSandboxExecutor struct {
 func NewDockerSandboxExecutor(cfg DockerSandboxConfig) (*DockerSandboxExecutor, error) {
 	if cfg.Image == "" {
 		cfg = defaultDockerSandboxConfig()
+	}
+	if err := cfg.validateRegistry(); err != nil {
+		return nil, err
 	}
 	if _, err := execLookPath("docker"); err != nil {
 		return nil, fmt.Errorf("docker CLI not found: %w", err)
@@ -116,6 +141,10 @@ func (e *DockerSandboxExecutor) buildDockerCmd(command string, opts kernel.ExecO
 		e.cfg.MemoryMB, e.cfg.CPUs, e.cfg.MaxPids, e.cfg.NetworkMode,
 	)
 
+	if e.cfg.SeccompProfile != "" {
+		dockerCmd = fmt.Sprintf("%s --security-opt=seccomp=%s", dockerCmd, e.cfg.SeccompProfile)
+	}
+
 	if opts.WorkDir != "" {
 		dockerCmd = fmt.Sprintf("%s --workdir %s", dockerCmd, opts.WorkDir)
 	}
@@ -145,3 +174,29 @@ func (e *DockerSandboxExecutor) Validate(ctx context.Context, command string, op
 	}
 	return nil
 }
+
+// validateRegistry checks the configured image against the registry whitelist (L4).
+func (c DockerSandboxConfig) validateRegistry() error {
+	if len(c.RegistryWhitelist) == 0 || c.Image == "" {
+		return nil
+	}
+	for _, prefix := range c.RegistryWhitelist {
+		if strings.HasPrefix(c.Image, prefix) {
+			return nil
+		}
+	}
+	return fmt.Errorf("image %q not in registry whitelist %v", c.Image, c.RegistryWhitelist)
+}
+
+// ScanImage runs a Trivy vulnerability scan against the given image (L1).
+// Returns the raw scan report. Returns an error if Docker is unavailable.
+func (e *DockerSandboxExecutor) ScanImage(ctx context.Context, image string) (string, error) {
+	cmd := exec.CommandContext(ctx, "docker", "run", "--rm", DefaultTrivyImage, "image", "--quiet", image)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("trivy scan: %w\n%s", err, string(out))
+	}
+	return string(out), nil
+}
+
+var _ kernel.CommandExecutor = (*DockerSandboxExecutor)(nil)

@@ -166,3 +166,72 @@ func TestBuildDockerCmdEscapesShellMetachars(t *testing.T) {
 		})
 	}
 }
+
+func TestDockerSandboxExecutor_BuildDockerCmd(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     DockerSandboxConfig
+		command string
+		opts    kernel.ExecOptions
+		want    []string // substrings that must appear
+		notWant []string // substrings that must NOT appear
+	}{
+		{
+			name: "all security flags present",
+			cfg: DockerSandboxConfig{
+				Image:       "test:latest",
+				MemoryMB:    2048,
+				CPUs:        2,
+				MaxPids:     100,
+				NetworkMode: "none",
+			},
+			command: "echo hello",
+			want: []string{
+				"docker run", "--rm", "--init", "--read-only", "--cap-drop=ALL",
+				"--memory=", "--cpus=", "--pids-limit=", "--network=none",
+				"test:latest", "/bin/sh -c 'echo hello'",
+			},
+			notWant: []string{"--security-opt=seccomp"},
+		},
+		{
+			name: "includes seccomp when profile set",
+			cfg: DockerSandboxConfig{
+				Image:          "test:latest",
+				SeccompProfile: "/etc/docker/seccomp/default.json",
+				NetworkMode:    DefaultNetwork,
+			},
+			command: "echo hello",
+			want:    []string{"--security-opt=seccomp=/etc/docker/seccomp/default.json"},
+		},
+		{
+			name: "includes workdir and env",
+			cfg: DockerSandboxConfig{
+				Image:       "test:latest",
+				NetworkMode: DefaultNetwork,
+			},
+			command: "echo hello",
+			opts: kernel.ExecOptions{
+				WorkDir: "/workspace",
+				Env:     map[string]string{"FOO": "bar"},
+			},
+			want: []string{"--workdir /workspace", "-e FOO=bar"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			exec := &DockerSandboxExecutor{cfg: tt.cfg}
+			cmd := exec.buildDockerCmd(tt.command, tt.opts)
+			for _, s := range tt.want {
+				if !strings.Contains(cmd, s) {
+					t.Errorf("buildDockerCmd missing %q\n  cmd: %s", s, cmd)
+				}
+			}
+			for _, s := range tt.notWant {
+				if strings.Contains(cmd, s) {
+					t.Errorf("buildDockerCmd should not contain %q\n  cmd: %s", s, cmd)
+				}
+			}
+		})
+	}
+}
