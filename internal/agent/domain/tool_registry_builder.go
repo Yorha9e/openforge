@@ -116,10 +116,6 @@ func DefaultToolRegistry() ToolRegistry {
 		},
 	}
 
-	// search_content (grep alias for Anthropic compatibility)
-	reg["search_content"] = reg["grep"]
-	reg["list_files"] = reg["ls"]
-
 	return reg
 }
 
