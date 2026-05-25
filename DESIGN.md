@@ -2450,6 +2450,78 @@ warm: 10 containers (idle, 预装依赖层缓存)
 水位自适应: warm<3 → 预热5个, cold>30 → 回收闲置
 ```
 
+#### 8.2.1 依赖层共享缓存 (Disk I/O 瓶颈解)
+
+30 个 sandbox 并发 `npm install` 会炸磁盘 I/O。解法: 依赖共享只读层。
+
+```
+Storage 分层:
+  Layer 1 — 共享依赖缓存 (所有 sandbox 共用, Read-Only)
+    ├── npm:   /cache/npm/packages/*
+    ├── go:    /cache/go/mod/*
+    ├── pip:   /cache/pip/packages/*
+    └── apt:   /cache/apt/archives/*
+
+  Layer 2 — Worktree (sandbox 独占, Read-Write)
+    ├── /workspace/project/   → bind mount 项目仓库
+    └── /workspace/output/    → sandbox 产出
+
+挂载顺序:
+  Container 启动
+    → 1. overlay mount: (Layer 1 RO) + (空 upper RW) → /deps
+    → 2. 软链: node_modules → /deps/node_modules
+    → 3. bind mount: project worktree → /workspace
+```
+
+**缓存预热** (Sandbox Pool 启动时):
+
+```bash
+# 一次性拉取常用依赖，后续所有 sandbox 复用
+npm install react@19 react-dom@19 express@5 zod@4 typescript@5 \
+  --prefix /cache/deps/base-node
+go install golang.org/x/tools/gopls@latest
+
+# 项目特定依赖层 (基于 package.json hash)
+if [ ! -d "/cache/deps/proj-{hash}" ]; then
+  npm install --prefix /cache/deps/proj-{hash}
+fi
+```
+
+**命中率模型**:
+
+| 场景 | 命中 | 磁盘写入 |
+|------|------|---------|
+| 预热依赖完全匹配 | 100% | 0 (全部只读) |
+| 缺 1-2 个新包 | 90%+ | 仅新包写入 upper layer |
+| 全新技术栈 (罕见) | 0% | 正常 install (回退模式) |
+
+**为什么不像 Docker 那样用 overlay2?**
+
+Docker overlay2 的 merged view 对 npm 的 `node_modules/.cache` 路径兼容性差。直接用软链更简单:
+
+```
+/workspace/proj-42/node_modules →
+  /cache/deps/proj-{hash}/node_modules  (软链到共享缓存, RO)
+```
+
+**并发安全**: 缓存层只读。写入操作在上层 (upper RW layer)，不修改缓存层。缓存更新通过离线脚本 (每周重建基础镜像)。
+
+```
+重建策略:
+  每周日 03:00: npm update → 构建新依赖缓存 → 验证 hash
+  → 新 sandbox 使用新缓存 (旧 sandbox 不受影响, 使用已有挂载)
+  → 旧缓存保留 7 天 (无 sandbox 引用后 GC)
+```
+
+#### 8.2.2 综合 Disk I/O 对比
+
+| 场景 | 无缓存 | 有共享缓存 |
+|------|--------|-----------|
+| 30 sandbox 并发启动 | ~225K 次文件操作 | ~5K 次 (仅 worktree) |
+| `npm install` 耗时 | 45-120s per sandbox | 0s (已预装) |
+| 磁盘写入量 / Pipeline | 300-500 MB | < 10 MB (仅产出) |
+| Sandbox 分配延迟 | 5-10s (冷启动) | ~100ms (warm + cache) |
+
 ### 8.3 Postgres 读写分离
 
 ```
@@ -2516,13 +2588,15 @@ config/profiles/
 | 服务发现 | `ServiceRegistry` | 静态配置 (YAML) | DNS SRV | K8s Service + DNS |
 | 灾备 | `DisasterRecovery` | 本地 pg_dump | PG 流复制 Standby | Multi-Region Active-Passive |
 | 负载均衡 | `LoadBalancer` | 单实例（无） | Nginx 反代 | K8s Ingress + Service Mesh |
-| 命令执行 | `CommandExecutor` | local-shell (os/exec) | docker-sandbox | docker-sandbox + 5层纵深 |
-| 审批通知 | `Notifier` | 终端 stdout | 飞书 Webhook (带重试) | 飞书 + 钉钉 + 邮件多通道 + 死信队列 |
 | 命令执行 | `CommandExecutor` | `LocalShellExecutor` (宿主机直接 spawn) | `DockerSandboxExecutor` (容器内执行) | `DockerSandboxExecutor` + seccomp + 5 层纵深防护 |
+| 审批通知 | `Notifier` | 终端 stdout | 飞书 Webhook (带重试) | 飞书 + 钉钉 + 邮件多通道 + 死信队列 |
+| 依赖缓存 | `DependencyCache` | 无 (每 sandbox 独立下载) | 共享只读 npm/go/pip 层 (§8.2.1) | 共享层 + 项目级 hash 缓存 + 定期预热 |
 
 > **C1 修复**: `MessageQueue` 拆为 `TaskQueue`(点对点FIFO) + `EventBus`(发布-订阅广播)。`Notifier` 增加重试/死信机制确保可靠送达。
 >
 > **v5 新增**: `CommandExecutor` — Bash 命令执行能力域。minimal 走本地 shell (对标 Claude Code 体验)，standard/enterprise 走 Docker Sandbox (对标 DeerFlow 安全模型)。危险命令硬阻断、路径限制、Profile 降级阻断。
+>
+> **v6 新增**: `DependencyCache` — 依赖共享缓存 (§8.2.1)。解决多 sandbox 并发 `npm install` 的 Disk I/O 瓶颈。共享只读 npm/go/pip 缓存层，依赖命中率 >90%。
 
 #### 10.1.2 Go 注册表 + 启动装配
 
@@ -2556,6 +2630,18 @@ type CommandExecutor interface {
     Validate(ctx context.Context, command string, opts ExecOptions) error
 }
 
+// 依赖缓存: 共享只读依赖层 (npm/go/pip), 解决 Disk I/O 瓶颈
+type DependencyCache interface {
+    Warm(ctx context.Context, spec DependencySpec) error       // 预热指定依赖
+    Layer(ctx context.Context, spec DependencySpec) (string, error) // 返回共享层路径
+    Evict(ctx context.Context, path string, retention time.Duration) error // 延迟回收
+}
+
+type DependencySpec struct {
+    Language   string   // "node" | "go" | "python"
+    PackageFile string   // package.json/go.mod/requirements.txt 内容
+}
+
 // 其余接口 (无变化)
 type ContainerRuntime interface { Create(ctx, spec) (Container, error); Start(id) error; Stop(id) error; Remove(id) error; List() ([]Container, error) }
 type SecretStore      interface { Get(key) ([]byte, error) }
@@ -2579,8 +2665,9 @@ func Bootstrap(profile Profile) *OpenForge {
         Registry:   newServiceRegistry(profile),
         DR:         newDisasterRecovery(profile),
         LB:         newLoadBalancer(profile),
-        Notifier:   newNotifier(profile),
-        CommandExec: newCommandExecutor(profile),
+        Notifier:    newNotifier(profile),
+        CommandExec:  newCommandExecutor(profile),
+        DepCache:     newDependencyCache(profile),
     }
 }
 
