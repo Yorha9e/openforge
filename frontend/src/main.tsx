@@ -4,7 +4,10 @@ import { BrowserRouter } from 'react-router-dom';
 import { AuthProvider } from './shared/auth';
 import { ToastProvider } from './shared/toast';
 import { App } from './App';
+import { initRUM } from './rum';
 import './global.css';
+
+initRUM();
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

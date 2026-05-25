@@ -9,9 +9,11 @@ export function useWebSocket(token: string | null) {
   const listenersRef = useRef<Map<string, Set<(payload: any) => void>>>(new Map());
   const reconnectTimer = useRef<number>(0);
   const reconnectDelay = useRef(1000);
+  const reconnectAttempts = useRef(0);
 
   const connect = useCallback(() => {
     if (!token) return;
+    reconnectAttempts.current += 1;
     const ws = new WebSocket(wsURL());
     wsRef.current = ws;
     setStatus('connecting');
@@ -19,11 +21,17 @@ export function useWebSocket(token: string | null) {
     ws.onopen = () => {
       setStatus('open');
       reconnectDelay.current = 1000;
+      reconnectAttempts.current = 0;
       ws.send(JSON.stringify({ type: 'auth', payload: { token } }));
     };
 
     ws.onclose = () => {
       setStatus('closed');
+      if (reconnectAttempts.current >= 3) {
+        console.warn(
+          '[WS] WebSocket failed to connect after multiple attempts — possible firewall or proxy blocking the connection.',
+        );
+      }
       reconnectTimer.current = window.setTimeout(() => {
         reconnectDelay.current = Math.min(reconnectDelay.current * 2, 30000);
         connect();
