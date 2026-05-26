@@ -10,13 +10,38 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U openforge"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   nodejs-io:
     build: ./nodejs-io
     ports:
       - "50051:50051"
     environment:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-}
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
+
+  openforge:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      DATABASE_URL: postgres://openforge:openforge_dev@postgres:5432/openforge?sslmode=disable
+      LLM_ROUTER_ADDR: nodejs-io:50051
+      JWT_SECRET: ${JWT_SECRET:-dev-secret-change-in-production-32b!}
+      PROFILE: ${PROFILE:-standard}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nodejs-io:
+        condition: service_started
+
 volumes:
   pgdata:

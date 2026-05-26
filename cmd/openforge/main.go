@@ -37,10 +37,22 @@ func main() {
 
 	llmClient := of.LLMRouter
 	toolReg := tool.NewRegistry()
+	
+	// Register core tools
 	toolReg.RegisterTool(&tool.ReadFileTool{})
 	toolReg.RegisterTool(&tool.WriteFileTool{})
+	toolReg.RegisterTool(&tool.EditFileTool{})
+	toolReg.RegisterTool(&tool.ReplaceInFileTool{})
+	toolReg.RegisterTool(&tool.DeleteFileTool{})
+	toolReg.RegisterTool(&tool.ListDirTool{})
+	toolReg.RegisterTool(&tool.SearchFileTool{})
 	toolReg.RegisterTool(&tool.GrepTool{})
 	toolReg.RegisterTool(&tool.GlobTool{})
+	toolReg.RegisterTool(&tool.GitStatusTool{})
+	toolReg.RegisterTool(&tool.GitDiffTool{})
+	toolReg.RegisterTool(&tool.GitLogTool{})
+	toolReg.RegisterTool(&tool.BashToolAdapter{Executor: of.CommandExec})
+	
 	coordinator := domain.NewCoordinator(llmClient, toolReg)
 
 	llmConfig := port.LLMConfig{

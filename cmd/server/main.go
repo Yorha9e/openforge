@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -16,6 +17,12 @@ import (
 )
 
 func main() {
+	// Initialize structured logging
+	logHandler := slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	})
+	slog.SetDefault(slog.New(logHandler))
+
 	configPath := flag.String("config", "config/profiles/minimal.yaml", "profile config path")
 	addr := flag.String("addr", ":8030", "listen address")
 	flag.Parse()
@@ -51,16 +58,17 @@ func main() {
 	}
 
 	go func() {
-		log.Printf("OpenForge server listening on %s (profile: %s)", *addr, cfg.Profile)
+		slog.Info("OpenForge server starting", "addr", *addr, "profile", cfg.Profile)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("server error: %v", err)
+			slog.Error("server error", "error", err)
+			os.Exit(1)
 		}
 	}()
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
-	log.Println("Shutting down...")
+	slog.Info("shutting down server")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

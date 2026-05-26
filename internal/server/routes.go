@@ -3,7 +3,7 @@ package server
 import (
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -17,6 +17,9 @@ import (
 
 func RegisterRoutes(of *profile.OpenForge, jwtSvc *service.JWTService, cfg *profile.Config) http.Handler {
 	mux := http.NewServeMux()
+
+	// Rate limiting (100 req/s per IP)
+	rateLimit := RateLimitMiddleware(100)
 
 	// Health
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
@@ -70,8 +73,8 @@ func RegisterRoutes(of *profile.OpenForge, jwtSvc *service.JWTService, cfg *prof
 	mux.HandleFunc("GET /api/models", withRole("observer", handleListModels(of)))
 
 	// Settings (auth)
-	mux.HandleFunc("GET /api/user/settings", authMw(handleGetSettings()))
-	mux.HandleFunc("PUT /api/user/settings", authMw(handleUpdateSettings()))
+	mux.HandleFunc("GET /api/settings", authMw(handleGetSettings()))
+	mux.HandleFunc("PUT /api/settings", authMw(handleUpdateSettings()))
 
 	// Admin status (admin)
 	mux.HandleFunc("GET /api/admin/status", withAdmin(handleAdminStatus(of, cfg)))
@@ -92,7 +95,7 @@ func RegisterRoutes(of *profile.OpenForge, jwtSvc *service.JWTService, cfg *prof
 	// Static files
 	mux.HandleFunc("GET /", handleStatic())
 
-	return CorsMiddleware(SecurityHeadersMiddleware(LoggingMiddleware(mux)))
+	return CorsMiddleware(SecurityHeadersMiddleware(LoggingMiddleware(rateLimit(mux))))
 }
 
 // sanitizeError returns a user-safe error message, logging the real error.
@@ -101,12 +104,12 @@ func sanitizeError(err error) string {
 	msg := err.Error()
 	// Database connection details
 	if strings.Contains(msg, "dial tcp") || strings.Contains(msg, "connect") || strings.Contains(msg, "connection refused") {
-		log.Printf("[ERROR] database unavailable: %v", err)
+		slog.Error("database unavailable", "error", err)
 		return "service temporarily unavailable, please try again later"
 	}
 	// PostgreSQL driver errors
 	if strings.Contains(msg, "pq:") {
-		log.Printf("[ERROR] database error: %v", err)
+		slog.Error("database error", "error", err)
 		return "request failed, please try again"
 	}
 	return msg
@@ -412,18 +415,52 @@ func handleForkPipeline(of *profile.OpenForge) http.HandlerFunc {
 
 // --- Settings (in-memory, per-session) ---
 
+type userNotificationSettings struct {
+	EmailEnabled bool     `json:"emailEnabled"`
+	WebhookURL   string   `json:"webhookUrl"`
+	Channels     []string `json:"channels"`
+}
+
+type userLayoutSettings struct {
+	EditorFontSize int    `json:"editorFontSize"`
+	Theme          string `json:"theme"`
+	DefaultViewMode string `json:"defaultViewMode"`
+}
+
+type userLanguageSettings struct {
+	Locale   string `json:"locale"`
+	Timezone string `json:"timezone"`
+}
+
+type userProjectSettings struct {
+	WorkDir string `json:"workDir"`
+}
+
 type userSettings struct {
-	Notifications map[string]bool `json:"notifications"`
-	DefaultLayout string          `json:"default_layout"`
-	Theme         string          `json:"theme"`
-	FontSize      int             `json:"font_size"`
+	Notifications userNotificationSettings `json:"notifications"`
+	Layout        userLayoutSettings       `json:"layout"`
+	Language      userLanguageSettings     `json:"language"`
+	Project       userProjectSettings      `json:"project"`
 }
 
 var defaultSettings = userSettings{
-	Notifications: map[string]bool{"pipeline": true, "gate": true, "token": true, "weekly_report": false},
-	DefaultLayout: "simple",
-	Theme:         "dark",
-	FontSize:      14,
+	Notifications: userNotificationSettings{
+		EmailEnabled: true,
+		WebhookURL:   "",
+		Channels:     []string{"email"},
+	},
+	Layout: userLayoutSettings{
+		EditorFontSize: 14,
+		Theme:          "dark",
+		DefaultViewMode: "pro",
+	},
+	Language: userLanguageSettings{
+		Locale:   "en",
+		Timezone: "UTC",
+	},
+	Project: userProjectSettings{
+		WorkDir: "",
+	},
 }
 
 // Session-scoped settings store (in-memory, lost on restart — Phase 7: persist to DB).
@@ -434,10 +471,8 @@ func getSettingsStore(userID string) *userSettings {
 		return s
 	}
 	cp := defaultSettings
-	cp.Notifications = make(map[string]bool)
-	for k, v := range defaultSettings.Notifications {
-		cp.Notifications[k] = v
-	}
+	cp.Notifications.Channels = make([]string, len(defaultSettings.Notifications.Channels))
+	copy(cp.Notifications.Channels, defaultSettings.Notifications.Channels)
 	settingsStore[userID] = &cp
 	return &cp
 }
@@ -457,18 +492,36 @@ func handleUpdateSettings() http.HandlerFunc {
 			return
 		}
 		s := getSettingsStore(UserIDFromContext(r.Context()))
-		if req.Notifications != nil {
+		
+		// Update notifications if provided
+		if req.Notifications.EmailEnabled || req.Notifications.WebhookURL != "" || len(req.Notifications.Channels) > 0 {
 			s.Notifications = req.Notifications
 		}
-		if req.DefaultLayout != "" {
-			s.DefaultLayout = req.DefaultLayout
+		
+		// Update layout if provided
+		if req.Layout.EditorFontSize > 0 {
+			s.Layout.EditorFontSize = req.Layout.EditorFontSize
 		}
-		if req.Theme != "" {
-			s.Theme = req.Theme
+		if req.Layout.Theme != "" {
+			s.Layout.Theme = req.Layout.Theme
 		}
-		if req.FontSize > 0 {
-			s.FontSize = req.FontSize
+		if req.Layout.DefaultViewMode != "" {
+			s.Layout.DefaultViewMode = req.Layout.DefaultViewMode
 		}
+		
+		// Update language if provided
+		if req.Language.Locale != "" {
+			s.Language.Locale = req.Language.Locale
+		}
+		if req.Language.Timezone != "" {
+			s.Language.Timezone = req.Language.Timezone
+		}
+		
+		// Update project settings if provided
+		if req.Project.WorkDir != "" {
+			s.Project.WorkDir = req.Project.WorkDir
+		}
+		
 		writeJSON(w, 200, s)
 	}
 }

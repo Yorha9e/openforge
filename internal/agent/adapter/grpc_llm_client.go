@@ -2,6 +2,7 @@ package adapter
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 
@@ -90,10 +91,22 @@ func toProtoRequest(req port.ChatRequest) *agentv1.LLMChatRequest {
 		systemPrompt = &req.SystemPrompt
 	}
 
+	// Serialize tools for the proto request
+	pbTools := make([]*agentv1.LLMTool, len(req.Tools))
+	for i, t := range req.Tools {
+		schemaBytes, _ := json.Marshal(t.InputSchema)
+		pbTools[i] = &agentv1.LLMTool{
+			Name:        t.Name,
+			Description: t.Description,
+			InputSchema: schemaBytes,
+		}
+	}
+
 	return &agentv1.LLMChatRequest{
 		PipelineId:   "cli-session",
 		Messages:     pbMessages,
 		SystemPrompt: systemPrompt,
+		Tools:        pbTools,
 		Config: &agentv1.LLMConfig{
 			Provider:    req.Config.Provider,
 			Model:       req.Config.Model,

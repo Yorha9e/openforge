@@ -3,7 +3,7 @@
 import (
 	"context"
 	"encoding/json"
-	"log"
+	"log/slog"
 	"net/http"
 	"sync"
 	"time"
@@ -21,7 +21,16 @@ var upgrader = websocket.Upgrader{
 	WriteBufferSize: 1024,
 	CheckOrigin: func(r *http.Request) bool {
 		origin := r.Header.Get("Origin")
-		return origin == "http://localhost:5173" || origin == "http://127.0.0.1:5173" || origin == ""
+		// Allow localhost dev servers (5173, 5174) and empty origin
+		if origin == "" {
+			return true
+		}
+		for _, prefix := range []string{"http://localhost:", "http://127.0.0.1:"} {
+			if len(origin) > len(prefix) && origin[:len(prefix)] == prefix {
+				return true
+			}
+		}
+		return false
 	},
 }
 
@@ -40,6 +49,7 @@ type wsMessage struct {
 type chatSendPayload struct {
 	PipelineID string `json:"pipeline_id"`
 	Message    string `json:"message"`
+	WorkDir    string `json:"work_dir,omitempty"`
 }
 
 type authPayload struct {
@@ -60,7 +70,7 @@ func handleChatWS(of *profile.OpenForge, jwtSvc *service.JWTService) http.Handle
 	return func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
-			log.Printf("ws upgrade failed: %v", err)
+			slog.Error("ws upgrade failed", "error", err)
 			return
 		}
 
@@ -147,7 +157,7 @@ func (c *wsConn) authenticate() bool {
 	}
 
 	c.userID = claims.UserID
-	log.Printf("ws: user %s authenticated", c.userID)
+	slog.Info("ws user authenticated", "user_id", c.userID)
 	return true
 }
 
@@ -167,7 +177,7 @@ func (c *wsConn) handleMessage(raw []byte) {
 			return
 		}
 
-		qe := c.getOrCreateEngine(p.PipelineID)
+		qe := c.getOrCreateEngine(p.PipelineID, p.WorkDir)
 		ctx := context.Background()
 
 		stream, err := qe.SubmitMessage(ctx, p.Message)
@@ -180,6 +190,44 @@ func (c *wsConn) handleMessage(raw []byte) {
 			switch ev.Type {
 			case "delta":
 				c.write(map[string]any{"type": "chat.stream", "payload": map[string]string{"delta": ev.Content}})
+			case "tool_start":
+				c.write(map[string]any{
+					"type": "tool.start",
+					"payload": map[string]string{
+						"tool_name": ev.ToolName,
+						"input":     ev.Content,
+					},
+				})
+			case "tool_done":
+				outputType := detectOutputType(ev.ToolName, ev.Content)
+				c.write(map[string]any{
+					"type": "tool.done",
+					"payload": map[string]string{
+						"tool_name":   ev.ToolName,
+						"output":      ev.Content,
+						"output_type": outputType,
+						"status":      ev.ToolStatus,
+					},
+				})
+			case "tool_error":
+				errMsg := ""
+				if ev.Error != nil {
+					errMsg = ev.Error.Error()
+				}
+				c.write(map[string]any{
+					"type": "tool.error",
+					"payload": map[string]string{
+						"tool_name": ev.ToolName,
+						"error":     errMsg,
+					},
+				})
+			case "context_compress":
+				c.write(map[string]any{
+					"type": "context.compress",
+					"payload": map[string]string{
+						"content": ev.Content,
+					},
+				})
 			case "done":
 				c.write(map[string]any{"type": "chat.stream_done", "payload": map[string]string{"content": ev.Content}})
 			case "error":
@@ -243,7 +291,7 @@ func (c *wsConn) handleMessage(raw []byte) {
 	}
 }
 
-func (c *wsConn) getOrCreateEngine(pipelineID string) *domain.QueryEngine {
+func (c *wsConn) getOrCreateEngine(pipelineID, workDir string) *domain.QueryEngine {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if qe, ok := c.engines[pipelineID]; ok {
@@ -281,7 +329,7 @@ func (c *wsConn) getOrCreateEngine(pipelineID string) *domain.QueryEngine {
 		MaxTokens: 4096,
 	}
 	qe := domain.NewQueryEngine(c.of.LLMRouter, cfg, c.of.PromptBuilder, ctx)
-		qe.SetToolRegistry(domain.DefaultToolRegistry())
+		qe.SetToolRegistry(domain.DefaultToolRegistryWithWorkDir(workDir))
 	c.engines[pipelineID] = qe
 	return qe
 }
@@ -289,4 +337,76 @@ func (c *wsConn) getOrCreateEngine(pipelineID string) *domain.QueryEngine {
 func (c *wsConn) write(v any) {
 	c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 	c.conn.WriteJSON(v)
+}
+
+// detectOutputType determines the output type based on tool name and content.
+// This helps the frontend render tool outputs appropriately (e.g., file trees for ls).
+func detectOutputType(toolName, content string) string {
+	switch toolName {
+	case "ls", "list_dir":
+		return "file_listing"
+	case "bash":
+		// Heuristic: if bash output looks like ls output, treat as file_listing
+		if isFileListingOutput(content) {
+			return "file_listing"
+		}
+		return "text"
+	case "read_file":
+		return "file_content"
+	case "grep", "search_file":
+		return "search_results"
+	case "glob":
+		return "file_list"
+	default:
+		return "text"
+	}
+}
+
+// isFileListingOutput checks if the output looks like a file listing (ls -la format).
+// Returns true if the output contains typical ls patterns like permissions, owner, size, date.
+func isFileListingOutput(content string) bool {
+	// Simple heuristic: check for common ls -la patterns
+	// Pattern: starts with "total" or has permission strings like "drwxr-xr-x" or "-rw-r--r--"
+	if len(content) < 10 {
+		return false
+	}
+	// Check for "total" line at start (common in ls -la)
+	if len(content) > 5 && content[:5] == "total" {
+		return true
+	}
+	// Check for permission patterns (d or - followed by rwx pattern)
+	lines := splitLines(content)
+	if len(lines) > 0 {
+		firstLine := lines[0]
+		if len(firstLine) >= 10 {
+			// Check for permission string pattern: starts with d or -, then rwx pattern
+			if (firstLine[0] == 'd' || firstLine[0] == '-') &&
+				(firstLine[1] == 'r' || firstLine[1] == '-') &&
+				(firstLine[2] == 'w' || firstLine[2] == '-') &&
+				(firstLine[3] == 'x' || firstLine[3] == '-') {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// splitLines splits a string into lines (handles both \n and \r\n).
+func splitLines(s string) []string {
+	var lines []string
+	start := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\n' {
+			lines = append(lines, s[start:i])
+			start = i + 1
+			// Handle \r\n
+			if i > 0 && s[i-1] == '\r' {
+				lines[len(lines)-1] = lines[len(lines)-1][:len(lines[len(lines)-1])-1]
+			}
+		}
+	}
+	if start < len(s) {
+		lines = append(lines, s[start:])
+	}
+	return lines
 }
