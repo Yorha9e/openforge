@@ -22,20 +22,29 @@ export class AnthropicProvider implements LLMProvider {
         content: m.content,
       }));
 
+    // Build tools array for Anthropic API
+    const tools = req.tools?.map((t) => ({
+      name: t.name,
+      description: t.description,
+      input_schema: t.inputSchema,
+    }));
+
     const resp = await this.client.messages.create({
       model: req.config.model,
       max_tokens: req.config.maxTokens ?? 4096,
       temperature: req.config.temperature,
       system: systemMessages.length > 0 ? systemMessages : undefined,
       messages: userMessages,
+      tools: tools && tools.length > 0 ? tools : undefined,
     });
 
-    const textBlock = resp.content.find((b) => b.type === "text");
-    const content = textBlock && textBlock.type === "text" ? textBlock.text : "";
+    // Serialize ALL content blocks as JSON so Go side can parse tool_use blocks
+    const contentJson = JSON.stringify(resp.content);
 
     return {
       id: resp.id,
-      content,
+      content: contentJson,
+      stopReason: resp.stop_reason ?? "end_turn",
       usage: {
         inputTokens: resp.usage.input_tokens,
         outputTokens: resp.usage.output_tokens,

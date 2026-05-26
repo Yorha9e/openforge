@@ -91,10 +91,20 @@ const handler = connectNodeAdapter({
           content: m.content.map((b: any) => b.text ?? "").join(""),
         }));
 
+        // Extract tools from proto request
+        const tools = (req.tools ?? []).map((t: any) => ({
+          name: t.name,
+          description: t.description,
+          inputSchema: t.inputSchema
+            ? JSON.parse(new TextDecoder().decode(t.inputSchema))
+            : {},
+        }));
+
         const model = stripSuffix(req.config?.model || defaultModel);
 
         const result = await anthropic.chat({
           messages,
+          tools,
           config: {
             provider: req.config?.provider ?? "anthropic",
             model,
@@ -122,7 +132,7 @@ const handler = connectNodeAdapter({
               text: result.content,
             }),
           ],
-          stopReason: "end_turn",
+          stopReason: result.stopReason ?? "end_turn",
           usage: create(LLMUsageSchema, {
             inputTokens: BigInt(result.usage.inputTokens),
             outputTokens: BigInt(result.usage.outputTokens),

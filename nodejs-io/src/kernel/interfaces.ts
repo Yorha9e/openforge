@@ -29,6 +29,7 @@ export interface LLMConfig {
 export interface ChatResponse {
   id: string;
   content: string;
+  stopReason?: string;
   usage: { inputTokens: number; outputTokens: number };
 }
 
