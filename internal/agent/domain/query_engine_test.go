@@ -15,7 +15,7 @@ type stubLLMClient struct {
 }
 
 func (s *stubLLMClient) Chat(ctx context.Context, req port.ChatRequest) (*port.ChatResponse, error) {
-	return &port.ChatResponse{Content: s.response}, s.err
+	return &port.ChatResponse{Content: s.response, StopReason: "end_turn"}, s.err
 }
 
 func (s *stubLLMClient) ChatStream(ctx context.Context, req port.ChatRequest) (<-chan port.StreamChunk, error) {
@@ -39,7 +39,7 @@ type capturingLLMClient struct {
 func (c *capturingLLMClient) Chat(ctx context.Context, req port.ChatRequest) (*port.ChatResponse, error) {
 	c.lastSystemPrompt = req.SystemPrompt
 	c.lastMessages = req.Messages
-	return &port.ChatResponse{Content: c.response}, nil
+	return &port.ChatResponse{Content: c.response, StopReason: "end_turn"}, nil
 }
 
 func (c *capturingLLMClient) ChatStream(ctx context.Context, req port.ChatRequest) (<-chan port.StreamChunk, error) {
@@ -413,3 +413,94 @@ func TestQueryEngine_Clear(t *testing.T) {
 		t.Errorf("after clear messages = %d, want 0", len(qe.Messages()))
 	}
 }
+
+func TestParseToolCalls_IgnoresNameOnlyJSON(t *testing.T) {
+	content := `[{"name":"read_file","input":{"path":"hello.py"}}]`
+	calls := parseToolCalls(content)
+	if len(calls) != 0 {
+		t.Fatalf("expected 0 calls, got %d: %+v", len(calls), calls)
+	}
+}
+
+func TestParseToolCalls_ParsesMixedTextWithToolUseArray(t *testing.T) {
+	content := "在 D:/agent 目录中，先看文件。\n" +
+		`[{"id":"call_1","type":"tool_use","name":"read_file","input":{"path":"hello.py"}}]` +
+		"\n然后继续。"
+
+	calls := parseToolCalls(content)
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 call, got %d", len(calls))
+	}
+	if calls[0].Name != "read_file" {
+		t.Fatalf("expected read_file, got %s", calls[0].Name)
+	}
+	if got, _ := calls[0].Args["path"].(string); got != "hello.py" {
+		t.Fatalf("expected path hello.py, got %#v", calls[0].Args["path"])
+	}
+}
+
+func TestParseToolCalls_BashNestedInputCompatibility(t *testing.T) {
+	content := `[{"id":"call_1","type":"tool_use","name":"bash","input":{"input":"cat hello.py"}}]`
+	calls := parseToolCalls(content)
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 call, got %d", len(calls))
+	}
+	if got, _ := calls[0].Args["command"].(string); got != "cat hello.py" {
+		t.Fatalf("expected command cat hello.py, got %#v", calls[0].Args)
+	}
+}
+
+func TestExtractTextOnly_StripsToolUseFencedJSON(t *testing.T) {
+	content := "先说明\n```json\n[{\"type\":\"tool_use\",\"name\":\"ls\",\"input\":{\"path\":\".\"}}]\n```\n结尾"
+	cleaned := extractTextOnly(content)
+	if cleaned != "先说明\n\n结尾" {
+		t.Fatalf("unexpected cleaned content: %q", cleaned)
+	}
+}
+
+func TestToolInputSchema_RequiredFields(t *testing.T) {
+	bashSchema := toolInputSchema("bash")
+	required, ok := bashSchema["required"].([]string)
+	if !ok || len(required) != 1 || required[0] != "command" {
+		t.Fatalf("bash required mismatch: %#v", bashSchema["required"])
+	}
+
+	writeSchema := toolInputSchema("write_file")
+	required, ok = writeSchema["required"].([]string)
+	if !ok || len(required) != 2 {
+		t.Fatalf("write_file required mismatch: %#v", writeSchema["required"])
+	}
+
+	grepSchema := toolInputSchema("grep")
+	required, ok = grepSchema["required"].([]string)
+	if !ok || len(required) != 1 || required[0] != "pattern" {
+		t.Fatalf("grep required mismatch: %#v", grepSchema["required"])
+	}
+}
+
+func TestBuildToolDefs_UsesToolInputSchema(t *testing.T) {
+	qe := NewQueryEngine(&stubLLMClient{}, port.LLMConfig{}, nil, PipelineContext{})
+	qe.SetToolRegistry(ToolRegistry{
+		"bash":       {Name: "bash"},
+		"write_file": {Name: "write_file"},
+	})
+
+	defs := qe.buildToolDefs()
+	if len(defs) != 2 {
+		t.Fatalf("expected 2 defs, got %d", len(defs))
+	}
+
+	found := map[string]map[string]interface{}{}
+	for _, d := range defs {
+		found[d.Name] = d.InputSchema
+	}
+
+	if req, ok := found["bash"]["required"].([]string); !ok || len(req) != 1 || req[0] != "command" {
+		t.Fatalf("bash input schema required mismatch: %#v", found["bash"])
+	}
+	if req, ok := found["write_file"]["required"].([]string); !ok || len(req) != 2 {
+		t.Fatalf("write_file input schema required mismatch: %#v", found["write_file"])
+	}
+}
+
+

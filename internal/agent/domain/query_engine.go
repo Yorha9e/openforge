@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -101,13 +102,73 @@ func (qe *QueryEngine) buildToolDefs() []agentport.ToolDef {
 		defs = append(defs, agentport.ToolDef{
 			Name:        meta.Name,
 			Description: meta.Name + " tool",
-			InputSchema: map[string]interface{}{
-				"type":       "object",
-				"properties": map[string]interface{}{"input": map[string]string{"type": "string"}},
-			},
+			InputSchema: toolInputSchema(meta.Name),
 		})
 	}
 	return defs
+}
+
+func toolInputSchema(name string) map[string]interface{} {
+	base := map[string]interface{}{
+		"type":                 "object",
+		"additionalProperties": true,
+	}
+
+	switch name {
+	case "bash":
+		base["properties"] = map[string]interface{}{
+			"command": map[string]interface{}{"type": "string"},
+		}
+		base["required"] = []string{"command"}
+	case "read_file", "file_exists", "delete_file", "mkdir", "ls", "glob", "file_info":
+		base["properties"] = map[string]interface{}{
+			"path": map[string]interface{}{"type": "string"},
+		}
+		if name != "ls" && name != "glob" {
+			base["required"] = []string{"path"}
+		}
+	case "write_file", "append_file":
+		base["properties"] = map[string]interface{}{
+			"path":    map[string]interface{}{"type": "string"},
+			"content": map[string]interface{}{"type": "string"},
+		}
+		base["required"] = []string{"path", "content"}
+	case "edit_file":
+		base["properties"] = map[string]interface{}{
+			"path":    map[string]interface{}{"type": "string"},
+			"old_str": map[string]interface{}{"type": "string"},
+			"new_str": map[string]interface{}{"type": "string"},
+		}
+		base["required"] = []string{"path", "old_str", "new_str"}
+	case "copy_file", "move_file":
+		base["properties"] = map[string]interface{}{
+			"src": map[string]interface{}{"type": "string"},
+			"dst": map[string]interface{}{"type": "string"},
+		}
+		base["required"] = []string{"src", "dst"}
+	case "read_lines":
+		base["properties"] = map[string]interface{}{
+			"path":  map[string]interface{}{"type": "string"},
+			"start": map[string]interface{}{"type": "number"},
+			"end":   map[string]interface{}{"type": "number"},
+		}
+		base["required"] = []string{"path"}
+	case "insert_at_line":
+		base["properties"] = map[string]interface{}{
+			"path":    map[string]interface{}{"type": "string"},
+			"line":    map[string]interface{}{"type": "number"},
+			"content": map[string]interface{}{"type": "string"},
+		}
+		base["required"] = []string{"path", "line", "content"}
+	case "grep":
+		base["properties"] = map[string]interface{}{
+			"pattern": map[string]interface{}{"type": "string"},
+			"path":    map[string]interface{}{"type": "string"},
+		}
+		base["required"] = []string{"pattern"}
+	}
+
+	return base
 }
 
 // SetCompressor sets the context compressor for long conversations.
@@ -228,7 +289,7 @@ func singleTurnOut(content string) <-chan StreamEvent {
 func (qe *QueryEngine) runToolLoop(ctx context.Context, out chan<- StreamEvent, firstResp *agentport.ChatResponse, firstToolCalls []ToolCallParsed) {
 	defer close(out)
 
-	out <- StreamEvent{Type: "delta", Content: firstResp.Content}
+	out <- StreamEvent{Type: "delta", Content: extractTextOnly(firstResp.Content)}
 
 	toolCalls := firstToolCalls
 	const maxRounds = 50
@@ -325,14 +386,14 @@ func (qe *QueryEngine) runToolLoop(ctx context.Context, out chan<- StreamEvent, 
 			atomic.AddInt64(&qe.tokenCount, int64(len(resp.Content)/4))
 		}
 
-		out <- StreamEvent{Type: "delta", Content: resp.Content}
+		out <- StreamEvent{Type: "delta", Content: extractTextOnly(resp.Content)}
 
 		if resp.StopReason == "end_turn" || resp.StopReason == "stop_sequence" {
 			qe.mu.Lock()
 			qe.messages = append(qe.messages, agentport.Message{Role: "assistant", Content: resp.Content})
 			qe.state = QueryStateAwaitingUser
 			qe.mu.Unlock()
-			out <- StreamEvent{Type: "done", Content: resp.Content}
+			out <- StreamEvent{Type: "done", Content: extractTextOnly(resp.Content)}
 			return
 		}
 
@@ -342,7 +403,7 @@ func (qe *QueryEngine) runToolLoop(ctx context.Context, out chan<- StreamEvent, 
 			qe.messages = append(qe.messages, agentport.Message{Role: "assistant", Content: resp.Content})
 			qe.state = QueryStateAwaitingUser
 			qe.mu.Unlock()
-			out <- StreamEvent{Type: "done", Content: resp.Content}
+			out <- StreamEvent{Type: "done", Content: extractTextOnly(resp.Content)}
 			return
 		}
 
@@ -382,67 +443,144 @@ func (qe *QueryEngine) buildPrompt(userMsg string, messages []agentport.Message)
 }
 
 // parseToolCalls extracts tool calls from LLM content.
-// Handles Anthropic tool_use content blocks — looks for tool_use JSON in the response.
+// Handles Anthropic tool_use blocks, including JSON snippets embedded in mixed text.
 func parseToolCalls(content string) []ToolCallParsed {
 	var calls []ToolCallParsed
 
-	// Try to parse as an Anthropic content block array first
-	var blocks []struct {
-		Type  string                 `json:"type"`
-		Name  string                 `json:"name"`
-		Input map[string]interface{} `json:"input"`
+	normalizeArgs := func(toolName string, args map[string]interface{}) map[string]interface{} {
+		if rawInput, ok := args["input"]; ok && len(args) == 1 {
+			switch v := rawInput.(type) {
+			case map[string]interface{}:
+				args = v
+			case string:
+				parsed := make(map[string]interface{})
+				if json.Unmarshal([]byte(v), &parsed) == nil && len(parsed) > 0 {
+					args = parsed
+				} else if toolName == "bash" {
+					args = map[string]interface{}{"command": v}
+				}
+			}
+		}
+		return args
 	}
-	if err := json.Unmarshal([]byte(content), &blocks); err == nil {
-		for _, b := range blocks {
-			if b.Type == "tool_use" && b.Name != "" {
+
+	decodeInput := func(raw json.RawMessage, toolName string) map[string]interface{} {
+		args := make(map[string]interface{})
+		if err := json.Unmarshal(raw, &args); err != nil {
+			var inputStr string
+			if err := json.Unmarshal(raw, &inputStr); err == nil {
+				_ = json.Unmarshal([]byte(inputStr), &args)
+			}
+		}
+		return normalizeArgs(toolName, args)
+	}
+
+	decodeBlocks := func(raw string) bool {
+		startCount := len(calls)
+
+		var blocks []struct {
+			Type  string          `json:"type"`
+			Name  string          `json:"name"`
+			Input json.RawMessage `json:"input"`
+		}
+		if err := json.Unmarshal([]byte(raw), &blocks); err == nil {
+			for _, b := range blocks {
+				if b.Type != "tool_use" || b.Name == "" {
+					continue
+				}
 				calls = append(calls, ToolCallParsed{
-					ID: fmt.Sprintf("toolu-%d", len(calls)), Name: b.Name, Args: b.Input,
+					ID:   fmt.Sprintf("toolu-%d", len(calls)),
+					Name: b.Name,
+					Args: decodeInput(b.Input, b.Name),
 				})
 			}
 		}
-		if len(calls) > 0 {
+
+		var single struct {
+			Type  string          `json:"type"`
+			Name  string          `json:"name"`
+			Input json.RawMessage `json:"input"`
+		}
+		if err := json.Unmarshal([]byte(raw), &single); err == nil {
+			if single.Type == "tool_use" && single.Name != "" {
+				calls = append(calls, ToolCallParsed{
+					ID:   fmt.Sprintf("toolu-%d", len(calls)),
+					Name: single.Name,
+					Args: decodeInput(single.Input, single.Name),
+				})
+			}
+		}
+
+		return len(calls) > startCount
+	}
+
+	if decodeBlocks(content) {
+		return calls
+	}
+
+	fencedJSONRe := regexp.MustCompile("(?s)```(?:json)?\\s*([\\[{].*?[\\]}])\\s*```")
+	for _, m := range fencedJSONRe.FindAllStringSubmatch(content, -1) {
+		if len(m) > 1 && decodeBlocks(strings.TrimSpace(m[1])) {
 			return calls
 		}
 	}
 
-	// Fallback: heuristic scan for tool_use patterns in the text
-	idx := 0
-	for {
-		start := strings.Index(content[idx:], `"tool_use"`)
-		if start < 0 {
-			start = strings.Index(content[idx:], `"name"`)
-			if start < 0 {
-				break
+	if tuIdx := strings.Index(content, `"tool_use"`); tuIdx >= 0 {
+		if arrStart := strings.LastIndex(content[:tuIdx], "["); arrStart >= 0 {
+			if arrEndRel := strings.Index(content[tuIdx:], "]"); arrEndRel >= 0 {
+				candidate := content[arrStart : tuIdx+arrEndRel+1]
+				if decodeBlocks(candidate) {
+					return calls
+				}
 			}
 		}
-		start += idx + 1
-		if start >= len(content) {
-			break
-		}
-		// Find the tool name near this position
-		rest := content[start:]
-		nameIdx := strings.Index(rest, `"name"`)
-		if nameIdx < 0 {
-			break
-		}
-		rest = rest[nameIdx+len(`"name"`):]
-		rest = strings.TrimLeft(rest, `": `)
-		nameEnd := strings.IndexAny(rest, `",}`)
-		if nameEnd < 0 {
-			break
-		}
-		name := strings.TrimSpace(rest[:nameEnd])
-		if name != "" && len(name) < 50 {
-			calls = append(calls, ToolCallParsed{
-				ID: fmt.Sprintf("toolu-%d", len(calls)), Name: name, Args: make(map[string]interface{}),
-			})
-		}
-		idx = start + nameIdx + len(`"name"`) + nameEnd
-		if len(calls) >= 20 {
-			break
+		if objStart := strings.LastIndex(content[:tuIdx], "{"); objStart >= 0 {
+			if objEndRel := strings.Index(content[tuIdx:], "}"); objEndRel >= 0 {
+				candidate := content[objStart : tuIdx+objEndRel+1]
+				if decodeBlocks(candidate) {
+					return calls
+				}
+			}
 		}
 	}
+
 	return calls
+}
+
+// extractTextOnly strips tool_use/tool_result blocks from Anthropic content JSON,
+// returning only text portions. Also removes embedded tool JSON snippets in mixed output.
+func extractTextOnly(content string) string {
+	var blocks []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal([]byte(content), &blocks); err == nil {
+		var texts []string
+		for _, b := range blocks {
+			if b.Type == "text" && b.Text != "" {
+				texts = append(texts, b.Text)
+			}
+		}
+		if len(texts) > 0 {
+			return strings.Join(texts, "\n")
+		}
+	}
+
+	fencedToolUseRe := regexp.MustCompile("(?s)```(?:json)?\\s*\\[.*?\"tool_use\".*?\\]\\s*```")
+	cleaned := strings.TrimSpace(fencedToolUseRe.ReplaceAllString(content, ""))
+
+	if tuIdx := strings.Index(cleaned, `"tool_use"`); tuIdx >= 0 {
+		start := strings.LastIndex(cleaned[:tuIdx], "[")
+		endRel := strings.Index(cleaned[tuIdx:], "]")
+		if start >= 0 && endRel >= 0 {
+			cleaned = strings.TrimSpace(cleaned[:start] + cleaned[tuIdx+endRel+1:])
+		}
+	}
+
+	if cleaned != "" {
+		return cleaned
+	}
+	return content
 }
 
 func (qe *QueryEngine) saveCheckpoint(reason string) {

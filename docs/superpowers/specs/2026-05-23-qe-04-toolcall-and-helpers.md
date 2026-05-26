@@ -54,6 +54,19 @@ type ToolCallGroup struct {
 }
 ```
 
+## 工具调用契约补充（2026-05-26）
+
+- `tool_use` 解析仅接受显式 `"type":"tool_use"` 的 JSON 对象或数组，避免把普通文本中的 `"name"` 误判为工具调用。
+- `input` 兼容策略：
+  - 推荐：对象参数（如 `{ "path": "hello.py" }`）；
+  - 兼容：`{ "input": { ... } }`（会自动解包）；
+  - 兼容：`bash` 的 `{ "input": "cat hello.py" }`（会映射为 `{ "command": "cat hello.py" }`）。
+- `extractTextOnly` 会清理混合输出中的工具 JSON 片段，避免前端把 `tool_use` 裸 JSON 当普通文本渲染。
+- `workDir` 下路径解析遵循：
+  - 相对路径拼接到 `workDir`；
+  - 绝对路径保持原样；
+  - Windows 的 `C:foo` 视为驱动器相对路径（非绝对路径），`\\server\share` 视为 UNC 绝对路径。
+
 ## Helper 方法
 
 ```go
