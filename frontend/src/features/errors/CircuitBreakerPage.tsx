@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react';
-import { useSearchParams, Link } from 'react-router-dom';
+import { useSearchParams, Link, useNavigate } from 'react-router-dom';
 
 export function CircuitBreakerPage() {
   const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
   const reason = searchParams.get('reason') || 'The upstream service is currently unavailable due to repeated failures.';
   const retryAfterSec = Math.min(Math.max(Number(searchParams.get('retryAfter')) || 30, 10), 300);
   const [remaining, setRemaining] = useState(retryAfterSec);

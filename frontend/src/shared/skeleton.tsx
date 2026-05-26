@@ -16,7 +16,7 @@ export function Skeleton({ width = '100%', height = 16, borderRadius = 4, style 
         width,
         height,
         borderRadius,
-        background: '#151D2B',
+        background: tokens.surface,
         animation: 'of-shimmer 1.5s ease-in-out infinite',
         ...style,
       }}
@@ -27,7 +27,7 @@ export function Skeleton({ width = '100%', height = 16, borderRadius = 4, style 
 /** Card-sized skeleton matching ProjectCard dimensions. */
 export function CardSkeleton() {
   return (
-    <div style={{ background: '#151D2B', border: `1px solid ${tokens.border}`, borderRadius: 8, padding: 16 }}>
+    <div style={{ background: tokens.surface, border: `1px solid ${tokens.border}`, borderRadius: 8, padding: 16 }}>
       <Skeleton width="60%" height={20} />
       <div style={{ height: 8 }} />
       <Skeleton width="80%" height={14} />

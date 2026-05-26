@@ -4,6 +4,7 @@ import { sanitizeHTML } from '../../shared/sanitize';
 import { tokens } from '../../shared/design-tokens';
 import { TextSkeleton } from '../../shared/skeleton';
 import { marked } from 'marked';
+import { ToolCallCard } from './ToolCallCard';
 
 // Configure marked for safety
 marked.setOptions({
@@ -41,28 +42,42 @@ export function MessageList() {
     <div ref={listRef} style={{ flex: 1, overflowY: 'auto', padding: '16px 24px', fontFamily: tokens.fontBody }} aria-live="polite" role="log" aria-label="Chat messages">
       {messages.map(msg => (
         <div key={msg.id} style={{ display: 'flex', justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start', marginBottom: 12 }}>
-          <div style={{
-            maxWidth: '80%', borderRadius: 8, padding: '10px 16px',
-            background: msg.role === 'user' ? tokens.userBubble : msg.role === 'system' ? 'rgba(185,28,28,0.3)' : tokens.surface,
-            color: msg.role === 'system' ? tokens.error : tokens.text,
-            fontSize: 14, lineHeight: 1.6,
-            overflowWrap: 'break-word',
-            overflowX: 'auto',
-            minWidth: 0,
-          }}>
-            {msg.role === 'user' ? (
-              <p style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{msg.content}</p>
-            ) : (
-              <div
-                className="markdown-body"
-                dangerouslySetInnerHTML={{ __html: renderMarkdown(msg.content) }}
-                style={{
-                  // Minimal markdown styling that stays within design system
-                  wordBreak: 'break-word',
-                }}
+          {msg.role === 'tool' ? (
+            <div style={{ maxWidth: '80%', minWidth: 0, width: '100%' }}>
+              <ToolCallCard
+                tool={msg.toolName || 'unknown'}
+                input={msg.toolInput || ''}
+                output={msg.toolOutput}
+                error={msg.toolError}
+                outputType={msg.toolOutputType}
+                status={msg.toolStatus}
+                durationMs={msg.toolDurationMs}
               />
-            )}
-          </div>
+            </div>
+          ) : (
+            <div style={{
+              maxWidth: '80%', borderRadius: 8, padding: '10px 16px',
+              background: msg.role === 'user' ? tokens.userBubble : msg.role === 'system' ? 'rgba(185,28,28,0.3)' : tokens.surface,
+              color: msg.role === 'system' ? tokens.error : tokens.text,
+              fontSize: 14, lineHeight: 1.6,
+              overflowWrap: 'break-word',
+              overflowX: 'auto',
+              minWidth: 0,
+            }}>
+              {msg.role === 'user' ? (
+                <p style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{msg.content}</p>
+              ) : (
+                <div
+                  className="markdown-body"
+                  dangerouslySetInnerHTML={{ __html: renderMarkdown(msg.content) }}
+                  style={{
+                    // Minimal markdown styling that stays within design system
+                    wordBreak: 'break-word',
+                  }}
+                />
+              )}
+            </div>
+          )}
         </div>
       ))}
       {streaming && (

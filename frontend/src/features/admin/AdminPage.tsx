@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import { useAuth, useRole } from '../../shared/auth';
 import { api } from '../../shared/api';
 
@@ -54,7 +55,10 @@ export function AdminPage() {
   return (
     <div style={styles.container}>
       <header style={styles.header}>
-        <h1 style={styles.title}>Admin Panel</h1>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+          <Link to="/" style={{ color: '#94a3b8', textDecoration: 'none', fontSize: 14 }}>&larr; Dashboard</Link>
+          <h1 style={styles.title}>Admin Panel</h1>
+        </div>
         <span style={styles.badge}>OpenForge Phase 6</span>
       </header>
 

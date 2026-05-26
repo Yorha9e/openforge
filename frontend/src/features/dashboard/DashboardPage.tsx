@@ -52,14 +52,17 @@ function NavIcon({ children, to, label, external }: { children: React.ReactNode;
       {...linkProps as any}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
+      onFocus={() => setHovered(true)}
+      onBlur={() => setHovered(false)}
       aria-label={label}
       style={{
         display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
-        padding: '12px 16px', borderRadius: 8, textDecoration: 'none',
+        padding: '14px 16px', borderRadius: 8, textDecoration: 'none',
         background: hovered ? tokens.surface : 'transparent',
         border: `1px solid ${hovered ? tokens.border : 'transparent'}`,
         transition: tokens.transition, cursor: 'pointer',
-        minWidth: 80,
+        minWidth: 80, minHeight: 44,
+        outline: 'none',
       }}
     >
       <div style={{ color: hovered ? tokens.cta : tokens.muted, transition: tokens.transition }}>
@@ -180,7 +183,7 @@ export function DashboardPage() {
               background: 'none', border: `1px solid ${logoutHovered ? tokens.error : tokens.border}`,
               color: logoutHovered ? tokens.error : tokens.muted,
               fontSize: 13, cursor: 'pointer', borderRadius: 6,
-              padding: '4px 12px', transition: tokens.transition,
+              padding: '8px 16px', transition: tokens.transition, minHeight: 44,
             }}>Sign Out</button>
         </div>
       </header>

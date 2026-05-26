@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, Link } from 'react-router-dom';
 import { DockviewReact, DockviewReadyEvent, IDockviewPanelProps } from 'dockview';
 import { ChatPanel } from '../chat/ChatPanel';
 import { DiffPanel } from './DiffPanel';
@@ -69,6 +69,7 @@ export function ProModePage() {
     <div style={{ height: '100vh', background: tokens.bg }}>
       {pipeline && (
         <div style={{ padding: '8px 16px', background: tokens.surface, borderBottom: `1px solid ${tokens.border}`, display: 'flex', gap: 16, alignItems: 'center', fontSize: 13, color: tokens.muted }}>
+          <Link to="/" style={{ color: tokens.muted, textDecoration: 'none', fontSize: 13 }}>&larr; Dashboard</Link>
           <span style={{ color: tokens.text, fontWeight: 600, fontFamily: tokens.fontHeading }}>{pipeline.title}</span>
           <span>#{pipeline.id}</span>
           <span style={{ padding: '2px 8px', borderRadius: 8, background: `${tokens.cta}20`, color: tokens.cta, fontSize: 11 }}>{pipeline.status}</span>

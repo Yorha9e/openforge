@@ -18,12 +18,16 @@ interface Settings {
     locale: string;
     timezone: string;
   };
+  project: {
+    workDir: string;
+  };
 }
 
 const DEFAULT_SETTINGS: Settings = {
   notifications: { emailEnabled: true, webhookUrl: '', channels: ['email'] },
   layout: { editorFontSize: 14, theme: 'dark', defaultViewMode: 'pro' },
   language: { locale: 'en', timezone: 'UTC' },
+  project: { workDir: '' },
 };
 
 const CHANNEL_OPTIONS = ['email', 'slack', 'webhook', 'sms'];
@@ -109,6 +113,9 @@ export function SettingsPage() {
               locale: data.language?.locale ?? DEFAULT_SETTINGS.language.locale,
               timezone: data.language?.timezone ?? DEFAULT_SETTINGS.language.timezone,
             },
+            project: {
+              workDir: data.project?.workDir ?? localStorage.getItem('openforge_work_dir') ?? '',
+            },
           });
         }
       })
@@ -130,15 +137,6 @@ export function SettingsPage() {
     [],
   );
 
-  const toggleChannel = useCallback((ch: string) => {
-    setSettings(prev => {
-      const channels = prev.notifications.channels.includes(ch)
-        ? prev.notifications.channels.filter(c => c !== ch)
-        : [...prev.notifications.channels, ch];
-      return { ...prev, notifications: { ...prev.notifications, channels } };
-    });
-  }, []);
-
   const handleSave = useCallback(async () => {
     setSaving(true);
     setFeedback(null);
@@ -151,6 +149,15 @@ export function SettingsPage() {
       setSaving(false);
     }
   }, [settings]);
+
+  const toggleChannel = useCallback((ch: string) => {
+    setSettings(prev => {
+      const channels = prev.notifications.channels.includes(ch)
+        ? prev.notifications.channels.filter(c => c !== ch)
+        : [...prev.notifications.channels, ch];
+      return { ...prev, notifications: { ...prev.notifications, channels } };
+    });
+  }, []);
 
   if (loading) {
     return (
@@ -307,6 +314,33 @@ export function SettingsPage() {
                   <option key={tz} value={tz}>{tz}</option>
                 ))}
               </select>
+            </div>
+          </div>
+        </SettingsCard>
+
+        <SettingsCard title="Project">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <div>
+              <label style={{ display: 'block', fontSize: 13, color: '#94a3b8', marginBottom: 6 }}>
+                Working Directory
+              </label>
+              <input
+                type="text"
+                value={settings.project.workDir}
+                onChange={e => {
+                  updateNested('project', 'workDir', e.target.value);
+                  localStorage.setItem('openforge_work_dir', e.target.value);
+                }}
+                placeholder="/path/to/your/project (e.g., D:\projects\myapp)"
+                style={{
+                  width: '100%', background: '#0F172A', border: '1px solid #334155',
+                  borderRadius: 4, padding: '8px 12px', color: '#F8FAFC', fontSize: 13,
+                  outline: 'none', boxSizing: 'border-box',
+                }}
+              />
+              <p style={{ fontSize: 12, color: '#64748b', marginTop: 6 }}>
+                Absolute path to your project directory on the server. Tools (read_file, bash, etc.) will execute relative to this directory.
+              </p>
             </div>
           </div>
         </SettingsCard>

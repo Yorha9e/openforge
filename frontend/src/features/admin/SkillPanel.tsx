@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
+import { Link } from 'react-router-dom';
 import { tokens } from '../../shared/design-tokens';
 import { api } from '../../shared/api';
 
@@ -64,7 +65,10 @@ export function SkillPanel() {
   return (
     <div style={{ padding: 24, color: tokens.text, fontFamily: tokens.fontBody }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
-        <h1 style={{ fontSize: 24, fontWeight: 600, margin: 0 }}>Skill Management</h1>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+          <Link to="/" style={{ color: tokens.muted, textDecoration: 'none', fontSize: 14 }}>&larr; Dashboard</Link>
+          <h1 style={{ fontSize: 24, fontWeight: 600, margin: 0 }}>Skill Management</h1>
+        </div>
         <span style={{ fontSize: 13, color: tokens.muted }}>{skills.length} skills loaded</span>
       </div>
 

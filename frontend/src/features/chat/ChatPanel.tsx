@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useParams, useSearchParams } from 'react-router-dom';
+import { useParams, useSearchParams, Link } from 'react-router-dom';
 import { ChatProvider } from './ChatProvider';
 import { MessageList } from './MessageList';
 import { MessageInput } from './MessageInput';
@@ -45,6 +45,9 @@ export function ChatPanel({ embedded }: { embedded?: boolean }) {
       <div style={{ height: containerHeight, maxHeight: containerHeight, background: tokens.bg, color: tokens.text, display: 'flex', flexDirection: 'column', fontFamily: tokens.fontBody }} role="region" aria-label="Chat panel">
         <header style={{ padding: '8px 24px', borderBottom: `1px solid ${tokens.border}`, fontSize: 14, color: tokens.muted, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            {!embedded && (
+              <Link to={`/project/${id}`} style={{ color: tokens.muted, textDecoration: 'none', fontSize: 13 }}>&larr; Project</Link>
+            )}
             <span>Pipeline: {pipelineId}</span>
             {activeSkills.length > 0 && (
               <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>

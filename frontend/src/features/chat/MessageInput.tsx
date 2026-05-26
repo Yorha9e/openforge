@@ -89,7 +89,9 @@ export function MessageInput() {
               opacity: connected ? 1 : 0.5, alignSelf: 'flex-end', fontSize: 14,
               color: tokens.text, transition: tokens.transition,
             }}>
-            {'\u{1F9E9}'}
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>
+            </svg>
           </button>
           {showSkills && (
             <div style={{
@@ -111,7 +113,7 @@ export function MessageInput() {
                   onMouseEnter={e => { (e.target as HTMLElement).style.background = tokens.border; }}
                   onMouseLeave={e => { (e.target as HTMLElement).style.background = 'transparent'; }}
                 >
-                  <div style={{ fontWeight: 500 }}>{'\u{1F9E9}'} {skill.name} <span style={{ fontSize: 11, color: tokens.muted }}>v{skill.version}</span></div>
+                  <div style={{ fontWeight: 500 }}>{skill.name} <span style={{ fontSize: 11, color: tokens.muted }}>v{skill.version}</span></div>
                   <div style={{ fontSize: 11, color: tokens.muted }}>{skill.description}</div>
                 </button>
               ))}
