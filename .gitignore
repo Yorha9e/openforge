@@ -1,10 +1,107 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+bin/
+*.test
+*.out
+
+# Go
 gen/
-nodejs-io/src/gen/
+vendor/
+
+# Node.js
 node_modules/
+nodejs-io/src/gen/
 dist/
+build/
+
+# Environment and secrets
 .env
+.env.*
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.pem
+*.key
+*.crt
+*.p12
+*.jks
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+server.log
+server.err
+vite.log
+vite.err
+
+# Temporary files
+tmp/
+temp/
+_tmp_*
+_temp_*
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Docker
+docker-compose.override.yml
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Project specific
+of3.exe
+of3.exe~
+openforge.exe
+server.exe
+package-lock.json
+settings-page.png
+phase1-summary.md
+review-report.md
+result.md
+
+# Documentation artifacts (keep docs but remove generated reports)
+*-report.md
+*-summary.md
 
 # TLS certificates (generated locally)
 deployments/certs/*.key
 deployments/certs/*.crt
 deployments/certs/*.pem
+
+# Configuration files with sensitive data
+# Use .example files instead
+config/profiles/minimal.yaml
+config/profiles/docker-dev.yaml
+
+# Superpowers worktrees
+.claude/worktrees/
+
+# Brain artifacts
+brain/
+
+# Test outputs
+test_output*.txt
+profile_test.txt
