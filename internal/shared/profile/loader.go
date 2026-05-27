@@ -3,6 +3,7 @@ package profile
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -29,6 +30,11 @@ type Config struct {
 	// Runtime overrides are stored in the feature_flags DB table.
 	FeatureFlags FeatureFlagsConfig `yaml:"feature_flags"`
 
+	// Enterprise adapters configuration
+	Vault  VaultConfig  `yaml:"vault"`
+	Minio  MinioConfig  `yaml:"minio"`
+	Docker DockerConfig `yaml:"docker"`
+
 	Database DatabaseConfig `yaml:"database"`
 	Redis    RedisConfig    `yaml:"redis"`
 	LLM      LLMConfig      `yaml:"llm"`
@@ -43,6 +49,69 @@ type FeatureFlagsConfig struct {
 	ComplianceSuite       bool `yaml:"compliance_suite"`
 	ProductionOps         bool `yaml:"production_ops"`
 	DistributionArtifacts bool `yaml:"distribution_artifacts"`
+}
+
+// VaultConfig holds HashiCorp Vault connection parameters.
+type VaultConfig struct {
+	Addr         string `yaml:"addr"`          // "http://vault:8200"
+	RoleID       string `yaml:"role_id"`       // AppRole
+	SecretID     string `yaml:"secret_id"`
+	AutoUnseal   bool   `yaml:"auto_unseal"`
+	Token        string `yaml:"token"`         // dev mode
+	EnginePath   string `yaml:"engine_path"`   // default "secret"
+	EngineVersion string `yaml:"engine_version"` // G14: "v1" or "v2", empty = auto-detect
+	TimeoutSec   int    `yaml:"timeout_sec"`   // default 3
+}
+
+// EnginePathOrDefault returns the engine path or default "secret".
+func (v VaultConfig) EnginePathOrDefault() string {
+	if v.EnginePath == "" {
+		return "secret"
+	}
+	return v.EnginePath
+}
+
+// TimeoutOrDefault returns the timeout duration or default 3 seconds.
+func (v VaultConfig) TimeoutOrDefault() time.Duration {
+	if v.TimeoutSec <= 0 {
+		return 3 * time.Second
+	}
+	return time.Duration(v.TimeoutSec) * time.Second
+}
+
+// MinioConfig holds MinIO object store connection parameters.
+type MinioConfig struct {
+	Endpoint        string `yaml:"endpoint"`         // "minio:9000"
+	AccessKeyID     string `yaml:"access_key_id"`
+	SecretAccessKey string `yaml:"secret_access_key"`
+	Bucket          string `yaml:"bucket"`           // default "openforge"
+	UseSSL          bool   `yaml:"use_ssl"`
+	Region          string `yaml:"region"`           // default "us-east-1"
+	TimeoutSec      int    `yaml:"timeout_sec"`      // default 5
+}
+
+// BucketOrDefault returns the bucket name or default "openforge".
+func (m MinioConfig) BucketOrDefault() string {
+	if m.Bucket == "" {
+		return "openforge"
+	}
+	return m.Bucket
+}
+
+// RegionOrDefault returns the region or default "us-east-1".
+func (m MinioConfig) RegionOrDefault() string {
+	if m.Region == "" {
+		return "us-east-1"
+	}
+	return m.Region
+}
+
+// TimeoutOrDefault returns the timeout duration or default 5 seconds.
+func (m MinioConfig) TimeoutOrDefault() time.Duration {
+	if m.TimeoutSec <= 0 {
+		return 5 * time.Second
+	}
+	return time.Duration(m.TimeoutSec) * time.Second
 }
 
 // AuthConfig holds authentication provider configuration.
