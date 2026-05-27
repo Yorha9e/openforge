@@ -25,10 +25,16 @@ func Defaults() *FeatureFlags {
 	return &FeatureFlags{}
 }
 
-// Clone returns a deep copy.
+// Clone returns a deep copy (mutex is not copied — new instance gets its own).
 func (f *FeatureFlags) Clone() *FeatureFlags {
-	c := *f
-	return &c
+	f.RLock()
+	defer f.RUnlock()
+	return &FeatureFlags{
+		EnterprisePlatform:    f.EnterprisePlatform,
+		ComplianceSuite:       f.ComplianceSuite,
+		ProductionOps:         f.ProductionOps,
+		DistributionArtifacts: f.DistributionArtifacts,
+	}
 }
 
 // AllFlags returns the 4 flag keys in canonical order.
