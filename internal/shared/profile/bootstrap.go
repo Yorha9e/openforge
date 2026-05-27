@@ -606,7 +606,21 @@ func (d *noopDR) Status(_ context.Context) (kernel.DRStatus, error) {
 
 type noopLB struct{}
 
-func newLoadBalancer(cfg *Config) kernel.LoadBalancer { return &noopLB{} }
+func newLoadBalancer(cfg *Config) kernel.LoadBalancer {
+	// G18: Use nginx load balancer if configured
+	if cfg.LoadBalancer == "nginx" || cfg.LoadBalancer == "k8s-ingress" {
+		configPath := "/etc/nginx/conf.d/upstream.conf" // default path
+		if cfg.LoadBalancer == "k8s-ingress" {
+			configPath = "" // K8s ingress doesn't need config file
+		}
+		
+		lb := adapter.NewNginxLoadBalancer(configPath)
+		if lb != nil {
+			return lb
+		}
+	}
+	return &noopLB{}
+}
 
 func (l *noopLB) AddBackend(_ context.Context, name string, addr string) error    { return nil }
 func (l *noopLB) RemoveBackend(_ context.Context, name string, addr string) error { return nil }
