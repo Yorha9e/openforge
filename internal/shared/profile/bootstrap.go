@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"strings"
 	"sync"
@@ -16,6 +17,7 @@ import (
 	agentadapter "openforge/internal/agent/adapter"
 	agentapp "openforge/internal/agent/application"
 	"openforge/internal/agent/domain"
+	"openforge/internal/compliance"
 	"openforge/internal/llm"
 	obsadapter "openforge/internal/observability/adapter"
 	observabilitydomain "openforge/internal/observability/domain"
@@ -78,6 +80,7 @@ type OpenForge struct {
 	FileLockSvc     *service.FileLockService
 	DB              *sql.DB
 	DepCache        *adapter.DependencyCache
+	DataLifecycle   *compliance.DataLifecycle // G16: compliance data lifecycle manager
 }
 
 // Bootstrap creates a new OpenForge composition root from the given profile
@@ -204,6 +207,13 @@ func Bootstrap(cfg *Config) (*OpenForge, error) {
 		return nil, fmt.Errorf("featureflags load: %w", err)
 	}
 	of.FeatureFlags = ff
+
+	// G16: Initialize compliance data lifecycle when compliance_suite flag is ON
+	if ff.ComplianceSuite {
+		of.DataLifecycle = compliance.NewDataLifecycle(db)
+		of.DataLifecycle.Start()
+		slog.Info("compliance_suite: data lifecycle started")
+	}
 
 	of.PipelineRepo = pipelineadapter.NewPGRepository(db)
 	of.GateRequestRepo = pipelineadapter.NewPGGateRequestRepository(db)
