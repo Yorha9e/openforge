@@ -31,10 +31,11 @@ type Config struct {
 	FeatureFlags FeatureFlagsConfig `yaml:"feature_flags"`
 
 	// Enterprise adapters configuration
-	Vault  VaultConfig  `yaml:"vault"`
-	Minio  MinioConfig  `yaml:"minio"`
-	Docker DockerConfig `yaml:"docker"`
-	PG     PGConfig     `yaml:"pg"` // G13: PG disaster recovery config
+	Vault    VaultConfig    `yaml:"vault"`
+	Minio    MinioConfig    `yaml:"minio"`
+	Docker   DockerConfig   `yaml:"docker"`
+	PG       PGConfig       `yaml:"pg"`       // G13: PG disaster recovery config
+	Notify   NotifierConfig `yaml:"notify"`   // G15: Multi-channel notifier config
 
 	Database DatabaseConfig `yaml:"database"`
 	Redis    RedisConfig    `yaml:"redis"`
@@ -165,6 +166,13 @@ type DockerConfig struct {
 type PGConfig struct {
 	BackupDir   string `yaml:"backup_dir"`   // Directory for backup files
 	PgToolsPath string `yaml:"pg_tools_path"` // G13: Path to pg_dump/pg_restore binaries
+}
+
+// NotifierConfig holds multi-channel notification configuration.
+type NotifierConfig struct {
+	FeishuWebhook string `yaml:"feishu_webhook"`
+	DingtalkURL   string `yaml:"dingtalk_url"`
+	EmailSMTP     string `yaml:"email_smtp"`
 }
 
 // RedisConfig holds Redis host and port configuration.

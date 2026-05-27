@@ -640,7 +640,25 @@ func (l *noopLB) HealthCheck(_ context.Context, name string) (bool, error)      
 
 type stdoutNotifier struct{}
 
-func newNotifier(cfg *Config) kernel.Notifier { return &stdoutNotifier{} }
+func newNotifier(cfg *Config) kernel.Notifier {
+	// G15: Use configured notifier if available
+	if cfg.Notify.FeishuWebhook != "" {
+		feishu := adapter.NewFeishuNotifier(cfg.Notify.FeishuWebhook)
+		if feishu != nil {
+			// If other channels are configured, create multi-channel notifier
+			var channels []kernel.Notifier
+			channels = append(channels, feishu)
+			
+			// Future: Add DingTalk, Email, etc. channels here
+			
+			if len(channels) > 1 {
+				return adapter.NewMultiChannelNotifier(channels)
+			}
+			return feishu
+		}
+	}
+	return &stdoutNotifier{}
+}
 
 func (n *stdoutNotifier) Send(_ context.Context, target kernel.Target, msg kernel.Notification) error {
 	fmt.Printf("[NOTIFY] %s | %s: %s\n", msg.Level, msg.Title, msg.Body)
