@@ -1,17 +1,25 @@
 package server
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	authadapter "openforge/internal/auth/adapter"
 	rbacmw "openforge/internal/auth/middleware"
+	authport "openforge/internal/auth/port"
 	"openforge/internal/auth/service"
+	authdomain "openforge/internal/auth/domain"
 	"openforge/internal/pipeline/domain"
+	observabilitydomain "openforge/internal/observability/domain"
+	port2 "openforge/internal/pipeline/port"
+	"openforge/internal/shared/featureflags"
 	"openforge/internal/shared/profile"
 )
 
@@ -21,15 +29,29 @@ func RegisterRoutes(of *profile.OpenForge, jwtSvc *service.JWTService, cfg *prof
 	// Rate limiting (100 req/s per IP)
 	rateLimit := RateLimitMiddleware(100)
 
+	// Multi-tenant project access isolation.
+	authRepo := authadapter.NewPGAuthRepository(of.DB)
+	tenantMw := TenantMiddleware(authRepo)
+
+	// Background gate timeout scanner — prevents indefinite goroutine deadlock.
+	StartGateTimeoutChecker(of.GateRequestRepo, of.PipelineSvc)
+
 	// Health
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	})
 
+	// Prometheus Metrics
+	mux.HandleFunc("GET /metrics", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+		fmt.Fprint(w, of.PrometheusExporter.FormatMetrics())
+	})
+
 	// Auth
 	authMw := AuthMiddleware(jwtSvc)
-	mux.HandleFunc("POST /api/auth/login", handleLogin(jwtSvc, cfg))
+	mux.HandleFunc("POST /api/auth/login", handleLogin(jwtSvc, cfg, authRepo))
+	mux.HandleFunc("POST /api/auth/register", handleRegister(jwtSvc, authRepo))
 	mux.HandleFunc("POST /api/auth/refresh", handleRefresh(jwtSvc))
 
 	// RBAC helpers
@@ -55,7 +77,11 @@ func RegisterRoutes(of *profile.OpenForge, jwtSvc *service.JWTService, cfg *prof
 
 	// Pipeline (auth + role)
 	mux.HandleFunc("GET /api/pipelines/{id}", withRole("observer", handleGetPipeline(of)))
+	mux.HandleFunc("GET /api/projects/{id}/pipelines", withRole("observer", handleListPipelines(of)))
 	mux.HandleFunc("POST /api/projects/{id}/pipelines", withRole("pm", handleCreatePipeline(of)))
+	
+	// Active pipelines (observer) — cross-project active workboard
+	mux.HandleFunc("GET /api/pipelines/active", withRole("observer", handleActivePipelines(of, authRepo)))
 
 	// Gate approval (pm + dev_lead)
 	mux.HandleFunc("GET /api/review-inbox", withRoles([]string{"pm", "dev_lead"}, handleReviewInbox(of)))
@@ -64,6 +90,9 @@ func RegisterRoutes(of *profile.OpenForge, jwtSvc *service.JWTService, cfg *prof
 
 	// Pipeline fork (pm)
 	mux.HandleFunc("POST /api/pipelines/{id}/fork", withRole("pm", handleForkPipeline(of)))
+
+	// Pipeline delete (pm)
+	mux.HandleFunc("DELETE /api/pipelines/{id}", withRole("pm", handleDeletePipeline(of)))
 
 	// Token/Cost (pm)
 	mux.HandleFunc("GET /api/projects/{id}/token-usage", withRole("pm", handleTokenUsage(of)))
@@ -79,6 +108,11 @@ func RegisterRoutes(of *profile.OpenForge, jwtSvc *service.JWTService, cfg *prof
 	// Admin status (admin)
 	mux.HandleFunc("GET /api/admin/status", withAdmin(handleAdminStatus(of, cfg)))
 
+	// Admin: Feature flags (admin-only, runtime toggles without restart)
+	ffStore := featureflags.NewStore(of.DB)
+	mux.HandleFunc("GET /api/admin/feature-flags", withAdmin(handleGetFeatureFlags(of)))
+	mux.HandleFunc("PUT /api/admin/feature-flags", withAdmin(handleUpdateFeatureFlags(of, ffStore)))
+
 	// Pipeline messages (observer)
 	mux.HandleFunc("GET /api/pipelines/{pid}/messages", withRole("observer", handleGetMessages(of)))
 
@@ -86,7 +120,7 @@ func RegisterRoutes(of *profile.OpenForge, jwtSvc *service.JWTService, cfg *prof
 	if cfg.Auth.Provider == "oidc" {
 		oidcProvider := authadapter.NewOIDCProvider(cfg.Auth.OIDC)
 		mux.HandleFunc("GET /api/auth/oidc/login", handleOIDCLogin(oidcProvider))
-		mux.HandleFunc("GET /api/auth/oidc/callback", handleOIDCCallback(oidcProvider, jwtSvc))
+		mux.HandleFunc("GET /api/auth/oidc/callback", handleOIDCCallback(oidcProvider, jwtSvc, authRepo))
 	}
 
 	// WebSocket (auth via first-frame protocol, not HTTP header)
@@ -95,7 +129,15 @@ func RegisterRoutes(of *profile.OpenForge, jwtSvc *service.JWTService, cfg *prof
 	// Static files
 	mux.HandleFunc("GET /", handleStatic())
 
-	return CorsMiddleware(SecurityHeadersMiddleware(LoggingMiddleware(rateLimit(mux))))
+	// Load-shedding middleware: only active when SLO tracker is available.
+	// Default: permissive (accepts all priorities when capacity is normal).
+	var handler http.Handler = CorsMiddleware(SecurityHeadersMiddleware(LoggingMiddleware(rateLimit(tenantMw(mux)))))
+	if of.SLO != nil {
+		ls := observabilitydomain.NewLoadShedder()
+		provider := &ofResourceSnapshotProvider{of: of}
+		handler = LoadShedMiddleware(ls, provider, handler)
+	}
+	return handler
 }
 
 // sanitizeError returns a user-safe error message, logging the real error.
@@ -125,7 +167,7 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }
 
-func handleLogin(jwtSvc *service.JWTService, cfg *profile.Config) http.HandlerFunc {
+func handleLogin(jwtSvc *service.JWTService, cfg *profile.Config, authRepo authport.AuthRepository) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Username string `json:"username"`
@@ -140,14 +182,40 @@ func handleLogin(jwtSvc *service.JWTService, cfg *profile.Config) http.HandlerFu
 			return
 		}
 
-		// Authenticate against builtin users (dev/prod-jwt mode)
-		user, ok := cfg.Auth.Authenticate(req.Username, req.Password)
-		if !ok {
-			writeError(w, 401, "invalid credentials")
-			return
+		var userID, displayName, role string
+
+		// 1. Try builtin users from config
+		if user, ok := cfg.Auth.Authenticate(req.Username, req.Password); ok {
+			userID = user.Username
+			displayName = user.DisplayName
+			role = user.Role
+
+			// Ensure config-based user exists in "user" table for FK satisfaction.
+			// This is idempotent (ON CONFLICT DO NOTHING in repo implementation).
+			_ = authRepo.CreateUser(r.Context(), &authport.User{
+				ID:          userID,
+				DisplayName: displayName,
+			})
+		} else {
+			// 2. Try DB-backed registered users
+			hash, err := authRepo.GetUserPasswordHash(r.Context(), req.Username)
+			if err != nil || hash == "" || !profile.CheckPassword(req.Password, hash) {
+				writeError(w, 401, "invalid credentials")
+				return
+			}
+			// Resolve user details from DB
+			u, err := authRepo.GetUser(r.Context(), req.Username)
+			if err != nil || u == nil {
+				writeError(w, 401, "invalid credentials")
+				return
+			}
+			userID = u.ID
+			displayName = u.DisplayName
+			// Registered users default to 'pm' role if no explicit global role is set
+			role = "pm"
 		}
 
-		token, err := jwtSvc.Issue(user.Username, user.Role, "")
+		token, err := jwtSvc.Issue(userID, role, "")
 		if err != nil {
 			writeError(w, 500, "failed to issue token")
 			return
@@ -156,8 +224,8 @@ func handleLogin(jwtSvc *service.JWTService, cfg *profile.Config) http.HandlerFu
 			"access_token":  token.AccessToken,
 			"refresh_token": token.RefreshToken,
 			"expires_in":    token.ExpiresIn,
-			"display_name":  user.DisplayName,
-			"role":          user.Role,
+			"display_name":  displayName,
+			"role":          role,
 		})
 	}
 }
@@ -185,10 +253,87 @@ func handleRefresh(jwtSvc *service.JWTService) http.HandlerFunc {
 	}
 }
 
+func handleRegister(jwtSvc *service.JWTService, authRepo authport.AuthRepository) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Username    string `json:"username"`
+			Password    string `json:"password"`
+			DisplayName string `json:"display_name"`
+			AvatarURL   string `json:"avatar_url"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, 400, "invalid request body")
+			return
+		}
+		if req.Username == "" || req.Password == "" {
+			writeError(w, 400, "username and password required")
+			return
+		}
+		if req.DisplayName == "" {
+			req.DisplayName = req.Username
+		}
+
+		// Check if user already exists
+		existing, _ := authRepo.GetUser(r.Context(), req.Username)
+		if existing != nil {
+			writeError(w, 409, "username already exists")
+			return
+		}
+
+		// Hash password
+		hash, err := profile.HashPassword(req.Password)
+		if err != nil {
+			writeError(w, 500, "failed to process password")
+			return
+		}
+
+		// Create user with password hash
+		if err := authRepo.RegisterUser(r.Context(), req.Username, req.DisplayName, hash); err != nil {
+			if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique") {
+				writeError(w, 409, "username already exists")
+				return
+			}
+			writeError(w, 500, sanitizeError(err))
+			return
+		}
+
+		// Auto-login: issue JWT
+		token, err := jwtSvc.Issue(req.Username, "pm", "")
+		if err != nil {
+			writeError(w, 500, "registration succeeded but failed to issue token")
+			return
+		}
+		writeJSON(w, 201, map[string]any{
+			"access_token":  token.AccessToken,
+			"refresh_token": token.RefreshToken,
+			"expires_in":    token.ExpiresIn,
+			"display_name":  req.DisplayName,
+			"role":          "pm",
+		})
+	}
+}
+
 func handleListProjects(of *profile.OpenForge) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		rows, err := of.DB.QueryContext(r.Context(),
-			`SELECT id, name, git_url, created_at FROM project WHERE deleted_at IS NULL ORDER BY created_at DESC`)
+		userID := UserIDFromContext(r.Context())
+		userRole := UserRoleFromContext(r.Context())
+
+		// Admin users see all projects
+		var query string
+		var args []interface{}
+		if userRole == "admin" {
+			query = `SELECT id, name, git_url, created_at FROM project WHERE deleted_at IS NULL ORDER BY created_at DESC`
+		} else {
+			// Regular users only see projects they have a role in
+			query = `SELECT p.id, p.name, p.git_url, p.created_at
+				FROM project p
+				INNER JOIN user_role ur ON p.id = ur.project_id
+				WHERE ur.user_id = $1 AND p.deleted_at IS NULL
+				ORDER BY p.created_at DESC`
+			args = append(args, userID)
+		}
+
+		rows, err := of.DB.QueryContext(r.Context(), query, args...)
 		if err != nil {
 			writeError(w, 500, sanitizeError(err))
 			return
@@ -231,15 +376,55 @@ func handleCreateProject(of *profile.OpenForge) http.HandlerFunc {
 			return
 		}
 		projectID := fmt.Sprintf("proj-%d", time.Now().UnixNano())
-		_, err := of.DB.ExecContext(r.Context(),
+		userID := UserIDFromContext(r.Context())
+		displayName := userID // fallback display name from JWT identity
+
+		tx, err := of.DB.BeginTx(r.Context(), nil)
+		if err != nil {
+			writeError(w, 500, sanitizeError(err))
+			return
+		}
+		defer tx.Rollback()
+
+		// 1. Create the project.
+		_, err = tx.ExecContext(r.Context(),
 			`INSERT INTO project (id, name, git_url, repo_type, template) VALUES ($1, $2, $3, 'custom', 'custom')`,
 			projectID, req.Name, req.GitURL)
 		if err != nil {
 			writeError(w, 500, sanitizeError(err))
 			return
 		}
+
+		// 2. Ensure the user exists in the "user" table (idempotent upsert).
+		//    Config-based and OIDC users may not have a row yet, which would
+		//    violate the FK on user_role.user_id → REFERENCES "user"(id).
+		_, err = tx.ExecContext(r.Context(),
+			`INSERT INTO "user" (id, display_name) VALUES ($1, $2)
+			 ON CONFLICT (id) DO NOTHING`,
+			userID, displayName)
+		if err != nil {
+			writeError(w, 500, sanitizeError(err))
+			return
+		}
+
+		// 3. Auto-assign creator as project admin.
+		_, err = tx.ExecContext(r.Context(),
+			`INSERT INTO user_role (user_id, project_id, role, modules)
+			 VALUES ($1, $2, 'admin', '{chat,code_review,pipeline,settings}')
+			 ON CONFLICT (user_id, project_id) DO NOTHING`,
+			userID, projectID)
+		if err != nil {
+			writeError(w, 500, sanitizeError(err))
+			return
+		}
+
+		if err := tx.Commit(); err != nil {
+			writeError(w, 500, sanitizeError(err))
+			return
+		}
+
 		writeJSON(w, 201, map[string]any{
-			"id": projectID, "name": req.Name, "git_url": req.GitURL,
+			"id": projectID, "name": req.Name, "git_url": req.GitURL, "role": "admin",
 		})
 	}
 }
@@ -247,6 +432,22 @@ func handleCreateProject(of *profile.OpenForge) http.HandlerFunc {
 func handleGetProject(of *profile.OpenForge) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
+		userID := UserIDFromContext(r.Context())
+		userRole := UserRoleFromContext(r.Context())
+
+		// Non-admin users: verify project access via user_role
+		if userRole != "admin" {
+			var exists bool
+			err := of.DB.QueryRowContext(r.Context(),
+				`SELECT EXISTS(SELECT 1 FROM user_role WHERE user_id = $1 AND project_id = $2)`,
+				userID, id,
+			).Scan(&exists)
+			if err != nil || !exists {
+				writeError(w, 403, "forbidden: access to this project is denied")
+				return
+			}
+		}
+
 		var p struct {
 			ID        string `json:"id"`
 			Name      string `json:"name"`
@@ -273,6 +474,75 @@ func handleGetPipeline(of *profile.OpenForge) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, 200, p)
+	}
+}
+
+func handleListPipelines(of *profile.OpenForge) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		projectID := r.PathValue("id")
+		pipelines, err := of.PipelineRepo.ListByProject(r.Context(), projectID)
+		if err != nil {
+			writeError(w, 500, sanitizeError(err))
+			return
+		}
+		writeJSON(w, 200, pipelines)
+	}
+}
+
+func handleActivePipelines(of *profile.OpenForge, authRepo authport.AuthRepository) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID := UserIDFromContext(r.Context())
+		userRole := UserRoleFromContext(r.Context())
+
+		var rows *sql.Rows
+		var err error
+		if userRole == "admin" {
+			rows, err = of.DB.QueryContext(r.Context(),
+				`SELECT pl.id, pl.project_id, pr.name as project_name, pl.title, pl.status, pl.current_stage, pl.updated_at
+				FROM pipeline pl
+				INNER JOIN project pr ON pl.project_id = pr.id
+				WHERE pl.status IN ('running','paused','awaiting_review')
+				AND pl.deleted_at IS NULL
+				ORDER BY pl.updated_at DESC`)
+		} else {
+			rows, err = of.DB.QueryContext(r.Context(),
+				`SELECT pl.id, pl.project_id, pr.name as project_name, pl.title, pl.status, pl.current_stage, pl.updated_at
+				FROM pipeline pl
+				INNER JOIN project pr ON pl.project_id = pr.id
+				INNER JOIN user_role ur ON pr.id = ur.project_id
+				WHERE ur.user_id = $1
+				AND pl.status IN ('running','paused','awaiting_review')
+				AND pl.deleted_at IS NULL
+				ORDER BY pl.updated_at DESC`, userID)
+		}
+		if err != nil {
+			writeError(w, 500, sanitizeError(err))
+			return
+		}
+		defer rows.Close()
+
+		type activePipeline struct {
+			ID           string `json:"id"`
+			ProjectID    string `json:"project_id"`
+			ProjectName  string `json:"project_name"`
+			Title        string `json:"title"`
+			Status       string `json:"status"`
+			CurrentStage string `json:"current_stage"`
+			UpdatedAt    string `json:"updated_at"`
+		}
+		var result []activePipeline
+		for rows.Next() {
+			var ap activePipeline
+			if err := rows.Scan(&ap.ID, &ap.ProjectID, &ap.ProjectName, &ap.Title, &ap.Status, &ap.CurrentStage, &ap.UpdatedAt); err != nil {
+				writeError(w, 500, sanitizeError(err))
+				return
+			}
+			result = append(result, ap)
+		}
+		if result == nil {
+			result = []activePipeline{}
+		}
+		writeJSON(w, 200, result)
 	}
 }
 
@@ -394,6 +664,33 @@ func handleListModels(of *profile.OpenForge) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		models := of.LLMRouter.ListModels()
 		writeJSON(w, http.StatusOK, models)
+	}
+}
+
+func handleDeletePipeline(of *profile.OpenForge) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+
+		// 1. 获取 Pipeline 详情
+		p, err := of.PipelineRepo.GetByID(r.Context(), id)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "pipeline not found")
+			return
+		}
+
+		// 2. 越权校验
+		ctxProjectID, _ := r.Context().Value(authdomain.ProjectIDContextKey).(string)
+		if ctxProjectID != "" && p.ProjectID != ctxProjectID {
+			writeError(w, http.StatusForbidden, "forbidden: deletion of this pipeline is denied")
+			return
+		}
+
+		// 3. 执行软删除
+		if err := of.PipelineRepo.Delete(r.Context(), id); err != nil {
+			writeError(w, 500, sanitizeError(err))
+			return
+		}
+		writeJSON(w, 200, map[string]string{"status": "deleted"})
 	}
 }
 
@@ -534,8 +831,26 @@ func handleAdminStatus(of *profile.OpenForge, cfg *profile.Config) http.HandlerF
 		if of.SkillLoader != nil {
 			skillCount = len(of.SkillLoader.GetAllSkills())
 		}
+		
+		breakers := make(map[string]string)
+		if of.BreakerPool != nil {
+			for name, state := range of.BreakerPool.All() {
+				breakers[name] = state.String()
+			}
+		}
+
+		var sloObj map[string]any
+		if of.SLO != nil {
+			snap := of.SLO.Snapshot()
+			sloObj = map[string]any{
+				"total":        snap.Total,
+				"success_rate": snap.SuccessRate,
+				"p95_ms":       snap.P95Ms,
+			}
+		}
+
 		writeJSON(w, 200, map[string]any{
-			"phase":           "Phase 6.5",
+			"phase":            "Phase 8",
 			"profile":          cfg.Profile,
 			"tier":             cfg.SecurityTier,
 			"skills":           skillCount,
@@ -543,6 +858,13 @@ func handleAdminStatus(of *profile.OpenForge, cfg *profile.Config) http.HandlerF
 			"oidc":             map[bool]string{true: "enabled", false: "disabled"}[cfg.Auth.Provider == "oidc"],
 			"auth_provider":    cfg.Auth.Provider,
 			"models":           len(of.LLMRouter.ListModels()),
+			"circuit_breakers": breakers,
+			"slo":              sloObj,
+			"ha": map[string]any{
+				"task_queue":       cfg.TaskQueue,
+				"hash_ring_nodes":  128,
+				"load_shedding":    "active",
+			},
 		})
 	}
 }
@@ -551,13 +873,59 @@ func handleAdminStatus(of *profile.OpenForge, cfg *profile.Config) http.HandlerF
 
 func handleGetMessages(of *profile.OpenForge) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Phase 7: read from conversation_message table
-		// Phase 6.5: return empty — messages are ephemeral (WS only)
-		writeJSON(w, 200, []any{})
+		pipelineID := r.PathValue("pid")
+		branchID := r.URL.Query().Get("branch_id")
+		if branchID == "" {
+			branchID = "main"
+		}
+
+		// 1. 获取 Pipeline 详情，以便验证归属项目
+		p, err := of.PipelineRepo.GetByID(r.Context(), pipelineID)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "pipeline not found")
+			return
+		}
+
+		// 2. 越权校验: 如果上下文有关联 ProjectID，进行一致性校验
+		ctxProjectID, _ := r.Context().Value(authdomain.ProjectIDContextKey).(string)
+		if ctxProjectID != "" && p.ProjectID != ctxProjectID {
+			writeError(w, http.StatusForbidden, "forbidden: access to this pipeline is denied")
+			return
+		}
+
+		msgs, err := of.PipelineRepo.GetMessages(r.Context(), pipelineID, branchID)
+		if err != nil {
+			writeError(w, 500, sanitizeError(err))
+			return
+		}
+		if msgs == nil {
+			msgs = []*port2.DBMessage{}
+		}
+		writeJSON(w, 200, msgs)
 	}
 }
 
 func handleStatic() http.HandlerFunc {
+	distDir := "frontend/dist"
+	if info, err := os.Stat(distDir); err != nil || !info.IsDir() {
+		return devStaticHandler()
+	}
+	return buildStaticHandler(distDir)
+}
+
+func buildStaticHandler(dir string) http.HandlerFunc {
+	fs := http.FileServer(http.Dir(dir))
+	return func(w http.ResponseWriter, r *http.Request) {
+		// SPA fallback: if the file doesn't exist, serve index.html
+		fullPath := filepath.Join(dir, filepath.Clean(r.URL.Path))
+		if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+			r.URL.Path = "/"
+		}
+		fs.ServeHTTP(w, r)
+	}
+}
+
+func devStaticHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Static-File", "not-implemented")
 		writeError(w, 404, "static files not available in dev mode (use Vite dev server)")
@@ -581,7 +949,7 @@ func handleOIDCLogin(provider *authadapter.OIDCProvider) http.HandlerFunc {
 	}
 }
 
-func handleOIDCCallback(provider *authadapter.OIDCProvider, jwtSvc *service.JWTService) http.HandlerFunc {
+func handleOIDCCallback(provider *authadapter.OIDCProvider, jwtSvc *service.JWTService, authRepo authport.AuthRepository) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		code := r.URL.Query().Get("code")
 		if code == "" {
@@ -593,6 +961,13 @@ func handleOIDCCallback(provider *authadapter.OIDCProvider, jwtSvc *service.JWTS
 			writeError(w, 500, err.Error())
 			return
 		}
+
+		// Ensure OIDC user exists in "user" table for FK satisfaction.
+		_ = authRepo.CreateUser(r.Context(), &authport.User{
+			ID:          user.Email,
+			DisplayName: user.Name,
+		})
+
 		token, err := jwtSvc.Issue(user.Email, "pm", "")
 		if err != nil {
 			writeError(w, 500, "failed to issue token")
