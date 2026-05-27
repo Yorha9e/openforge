@@ -1,18 +1,22 @@
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuth, useCanAccess } from './shared/auth';
+import { api, FeatureFlags } from './shared/api';
 import { LoginPage } from './features/login/LoginPage';
 import { DashboardPage } from './features/dashboard/DashboardPage';
 import { ProjectPage } from './features/project/ProjectPage';
 import { ChatPanel } from './features/chat/ChatPanel';
-import { ProModePage } from './features/code-review/ProModePage';
-import { ReviewInboxPage } from './features/review-inbox/ReviewInboxPage';
-import { CostDashboardPage } from './features/cost-dashboard/CostDashboardPage';
-import { SettingsPage } from './features/settings/SettingsPage';
-import { OnboardingFlow } from './features/onboarding/OnboardingFlow';
-import { ErrorPage } from './features/errors/ErrorPage';
-import { CircuitBreakerPage } from './features/errors/CircuitBreakerPage';
-import { AdminPage } from './features/admin/AdminPage';
-import { SkillPanel } from './features/admin/SkillPanel';
+
+const ProModePage = lazy(() => import('./features/code-review/ProModePage'));
+const CostDashboardPage = lazy(() => import('./features/cost-dashboard/CostDashboardPage'));
+const ReviewInboxPage = lazy(() => import('./features/review-inbox/ReviewInboxPage'));
+const SettingsPage = lazy(() => import('./features/settings/SettingsPage'));
+const OnboardingFlow = lazy(() => import('./features/onboarding/OnboardingFlow'));
+const ErrorPage = lazy(() => import('./features/errors/ErrorPage'));
+const CircuitBreakerPage = lazy(() => import('./features/errors/CircuitBreakerPage'));
+const AdminPage = lazy(() => import('./features/admin/AdminPage'));
+const SkillPanel = lazy(() => import('./features/admin/SkillPanel'));
+const ComplianceReportPage = lazy(() => import('./features/compliance/ComplianceReportPage'));
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { token } = useAuth();
@@ -28,22 +32,66 @@ function AdminRoute({ children }: { children: React.ReactNode }) {
   return <div className="page-enter">{children}</div>;
 }
 
+function LoadingFallback() {
+  return (
+    <div style={{
+      minHeight: '100vh', background: '#0F172A', display: 'flex',
+      alignItems: 'center', justifyContent: 'center', color: '#94a3b8',
+      fontFamily: "'Fira Sans', sans-serif", fontSize: 14,
+    }}>
+      Loading...
+    </div>
+  );
+}
+
 export function App() {
+  const [featureFlags, setFeatureFlags] = useState<FeatureFlags | null>(null);
+
+  useEffect(() => {
+    // Load feature flags for conditional routing
+    api.getFeatureFlags()
+      .then(flags => setFeatureFlags(flags))
+      .catch(() => {}); // Silently fail - flags default to false
+  }, []);
+
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route path="/" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
       <Route path="/project/:id" element={<ProtectedRoute><ProjectPage /></ProtectedRoute>} />
       <Route path="/project/:id/chat" element={<ProtectedRoute><ChatPanel /></ProtectedRoute>} />
-      <Route path="/project/:id/pipeline/:pid" element={<ProtectedRoute><ProModePage /></ProtectedRoute>} />
-      <Route path="/review-inbox" element={<ProtectedRoute><ReviewInboxPage /></ProtectedRoute>} />
-      <Route path="/project/:id/costs" element={<ProtectedRoute><CostDashboardPage /></ProtectedRoute>} />
-      <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
-      <Route path="/onboarding" element={<ProtectedRoute><OnboardingFlow /></ProtectedRoute>} />
-      <Route path="/error" element={<ErrorPage />} />
-      <Route path="/circuit-breaker" element={<ProtectedRoute><CircuitBreakerPage /></ProtectedRoute>} />
-      <Route path="/admin" element={<AdminRoute><AdminPage /></AdminRoute>} />
-      <Route path="/admin/skills" element={<AdminRoute><SkillPanel /></AdminRoute>} />
+      <Route path="/project/:id/pipeline/:pid" element={
+        <ProtectedRoute><Suspense fallback={<LoadingFallback />}><ProModePage /></Suspense></ProtectedRoute>
+      } />
+      <Route path="/project/:id/costs" element={
+        <ProtectedRoute><Suspense fallback={<LoadingFallback />}><CostDashboardPage /></Suspense></ProtectedRoute>
+      } />
+      <Route path="/review-inbox" element={
+        <ProtectedRoute><Suspense fallback={<LoadingFallback />}><ReviewInboxPage /></Suspense></ProtectedRoute>
+      } />
+      <Route path="/settings" element={
+        <ProtectedRoute><Suspense fallback={<LoadingFallback />}><SettingsPage /></Suspense></ProtectedRoute>
+      } />
+      <Route path="/onboarding" element={
+        <Suspense fallback={<LoadingFallback />}><OnboardingFlow /></Suspense>
+      } />
+      <Route path="/error" element={<Suspense fallback={<LoadingFallback />}><ErrorPage /></Suspense>} />
+      <Route path="/circuit-breaker" element={
+        <ProtectedRoute><Suspense fallback={<LoadingFallback />}><CircuitBreakerPage /></Suspense></ProtectedRoute>
+      } />
+      <Route path="/admin" element={
+        <AdminRoute><Suspense fallback={<LoadingFallback />}><AdminPage /></Suspense></AdminRoute>
+      } />
+      <Route path="/admin/skills" element={
+        <AdminRoute><Suspense fallback={<LoadingFallback />}><SkillPanel /></Suspense></AdminRoute>
+      } />
+      
+      {/* Compliance suite: conditionally registered when compliance_suite flag is ON */}
+      {featureFlags?.compliance_suite && (
+        <Route path="/compliance" element={
+          <ProtectedRoute><Suspense fallback={<LoadingFallback />}><ComplianceReportPage /></Suspense></ProtectedRoute>
+        } />
+      )}
     </Routes>
   );
 }
