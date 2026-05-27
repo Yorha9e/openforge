@@ -137,7 +137,6 @@ func Bootstrap(cfg *Config) (*OpenForge, error) {
 	of.Cache = newCache(cfg)
 	of.Telemetry = newTelemetry(cfg)
 	of.Registry = newServiceRegistry(cfg)
-	of.DR = newDisasterRecovery(cfg)
 	of.LB = newLoadBalancer(cfg)
 	of.Notifier = newNotifier(cfg)
 	of.CommandExec = newCommandExecutor(cfg)
@@ -183,6 +182,9 @@ func Bootstrap(cfg *Config) (*OpenForge, error) {
 		return nil, fmt.Errorf("db: %w", err)
 	}
 	of.DB = db
+
+	// G13: Initialize disaster recovery with DB connection
+	of.DR = newDisasterRecovery(cfg, db)
 
 	// Feature flags: load YAML defaults → seed DB → DB override → memory.
 	ffStore := featureflags.NewStore(db)
@@ -572,7 +574,25 @@ func (r *staticServiceRegistry) Watch(_ context.Context, name string) (<-chan ke
 
 type noopDR struct{}
 
-func newDisasterRecovery(cfg *Config) kernel.DisasterRecovery { return &noopDR{} }
+func newDisasterRecovery(cfg *Config, db *sql.DB) kernel.DisasterRecovery {
+	// G13: Use PG disaster recovery if configured
+	if cfg.DisasterRecovery == "pg-streaming" || cfg.DisasterRecovery == "multi-region" {
+		// Get DSN from database config
+		dsn := cfg.Database.DSN()
+		backupDir := cfg.PG.BackupDir
+		pgToolsPath := cfg.PG.PgToolsPath
+
+		if backupDir == "" {
+			backupDir = "/backups/postgres" // default
+		}
+
+		pgDR := adapter.NewPGDisasterRecovery(db, dsn, backupDir, pgToolsPath)
+		if pgDR != nil {
+			return pgDR
+		}
+	}
+	return &noopDR{}
+}
 
 func (d *noopDR) Backup(_ context.Context) error { return nil }
 func (d *noopDR) Restore(_ context.Context, _ time.Time) error {

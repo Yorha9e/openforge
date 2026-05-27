@@ -34,6 +34,7 @@ type Config struct {
 	Vault  VaultConfig  `yaml:"vault"`
 	Minio  MinioConfig  `yaml:"minio"`
 	Docker DockerConfig `yaml:"docker"`
+	PG     PGConfig     `yaml:"pg"` // G13: PG disaster recovery config
 
 	Database DatabaseConfig `yaml:"database"`
 	Redis    RedisConfig    `yaml:"redis"`
@@ -158,6 +159,12 @@ type OIDCConfig struct {
 type DockerConfig struct {
 	Host       string `yaml:"host"`
 	APIVersion string `yaml:"api_version"`
+}
+
+// PGConfig holds PostgreSQL disaster recovery configuration.
+type PGConfig struct {
+	BackupDir   string `yaml:"backup_dir"`   // Directory for backup files
+	PgToolsPath string `yaml:"pg_tools_path"` // G13: Path to pg_dump/pg_restore binaries
 }
 
 // RedisConfig holds Redis host and port configuration.
