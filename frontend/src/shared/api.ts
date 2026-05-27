@@ -33,11 +33,38 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   return res.json();
 }
 
+export type AdminStatus = {
+  phase: string;
+  profile: string;
+  tier: string;
+  skills: number;
+  rbac: string;
+  oidc: string;
+  auth_provider: string;
+  models: number;
+  circuit_breakers?: Record<string, string>;
+  slo?: { total: number; success_rate: number; p95_ms?: number };
+  ha?: { task_queue: string; hash_ring_nodes: number; load_shedding: string };
+};
+
+export type FeatureFlags = {
+  enterprise_platform: boolean;
+  compliance_suite: boolean;
+  production_ops: boolean;
+  distribution_artifacts: boolean;
+};
+
 export const api = {
   login: (username: string, password: string) =>
-    request<{ access_token: string; refresh_token: string; expires_in: number }>('/auth/login', {
+    request<{ access_token: string; refresh_token: string; expires_in: number; display_name?: string; role?: string }>('/auth/login', {
       method: 'POST',
       body: JSON.stringify({ username, password }),
+    }),
+
+  register: (username: string, password: string, displayName: string, avatarUrl?: string) =>
+    request<{ access_token: string; refresh_token: string; expires_in: number; display_name: string; role: string }>('/auth/register', {
+      method: 'POST',
+      body: JSON.stringify({ username, password, display_name: displayName, avatar_url: avatarUrl || '' }),
     }),
 
   refreshToken: (refreshToken: string) =>
@@ -64,7 +91,13 @@ export const api = {
 
   getPipeline: (id: string) => request<any>(`/pipelines/${id}`),
 
+  listPipelines: (projectId: string) => request<any[]>(`/projects/${projectId}/pipelines`),
+
+  activePipelines: () => request<any[]>('/pipelines/active'),
+
   getMessages: (pipelineId: string) => request<any>(`/pipelines/${pipelineId}/messages`),
+
+  deletePipeline: (id: string) => request<any>(`/pipelines/${id}`, { method: 'DELETE' }),
 
   // Gate
   getReviewInbox: () => request<any[]>('/review-inbox'),
@@ -98,10 +131,28 @@ export const api = {
 
   // Skills
   listSkills: () => request<any[]>('/admin/skills'),
+  updateSkillDeprecated: (name: string, deprecated: boolean) =>
+    request<any>(`/admin/skills/${encodeURIComponent(name)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ deprecated }),
+    }),
+  updateSkillPriorities: (priorities: Record<string, number>) =>
+    request<any>('/admin/skills/priorities', {
+      method: 'PUT',
+      body: JSON.stringify({ priorities }),
+    }),
 
   // Admin
-  getAdminStatus: () => request<any>('/admin/status'),
+  getAdminStatus: () => request<AdminStatus>('/admin/status'),
   listExperiments: () => request<any[]>('/admin/experiments'),
+
+  // Feature Flags
+  getFeatureFlags: () => request<FeatureFlags>('/admin/feature-flags'),
+  updateFeatureFlags: (flags: FeatureFlags) =>
+    request<FeatureFlags>('/admin/feature-flags', {
+      method: 'PUT',
+      body: JSON.stringify(flags),
+    }),
 
   // Health (public, but use request helper for consistency)
   getHealth: () => request<any>('/health'),
