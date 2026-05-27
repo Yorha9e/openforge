@@ -25,11 +25,24 @@ type Config struct {
 	Notifier         string `yaml:"notifier"`
 	CommandExecutor  string `yaml:"command_executor"`
 
+	// FeatureFlags: YAML-level defaults for enterprise capability toggles.
+	// Runtime overrides are stored in the feature_flags DB table.
+	FeatureFlags FeatureFlagsConfig `yaml:"feature_flags"`
+
 	Database DatabaseConfig `yaml:"database"`
+	Redis    RedisConfig    `yaml:"redis"`
 	LLM      LLMConfig      `yaml:"llm"`
 	GRPC     GRPCConfig     `yaml:"grpc"`
 	JWT      JWTConfig      `yaml:"jwt"`
 	Auth     AuthConfig     `yaml:"auth"`
+}
+
+// FeatureFlagsConfig groups the YAML-level defaults for feature toggles.
+type FeatureFlagsConfig struct {
+	EnterprisePlatform    bool `yaml:"enterprise_platform"`
+	ComplianceSuite       bool `yaml:"compliance_suite"`
+	ProductionOps         bool `yaml:"production_ops"`
+	DistributionArtifacts bool `yaml:"distribution_artifacts"`
 }
 
 // AuthConfig holds authentication provider configuration.
@@ -76,6 +89,12 @@ type OIDCConfig struct {
 type DockerConfig struct {
 	Host       string `yaml:"host"`
 	APIVersion string `yaml:"api_version"`
+}
+
+// RedisConfig holds Redis host and port configuration.
+type RedisConfig struct {
+	Host string `yaml:"host"`
+	Port int    `yaml:"port"`
 }
 
 // DatabaseConfig holds database connection parameters.

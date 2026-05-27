@@ -16,6 +16,12 @@ notifier: stdout
 command_executor: local-shell
 dependency_cache: none  # minimal 无共享缓存, 每 sandbox 独立下载
 
+feature_flags:
+  enterprise_platform: false
+  compliance_suite: false
+  production_ops: false
+  distribution_artifacts: false
+
 docker:
   host: "unix:///var/run/docker.sock"
   api_version: "1.45"

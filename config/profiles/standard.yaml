@@ -15,6 +15,12 @@ load_balancer: nginx
 notifier: feishu
 command_executor: docker-sandbox
 
+feature_flags:
+  enterprise_platform: false
+  compliance_suite: true
+  production_ops: true
+  distribution_artifacts: false
+
 docker:
   host: "unix:///var/run/docker.sock"
   api_version: "1.45"
