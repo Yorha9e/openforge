@@ -14,10 +14,14 @@ import (
 
 	"openforge/internal/adapter"
 	agentadapter "openforge/internal/agent/adapter"
+	agentapp "openforge/internal/agent/application"
 	"openforge/internal/agent/domain"
 	"openforge/internal/llm"
+	obsadapter "openforge/internal/observability/adapter"
+	observabilitydomain "openforge/internal/observability/domain"
 	pipelineadapter "openforge/internal/pipeline/adapter"
 	"openforge/internal/pipeline/service"
+	"openforge/internal/shared/featureflags"
 	"openforge/internal/shared/kernel"
 )
 
@@ -40,10 +44,15 @@ type OpenForge struct {
 	LLMRouter    *llm.Router
 	LLMRegistry     *llm.Registry
 	Config          *Config
+	FeatureFlags    *featureflags.FeatureFlags   // Phase 10: runtime-overridable enterprise toggles
 	PromptBuilder   *domain.PromptBuilder
 	SkillLoader         *domain.SkillLoader
 	CapabilityInjector  *domain.CapabilityInjector
 	PriorityEngine      *domain.UnifiedPriorityEngine
+	HashRing            *observabilitydomain.HashRing
+	BreakerPool         *observabilitydomain.BreakerPool
+	SLO                 *observabilitydomain.SLOTracker
+	PrometheusExporter  *obsadapter.PrometheusExporter
 
 	// Phase 7: Learning engine components
 	PreferenceStore    *agentadapter.PGPreferenceStore
@@ -51,19 +60,62 @@ type OpenForge struct {
 	LLMPriorityQueue   *domain.LLMPriorityQueue
 	RetrospectiveGen   *domain.RetrospectiveGenerator
 
-	PipelineRepo    *pipelineadapter.PGRepository
-	PipelineSvc     *service.PipelineService
-	GateSvc         *service.GateService
+	// Phase 8.4: Learning engine — experiment, retrospective, knowledge snapshot
+	ExperimentStore       *agentadapter.PGExperimentStore
+	RetrospectiveStore    *agentadapter.PGRetrospectiveStore
+	KnowledgeSnapshotStore *agentadapter.PGKnowledgeSnapshotStore
+	LearningSvc           *agentapp.LearningService
+
+	PipelineRepo      *pipelineadapter.PGRepository
+	GateRequestRepo  *pipelineadapter.PGGateRequestRepository
+	PipelineSvc       *service.PipelineService
+	GateSvc           *service.GateService
 	SandboxProvider *adapter.SandboxProvider
 	DeploySvc       *service.DeployService
 	TokenCostSvc    *service.TokenCostService
+	CanarySvc       *service.CanaryService
+	FileLockStore   *pipelineadapter.PGFileLockStore
+	FileLockSvc     *service.FileLockService
 	DB              *sql.DB
+	DepCache        *adapter.DependencyCache
 }
 
 // Bootstrap creates a new OpenForge composition root from the given profile
 // configuration. It enforces the invariant that "minimal" profile may not be
 // used in prod or regulated security tiers, then instantiates concrete
 // implementations for all 11 kernel interfaces.
+type breakerCommandExecutor struct {
+	name    string
+	breaker *observabilitydomain.Breaker
+	next    kernel.CommandExecutor
+}
+
+func (e *breakerCommandExecutor) Execute(ctx context.Context, command string, opts kernel.ExecOptions) (kernel.ExecOutput, error) {
+	var out kernel.ExecOutput
+	err := e.breaker.Call(func() error {
+		var err error
+		out, err = e.next.Execute(ctx, command, opts)
+		return err
+	})
+	return out, err
+}
+
+func (e *breakerCommandExecutor) ExecuteStream(ctx context.Context, command string, opts kernel.ExecOptions) (<-chan kernel.ExecStreamChunk, error) {
+	var ch <-chan kernel.ExecStreamChunk
+	err := e.breaker.Call(func() error {
+		var err error
+		ch, err = e.next.ExecuteStream(ctx, command, opts)
+		return err
+	})
+	return ch, err
+}
+
+func (e *breakerCommandExecutor) Validate(ctx context.Context, command string, opts kernel.ExecOptions) error {
+	return e.breaker.Call(func() error {
+		return e.next.Validate(ctx, command, opts)
+	})
+}
+
 func Bootstrap(cfg *Config) (*OpenForge, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("config is nil")
@@ -131,7 +183,30 @@ func Bootstrap(cfg *Config) (*OpenForge, error) {
 		return nil, fmt.Errorf("db: %w", err)
 	}
 	of.DB = db
+
+	// Feature flags: load YAML defaults → seed DB → DB override → memory.
+	ffStore := featureflags.NewStore(db)
+	yamlDefaults := &featureflags.FeatureFlags{
+		EnterprisePlatform:    cfg.FeatureFlags.EnterprisePlatform,
+		ComplianceSuite:       cfg.FeatureFlags.ComplianceSuite,
+		ProductionOps:         cfg.FeatureFlags.ProductionOps,
+		DistributionArtifacts: cfg.FeatureFlags.DistributionArtifacts,
+	}
+	// Seed DB with YAML defaults (idempotent — preserves existing overrides).
+	if err := ffStore.SeedDefaults(context.Background(), yamlDefaults); err != nil {
+		return nil, fmt.Errorf("featureflags seed: %w", err)
+	}
+	// Load from DB (which may have runtime overrides taking priority).
+	ff, err := ffStore.Load(context.Background())
+	if err != nil {
+		return nil, fmt.Errorf("featureflags load: %w", err)
+	}
+	of.FeatureFlags = ff
+
 	of.PipelineRepo = pipelineadapter.NewPGRepository(db)
+	of.GateRequestRepo = pipelineadapter.NewPGGateRequestRepository(db)
+	of.FileLockStore = pipelineadapter.NewPGFileLockStore(db)
+	of.FileLockSvc = service.NewFileLockService(of.FileLockStore)
 	of.PipelineSvc = service.NewPipelineService(of.PipelineRepo)
 	of.GateSvc = service.NewGateService(of.PipelineRepo, of.PipelineRepo)
 
@@ -144,7 +219,20 @@ func Bootstrap(cfg *Config) (*OpenForge, error) {
 	})
 	of.DeploySvc = service.NewDeployService(of.CommandExec)
 	of.TokenCostSvc = service.NewTokenCostService(of.PipelineRepo)
+	of.CanarySvc = service.NewCanaryService()
 	of.PromptBuilder, _ = domain.NewPromptBuilder("config/prompts/static.xml", nil)
+
+	if cfg.Profile == "standard" || cfg.Profile == "enterprise" {
+		of.DepCache = adapter.NewDependencyCache("/cache/deps")
+		// Wire dependency cache layer into Docker sandbox executor.
+		if sandboxExec, ok := of.CommandExec.(*adapter.DockerSandboxExecutor); ok {
+			layer := of.DepCache.Layer(adapter.DependencySpec{
+				ProjectID: "global",
+				Runtime:   "node",
+			})
+			sandboxExec.SetCacheLayer(layer)
+		}
+	}
 
 	// Phase 6.5: Skill system initialization
 	of.SkillLoader, _ = domain.NewSkillLoader([]string{
@@ -160,10 +248,37 @@ func Bootstrap(cfg *Config) (*OpenForge, error) {
 	}
 
 		// Phase 7: Learning engine components
-		of.PreferenceStore = agentadapter.NewPGPreferenceStore(db)
-		of.TrajectoryStore = agentadapter.NewPGTrajectoryStore(db)
-		of.LLMPriorityQueue = domain.NewLLMPriorityQueue()
-		of.RetrospectiveGen = domain.NewRetrospectiveGenerator(nil, of.TrajectoryStore, of.PreferenceStore)
+	of.PreferenceStore = agentadapter.NewPGPreferenceStore(db)
+	of.TrajectoryStore = agentadapter.NewPGTrajectoryStore(db)
+	of.LLMPriorityQueue = domain.NewLLMPriorityQueue()
+
+	// Phase 8.4: Experiment, retrospective, and knowledge snapshot stores.
+	of.ExperimentStore = agentadapter.NewPGExperimentStore(db)
+	of.RetrospectiveStore = agentadapter.NewPGRetrospectiveStore(db)
+	of.KnowledgeSnapshotStore = agentadapter.NewPGKnowledgeSnapshotStore(db)
+
+	// Retrospective generator now has a real RetrospectiveStore backing it.
+	of.RetrospectiveGen = domain.NewRetrospectiveGenerator(
+		of.RetrospectiveStore, of.TrajectoryStore, of.PreferenceStore)
+
+	// LearningService orchestrates the full feedback loop:
+	// pipeline completion → retrospective → LLM analysis → preference updates.
+	of.LearningSvc = agentapp.NewLearningService(
+		of.TrajectoryStore, of.RetrospectiveStore,
+		of.PreferenceStore, of.ExperimentStore,
+		of.LLMRouter)
+
+	of.HashRing = observabilitydomain.NewHashRing()
+	of.HashRing.AddNode("local", 128)
+
+	of.BreakerPool = observabilitydomain.NewBreakerPool(observabilitydomain.BreakerConfig{
+		MaxFailures:     3,
+		OpenDuration:    60 * time.Second,
+		HalfOpenMaxReqs: 1,
+	})
+
+	of.SLO = observabilitydomain.NewSLOTracker()
+	of.PrometheusExporter = obsadapter.NewPrometheusExporter()
 
 	// Run database migrations
 	migrationsDir := "migrations"
@@ -173,6 +288,15 @@ func Bootstrap(cfg *Config) (*OpenForge, error) {
 			return nil, fmt.Errorf("migration: %w", err)
 		}
 	}
+
+	if of.BreakerPool != nil {
+		of.CommandExec = &breakerCommandExecutor{
+			name:    "command_executor",
+			breaker: of.BreakerPool.Get("command_executor"),
+			next:    of.CommandExec,
+		}
+	}
+
 	return of, nil
 }
 
@@ -298,7 +422,18 @@ func (s *noopObjectStore) List(_ context.Context, prefix string) ([]string, erro
 
 type noopTaskQueue struct{}
 
-func newTaskQueue(cfg *Config) kernel.TaskQueue { return &noopTaskQueue{} }
+func newTaskQueue(cfg *Config) kernel.TaskQueue {
+	switch cfg.TaskQueue {
+	case "redis-streams", "redis-cluster-streams":
+		addr := cfg.Database.Host + ":6379"
+		if cfg.Database.Host == "" {
+			addr = "localhost:6379"
+		}
+		return adapter.NewRedisTaskQueue(addr, "")
+	default:
+		return &noopTaskQueue{}
+	}
+}
 
 func (q *noopTaskQueue) Enqueue(_ context.Context, topic string, msg kernel.Message, priority int) error {
 	return nil
@@ -476,7 +611,20 @@ func newCommandExecutor(cfg *Config) kernel.CommandExecutor {
 	case "local-shell":
 		return adapter.NewLocalShellExecutor(adapter.WithProfile(cfg))
 	case "docker-sandbox":
-		return adapter.NewLocalShellExecutor(adapter.WithProfile(cfg))
+		dockerCfg := adapter.DockerSandboxConfig{
+			Image:       "openforge/sandbox-node:latest",
+			MemoryMB:    2048,
+			CPUs:        2,
+			MaxPids:     100,
+			NetworkMode: "none",
+			Timeout:     30 * time.Second,
+		}
+		exec, err := adapter.NewDockerSandboxExecutor(dockerCfg)
+		if err != nil {
+			// Docker unavailable: fall back to local shell for minimal profile.
+			return adapter.NewLocalShellExecutor(adapter.WithProfile(cfg))
+		}
+		return exec
 	default:
 		if cfg.Profile == "minimal" {
 			return adapter.NewLocalShellExecutor(adapter.WithProfile(cfg))
