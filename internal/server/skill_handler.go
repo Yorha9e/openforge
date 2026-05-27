@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 
@@ -14,6 +15,8 @@ func RegisterSkillRoutes(mux *http.ServeMux, of *profile.OpenForge, adminMw func
 	// Admin-only routes
 	mux.HandleFunc("GET /api/admin/skills", adminMw(handleSkillsList(of)))
 	mux.HandleFunc("GET /api/admin/skills/{name}", adminMw(handleSkillDetail(of)))
+	mux.HandleFunc("PATCH /api/admin/skills/{name}", adminMw(handleSkillDeprecateToggle(of)))
+	mux.HandleFunc("PUT /api/admin/skills/priorities", adminMw(handleSkillPrioritiesUpdate(of)))
 	mux.HandleFunc("GET /api/admin/skills/pending-deprecations", adminMw(handlePendingDeprecations(of)))
 	// Pipeline skills: any authenticated user
 	mux.HandleFunc("GET /api/pipelines/{pid}/skills", authMw(handlePipelineSkills(of)))
@@ -95,6 +98,70 @@ func skillToMap(s domain.Skill) map[string]interface{} {
 		"is_latest":        s.IsLatest,
 		"prompt_preview":   truncateSkillStr(s.Prompt, 200),
 		"workflow_steps":   len(s.Workflow),
+	}
+}
+
+func handleSkillDeprecateToggle(of *profile.OpenForge) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if of.SkillLoader == nil {
+			writeError(w, http.StatusServiceUnavailable, "skill loader not available")
+			return
+		}
+
+		name := r.PathValue("name")
+		if name == "" {
+			writeError(w, http.StatusBadRequest, "skill name required")
+			return
+		}
+
+		var req struct {
+			Deprecated bool `json:"deprecated"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+
+		if err := of.SkillLoader.UpdateSkillDeprecated(name, req.Deprecated); err != nil {
+			writeError(w, http.StatusInternalServerError, sanitizeError(err))
+			return
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{
+			"name":       name,
+			"deprecated": req.Deprecated,
+		})
+	}
+}
+
+func handleSkillPrioritiesUpdate(of *profile.OpenForge) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if of.SkillLoader == nil {
+			writeError(w, http.StatusServiceUnavailable, "skill loader not available")
+			return
+		}
+
+		var req struct {
+			Priorities map[string]float64 `json:"priorities"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+
+		if len(req.Priorities) == 0 {
+			writeError(w, http.StatusBadRequest, "priorities map required")
+			return
+		}
+
+		if err := of.SkillLoader.UpdateSkillPriorities(req.Priorities); err != nil {
+			writeError(w, http.StatusInternalServerError, sanitizeError(err))
+			return
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{
+			"updated": len(req.Priorities),
+		})
 	}
 }
 

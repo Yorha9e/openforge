@@ -1,0 +1,12 @@
+- generic [ref=e149]:
+  - banner [ref=e150]:
+    - link "← Back" [ref=e151] [cursor=pointer]:
+      - /url: /
+    - heading "My App" [level=1] [ref=e152]
+  - main [ref=e153]:
+    - generic [ref=e154]:
+      - heading "New Pipeline" [level=2] [ref=e155]
+      - generic [ref=e156]:
+        - textbox "Pipeline description" [ref=e157]:
+          - /placeholder: What do you want to build?
+        - button "Start pipeline" [ref=e158] [cursor=pointer]: Start

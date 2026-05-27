@@ -25,6 +25,14 @@ type AuditLogEntry struct {
 // Only accessible by admin users when compliance_suite feature flag is enabled.
 func handleAuditExport(of *profile.OpenForge) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		of.FeatureFlags.RLock()
+		enabled := of.FeatureFlags.ComplianceSuite
+		of.FeatureFlags.RUnlock()
+		if !enabled {
+			writeError(w, 404, "feature disabled")
+			return
+		}
+
 		if of.DB == nil {
 			http.Error(w, "database not available", http.StatusInternalServerError)
 			return

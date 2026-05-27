@@ -16,12 +16,13 @@ interface AuthState {
   refreshToken: string | null;
   user: { id: string; role: string } | null;
   login: (username: string, password: string) => Promise<void>;
+  register: (username: string, password: string, displayName: string) => Promise<void>;
   logout: () => void;
 }
 
 const AuthContext = createContext<AuthState>({
   token: null, refreshToken: null, user: null,
-  login: async () => {}, logout: () => {},
+  login: async () => {}, register: async () => {}, logout: () => {},
 });
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -36,17 +37,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return u ? JSON.parse(u) : null;
   });
 
-  const login = useCallback(async (username: string, password: string) => {
-    const result = await api.login(username, password);
+  const applyAuthResult = useCallback((result: { access_token: string; refresh_token: string; expires_in: number; display_name?: string; role?: string }, username: string) => {
     setAccessToken(result.access_token);
     setRefreshToken(result.refresh_token);
-    const u = { id: username, role: parseRoleFromJWT(result.access_token) };
+    const u = { id: username, role: result.role || parseRoleFromJWT(result.access_token) };
     setUser(u);
     localStorage.setItem('of_token', result.access_token);
     localStorage.setItem('of_refresh', result.refresh_token);
     localStorage.setItem('of_user', JSON.stringify(u));
     setToken(result.access_token);
   }, []);
+
+  const login = useCallback(async (username: string, password: string) => {
+    const result = await api.login(username, password);
+    applyAuthResult(result, username);
+  }, [applyAuthResult]);
+
+  const register = useCallback(async (username: string, password: string, displayName: string) => {
+    const result = await api.register(username, password, displayName);
+    applyAuthResult(result, username);
+  }, [applyAuthResult]);
 
   const logout = useCallback(() => {
     setAccessToken(null); setRefreshToken(null); setUser(null);
@@ -57,7 +67,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ token, refreshToken, user, login, logout }}>
+    <AuthContext.Provider value={{ token, refreshToken, user, login, register, logout }}>
       {children}
     </AuthContext.Provider>
   );

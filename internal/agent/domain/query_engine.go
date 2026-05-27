@@ -11,6 +11,7 @@ import (
 	"time"
 
 	agentport "openforge/internal/agent/port"
+	pipelineport "openforge/internal/pipeline/port"
 )
 
 // QueryState represents the state of the query engine.
@@ -72,18 +73,21 @@ type QueryEngine struct {
 	checkpointSeq   int32
 	checkpointCache []*Checkpoint
 	checkpointRepo  CheckpointRepository
+	convRepo        pipelineport.ConversationRepository
+	activeBranchID  string
 	mu              sync.Mutex
 }
 
 // NewQueryEngine creates a new QueryEngine with the given LLM client and config.
 func NewQueryEngine(llmClient agentport.LLMRouterClient, config agentport.LLMConfig, promptBuilder *PromptBuilder, pipelineCtx PipelineContext) *QueryEngine {
 	return &QueryEngine{
-		llmClient:     llmClient,
-		config:        config,
-		state:         QueryStateIdle,
-		promptBuilder: promptBuilder,
-		pipelineCtx:   pipelineCtx,
-		toolRegistry:  make(ToolRegistry),
+		llmClient:      llmClient,
+		config:         config,
+		state:          QueryStateIdle,
+		promptBuilder:  promptBuilder,
+		pipelineCtx:    pipelineCtx,
+		toolRegistry:   make(ToolRegistry),
+		activeBranchID: "main",
 	}
 }
 
@@ -185,6 +189,29 @@ func (qe *QueryEngine) SetCheckpointRepo(repo CheckpointRepository) {
 	qe.checkpointRepo = repo
 }
 
+// SetConversationRepo sets the conversation repository for chat persistence.
+func (qe *QueryEngine) SetConversationRepo(repo pipelineport.ConversationRepository) {
+	qe.mu.Lock()
+	defer qe.mu.Unlock()
+	qe.convRepo = repo
+}
+
+// saveMessage persists a message to the conversation store (best-effort, non-blocking).
+// msgSeq must be computed by the caller while holding qe.mu to avoid data races.
+func (qe *QueryEngine) saveMessage(msgSeq int, role, msgType, content string) {
+	if qe.convRepo == nil {
+		return
+	}
+	_ = qe.convRepo.SaveMessage(context.Background(), &pipelineport.DBMessage{
+		PipelineID: qe.pipelineCtx.PipelineID,
+		BranchID:   qe.activeBranchID,
+		MsgSeq:     msgSeq,
+		Role:       role,
+		MsgType:    msgType,
+		Content:    content,
+	})
+}
+
 // State returns the current query engine state.
 func (qe *QueryEngine) State() QueryState {
 	qe.mu.Lock()
@@ -207,6 +234,7 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, msg string) (<-chan St
 	}
 
 	qe.mu.Lock()
+	userMsgSeq := len(qe.messages)
 	qe.messages = append(qe.messages, agentport.Message{Role: "user", Content: msg})
 	qe.tokenCount += int64(len(msg) / 4)
 	history := make([]agentport.Message, len(qe.messages))
@@ -249,28 +277,37 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, msg string) (<-chan St
 		atomic.AddInt64(&qe.tokenCount, int64(len(resp.Content)/4))
 	}
 
+	// Persist user message now that LLM call succeeded
+	qe.saveMessage(userMsgSeq, "user", "text", msg)
+
 	// Single-turn: LLM done, no tool calls
 	if resp.StopReason == "end_turn" || resp.StopReason == "stop_sequence" {
 		qe.mu.Lock()
+		msgSeq := len(qe.messages)
 		qe.messages = append(qe.messages, agentport.Message{Role: "assistant", Content: resp.Content})
 		qe.state = QueryStateAwaitingUser
 		qe.mu.Unlock()
+		qe.saveMessage(msgSeq, "agent", "text", resp.Content)
 		return singleTurnOut(resp.Content), nil
 	}
 
 	toolCalls := parseToolCalls(resp.Content)
 	if len(toolCalls) == 0 {
 		qe.mu.Lock()
+		msgSeq := len(qe.messages)
 		qe.messages = append(qe.messages, agentport.Message{Role: "assistant", Content: resp.Content})
 		qe.state = QueryStateAwaitingUser
 		qe.mu.Unlock()
+		qe.saveMessage(msgSeq, "agent", "text", resp.Content)
 		return singleTurnOut(resp.Content), nil
 	}
 
 	// Multi-turn: tool_use detected, enter tool loop
 	qe.mu.Lock()
+	msgSeq := len(qe.messages)
 	qe.messages = append(qe.messages, agentport.Message{Role: "assistant", Content: resp.Content})
 	qe.mu.Unlock()
+	qe.saveMessage(msgSeq, "agent", "text", resp.Content)
 
 	out := make(chan StreamEvent, 64)
 	go qe.runToolLoop(ctx, out, resp, toolCalls)
@@ -323,8 +360,10 @@ func (qe *QueryEngine) runToolLoop(ctx context.Context, out chan<- StreamEvent, 
 			out <- StreamEvent{Type: eventType, ToolName: r.Tool, ToolStatus: r.Status, Content: r.Output}
 
 			qe.mu.Lock()
+			msgSeq := len(qe.messages)
 			qe.messages = append(qe.messages, agentport.Message{Role: "tool", Content: formatToolResultXML(r)})
 			qe.mu.Unlock()
+			qe.saveMessage(msgSeq, "agent", "text", formatToolResultXML(r))
 		}
 
 		// Token check after tool execution
@@ -390,9 +429,11 @@ func (qe *QueryEngine) runToolLoop(ctx context.Context, out chan<- StreamEvent, 
 
 		if resp.StopReason == "end_turn" || resp.StopReason == "stop_sequence" {
 			qe.mu.Lock()
+			msgSeq := len(qe.messages)
 			qe.messages = append(qe.messages, agentport.Message{Role: "assistant", Content: resp.Content})
 			qe.state = QueryStateAwaitingUser
 			qe.mu.Unlock()
+			qe.saveMessage(msgSeq, "agent", "text", resp.Content)
 			out <- StreamEvent{Type: "done", Content: extractTextOnly(resp.Content)}
 			return
 		}
@@ -400,16 +441,20 @@ func (qe *QueryEngine) runToolLoop(ctx context.Context, out chan<- StreamEvent, 
 		toolCalls = parseToolCalls(resp.Content)
 		if len(toolCalls) == 0 {
 			qe.mu.Lock()
+			msgSeq := len(qe.messages)
 			qe.messages = append(qe.messages, agentport.Message{Role: "assistant", Content: resp.Content})
 			qe.state = QueryStateAwaitingUser
 			qe.mu.Unlock()
+			qe.saveMessage(msgSeq, "agent", "text", resp.Content)
 			out <- StreamEvent{Type: "done", Content: extractTextOnly(resp.Content)}
 			return
 		}
 
 		qe.mu.Lock()
+		msgSeq := len(qe.messages)
 		qe.messages = append(qe.messages, agentport.Message{Role: "assistant", Content: resp.Content})
 		qe.mu.Unlock()
+		qe.saveMessage(msgSeq, "agent", "text", resp.Content)
 	}
 
 	out <- StreamEvent{Type: "done", Content: "Maximum tool rounds reached."}
@@ -662,4 +707,18 @@ func (qe *QueryEngine) Clear() {
 	qe.messages = nil
 	qe.tokenCount = 0
 	qe.state = QueryStateIdle
+}
+
+// LoadMessages restores conversation history from persisted storage (e.g. after reconnect).
+func (qe *QueryEngine) LoadMessages(msgs []agentport.Message) {
+	qe.mu.Lock()
+	defer qe.mu.Unlock()
+	qe.messages = make([]agentport.Message, len(msgs))
+	copy(qe.messages, msgs)
+	tokens := int64(0)
+	for _, m := range msgs {
+		tokens += int64(len(m.Content) / 4)
+	}
+	qe.tokenCount = tokens
+	qe.state = QueryStateAwaitingUser
 }

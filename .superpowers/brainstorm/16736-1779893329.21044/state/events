@@ -1,0 +1,7 @@
+{"type":"click","text":"A\n    \n      扩展 Profile YAML\n      个人模式用户直接设置 minimal.yaml，企业部署用 enterprise.yaml，在配置文件中声明开关","choice":"profile-extend","id":null,"timestamp":1779866524182}
+{"type":"click","text":"B\n    \n      运行时 Feature Flags\n      新建 feature_flags 表 + API，Admin 面板实时切换，不用重启","choice":"runtime-flags","id":null,"timestamp":1779866524934}
+{"type":"click","text":"A\n    \n      扩展 Profile YAML\n      个人模式用户直接设置 minimal.yaml，企业部署用 enterprise.yaml，在配置文件中声明开关","choice":"profile-extend","id":null,"timestamp":1779866525245}
+{"type":"click","text":"B\n    \n      运行时 Feature Flags\n      新建 feature_flags 表 + API，Admin 面板实时切换，不用重启","choice":"runtime-flags","id":null,"timestamp":1779866525649}
+{"type":"click","text":"A\n    \n      扩展 Profile YAML\n      个人模式用户直接设置 minimal.yaml，企业部署用 enterprise.yaml，在配置文件中声明开关","choice":"profile-extend","id":null,"timestamp":1779866526085}
+{"type":"click","text":"B\n    \n      运行时 Feature Flags\n      新建 feature_flags 表 + API，Admin 面板实时切换，不用重启","choice":"runtime-flags","id":null,"timestamp":1779873885213}
+{"type":"click","text":"C\n    \n      混合方案\n      Profile 设定默认值 + DB 覆盖。minimal 默认全关，enterprise 默认全开，Admin 面板可覆盖","choice":"hybrid","id":null,"timestamp":1779873891817}

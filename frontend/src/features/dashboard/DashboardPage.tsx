@@ -2,8 +2,9 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../../shared/api';
 import { useAuth } from '../../shared/auth';
-import { ProjectCard } from './ProjectCard';
+import { AppLayout } from '../../shared/AppLayout';
 import { tokens } from '../../shared/design-tokens';
+import { ProjectCard } from './ProjectCard';
 import { PageSkeleton } from '../../shared/skeleton';
 
 interface Project {
@@ -18,6 +19,7 @@ interface DashboardStats {
   projectCount: number;
   skillCount: number;
   pendingReviews: number;
+  pipelinesActive: number;
 }
 
 function StatCard({ label, value, to, accent }: { label: string; value: number; to: string; accent: string }) {
@@ -42,39 +44,6 @@ function StatCard({ label, value, to, accent }: { label: string; value: number; 
   );
 }
 
-function NavIcon({ children, to, label, external }: { children: React.ReactNode; to: string; label: string; external?: boolean }) {
-  const [hovered, setHovered] = useState(false);
-  const linkProps = external ? { href: to, target: '_blank', rel: 'noopener noreferrer' } : { to };
-  const Component = external ? 'a' : Link;
-
-  return (
-    <Component
-      {...linkProps as any}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      onFocus={() => setHovered(true)}
-      onBlur={() => setHovered(false)}
-      aria-label={label}
-      style={{
-        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
-        padding: '14px 16px', borderRadius: 8, textDecoration: 'none',
-        background: hovered ? tokens.surface : 'transparent',
-        border: `1px solid ${hovered ? tokens.border : 'transparent'}`,
-        transition: tokens.transition, cursor: 'pointer',
-        minWidth: 80, minHeight: 44,
-        outline: 'none',
-      }}
-    >
-      <div style={{ color: hovered ? tokens.cta : tokens.muted, transition: tokens.transition }}>
-        {children}
-      </div>
-      <span style={{ fontSize: 11, color: hovered ? tokens.text : tokens.muted, transition: tokens.transition, whiteSpace: 'nowrap' }}>
-        {label}
-      </span>
-    </Component>
-  );
-}
-
 function fetchSkillCount(): Promise<number> {
   return api.listSkills()
     .then((data: any[]) => (Array.isArray(data) ? data.length : 0))
@@ -87,19 +56,32 @@ function fetchReviewCount(): Promise<number> {
     .catch(() => 0);
 }
 
+interface ActivePipeline {
+  id: string;
+  project_id: string;
+  project_name: string;
+  title: string;
+  status: string;
+  current_stage: string;
+  updated_at: string;
+}
+
+const ALL_STAGES = ['clarify', 'decompose', 'impl', 'test', 'deploy', 'verify'];
+const STAGE_NAMES: Record<string, string> = {
+  clarify: 'Clarify', decompose: 'Decompose', impl: 'Impl', test: 'Test', deploy: 'Deploy', verify: 'Verify',
+};
+
 export function DashboardPage() {
-  const { user, logout } = useAuth();
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [logoutHovered, setLogoutHovered] = useState(false);
-  const [showContent, setShowContent] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState('');
   const [newGitUrl, setNewGitUrl] = useState('');
   const [creating, setCreating] = useState(false);
-  const [stats, setStats] = useState<DashboardStats>({ projectCount: 0, skillCount: 0, pendingReviews: 0 });
-  const [systemStatus, setSystemStatus] = useState<{ phase: string; profile: string; health: string; models: number; skills: number } | null>(null);
+  const [stats, setStats] = useState<DashboardStats>({ projectCount: 0, skillCount: 0, pendingReviews: 0, pipelinesActive: 0 });
+  const [activePipelines, setActivePipelines] = useState<ActivePipeline[]>([]);
+  const [showContent, setShowContent] = useState(false);
 
   useEffect(() => {
     const minDelay = new Promise(r => setTimeout(r, 600));
@@ -107,16 +89,21 @@ export function DashboardPage() {
       api.listProjects().then(p => setProjects(Array.isArray(p) ? p : [])),
       fetchSkillCount().then(c => setStats(s => ({ ...s, skillCount: c }))),
       fetchReviewCount().then(c => setStats(s => ({ ...s, pendingReviews: c }))),
-      api.getHealth().then((d: any) => d.status).catch(() => 'unknown'),
-      api.getAdminStatus().then((d: any) => setSystemStatus({
-        phase: d.phase, profile: d.profile, health: 'ok', models: d.models, skills: d.skills,
-      })).catch(() => {}),
+      api.activePipelines().then(d => {
+        const arr = Array.isArray(d) ? d : [];
+        setActivePipelines(arr);
+        setStats(s => ({ ...s, pipelinesActive: arr.length }));
+      }).catch(() => {}),
     ]).catch(err => setError(err instanceof Error ? err.message : 'Failed to load'));
     Promise.all([fetchData, minDelay]).finally(() => {
       setLoading(false);
       setShowContent(true);
     });
   }, []);
+
+  useEffect(() => {
+    setStats(s => ({ ...s, projectCount: projects.length }));
+  }, [projects]);
 
   const handleCreateProject = async () => {
     if (!newName.trim()) return;
@@ -132,175 +119,171 @@ export function DashboardPage() {
     } finally { setCreating(false); }
   };
 
-  useEffect(() => {
-    setStats(s => ({ ...s, projectCount: projects.length }));
-  }, [projects]);
-
-  const navLinks = [
-    { to: '/review-inbox', label: 'Review Inbox', icon: (
-      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M22 12h-6l-2 3H10l-2-3H2"/><path d="M5.45 5.11L2 12v6a2 2 0 002 2h16a2 2 0 002-2v-6l-3.45-6.89A2 2 0 0016.76 4H7.24a2 2 0 00-1.79 1.11z"/>
-      </svg>
-    )},
-    { to: '/admin/skills', label: 'Skills', icon: (
-      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-        <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
-      </svg>
-    )},
-    { to: '/settings', label: 'Settings', icon: (
-      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-        <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/>
-      </svg>
-    )},
-    { to: '/admin', label: 'Admin', icon: (
-      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
-      </svg>
-    )},
-  ];
+  if (loading) return <PageSkeleton />;
 
   return (
-    <div style={{ minHeight: '100vh', background: tokens.bg, color: tokens.text, fontFamily: tokens.fontBody }}>
-      <header style={{
-        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-        padding: '12px 32px', borderBottom: `1px solid ${tokens.border}`,
-        background: tokens.surface,
+    <AppLayout>
+      {error && (
+        <div style={{
+          padding: '12px 16px', marginBottom: 24, borderRadius: 8,
+          background: `${tokens.error}18`, border: `1px solid ${tokens.error}40`,
+          color: tokens.error, fontSize: 14,
+        }}>{error}</div>
+      )}
+
+      {/* Stats Row */}
+      <div style={{
+        display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+        gap: 12, marginBottom: 24,
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-          <h1 style={{
-            fontSize: 20, fontWeight: 700, fontFamily: tokens.fontHeading, margin: 0,
-            color: tokens.cta, letterSpacing: '-0.5px',
-          }}>OpenForge</h1>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <span style={{ color: tokens.muted, fontSize: 13 }}>{user?.id}</span>
-          <button
-            onClick={logout}
-            onMouseEnter={() => setLogoutHovered(true)}
-            onMouseLeave={() => setLogoutHovered(false)}
-            aria-label="Sign Out"
-            style={{
-              background: 'none', border: `1px solid ${logoutHovered ? tokens.error : tokens.border}`,
-              color: logoutHovered ? tokens.error : tokens.muted,
-              fontSize: 13, cursor: 'pointer', borderRadius: 6,
-              padding: '8px 16px', transition: tokens.transition, minHeight: 44,
-            }}>Sign Out</button>
-        </div>
-      </header>
+        <StatCard label="Projects" value={stats.projectCount} to="/" accent={tokens.cta} />
+        <StatCard label="Available Skills" value={stats.skillCount} to="/admin/skills" accent="#8b5cf6" />
+        <StatCard label="Pending Reviews" value={stats.pendingReviews} to="/review-inbox" accent={tokens.warning} />
+        <StatCard label="Pipelines Active" value={stats.pipelinesActive} to="/" accent="#3b82f6" />
+      </div>
 
-      {!showContent ? <PageSkeleton /> : (
-        <main style={{ maxWidth: 1080, margin: '0 auto', padding: '32px 24px' }}>
-          {error && (
-            <div style={{
-              padding: '12px 16px', marginBottom: 24, borderRadius: 8,
-              background: `${tokens.error}18`, border: `1px solid ${tokens.error}40`,
-              color: tokens.error, fontSize: 14,
-            }}>{error}</div>
-          )}
-
-          {/* Stats Row */}
+      {/* Active Pipelines Board */}
+      {activePipelines.length > 0 && (
+        <>
+          <h2 style={{ fontSize: 22, fontWeight: 700, fontFamily: tokens.fontHeading, margin: '0 0 16px 0', color: tokens.text }}>Active Pipelines</h2>
           <div style={{
-            display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+            display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
             gap: 12, marginBottom: 32,
           }}>
-            <StatCard label="Projects" value={stats.projectCount} to="/" accent={tokens.cta} />
-            <StatCard label="Available Skills" value={stats.skillCount} to="/admin/skills" accent="#8b5cf6" />
-            <StatCard label="Pending Reviews" value={stats.pendingReviews} to="/review-inbox" accent={tokens.warning} />
-            <StatCard label="Pipelines Active" value={0} to="/" accent="#3b82f6" />
+            {activePipelines.map(ap => {
+              const stageIdx = ALL_STAGES.indexOf(ap.current_stage || '');
+              const isBlocked = ap.status === 'awaiting_review' || ap.status === 'paused';
+              return (
+                <Link key={ap.id} to={`/project/${ap.project_id}/pipeline/${ap.id}`} style={{ textDecoration: 'none' }}>
+                  <div style={{
+                    background: tokens.surface, borderRadius: 8, padding: '14px 16px',
+                    border: `1px solid ${isBlocked ? tokens.warning : tokens.border}`,
+                    boxShadow: isBlocked ? `0 0 12px ${tokens.warning}20` : 'none',
+                    transition: tokens.transition,
+                  }}
+                    onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = tokens.cta; }}
+                    onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = isBlocked ? tokens.warning : tokens.border; }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 13, color: tokens.muted, marginBottom: 2, display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <span style={{
+                            display: 'inline-block', width: 8, height: 8, borderRadius: '50%',
+                            background: ap.status === 'running' ? tokens.cta : tokens.warning,
+                            animation: ap.status === 'running' ? 'pulse 1.8s ease-in-out infinite' : 'none',
+                          }} />
+                          {ap.project_name}
+                        </div>
+                        <div style={{ fontSize: 14, fontWeight: 600, color: tokens.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {ap.title}
+                        </div>
+                      </div>
+                      {isBlocked && (
+                        <span style={{
+                          padding: '2px 8px', borderRadius: 8, background: `${tokens.warning}20`,
+                          color: tokens.warning, fontSize: 11, fontWeight: 600, flexShrink: 0, marginLeft: 8,
+                        }}>
+                          Review
+                        </span>
+                      )}
+                    </div>
+                    {/* Stage progress bar */}
+                    <div style={{ display: 'flex', gap: 3, alignItems: 'center' }}>
+                      {ALL_STAGES.map((s, i) => {
+                        const isCurrent = i === stageIdx;
+                        const isPassed = i < stageIdx;
+                        return (
+                          <div key={s} style={{ flex: 1, position: 'relative' }}>
+                            <div style={{
+                              height: 4, borderRadius: 2,
+                              background: isPassed ? tokens.cta : isCurrent ? tokens.warning : tokens.border,
+                              boxShadow: isCurrent ? `0 0 6px ${tokens.warning}` : 'none',
+                              transition: tokens.transition,
+                            }} />
+                            {isCurrent && (
+                              <div style={{
+                                position: 'absolute', top: -2, left: '50%', transform: 'translateX(-50%)',
+                                width: 8, height: 8, borderRadius: '50%', background: tokens.warning,
+                                animation: 'pulse 1.2s ease-in-out infinite',
+                              }} />
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6, fontSize: 11, color: tokens.muted }}>
+                      <span>{ap.current_stage ? STAGE_NAMES[ap.current_stage] || ap.current_stage : '—'}</span>
+                      <span>{new Date(ap.updated_at).toLocaleDateString()}</span>
+                    </div>
+                  </div>
+                </Link>
+              );
+            })}
           </div>
+        </>
+      )}
 
-          {/* System Status Bar */}
-          {systemStatus && (
-            <div style={{
-              display: 'flex', flexWrap: 'wrap', gap: 16, marginBottom: 24, padding: '10px 16px',
-              background: tokens.surface, borderRadius: 8, border: `1px solid ${tokens.border}`,
-              fontSize: 12, color: tokens.muted, alignItems: 'center',
-            }}>
-              <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span style={{ width: 8, height: 8, borderRadius: '50%', background: tokens.cta, display: 'inline-block' }} />
-                {systemStatus.phase} · {systemStatus.profile}
-              </span>
-              <span style={{ color: tokens.border }}>|</span>
-              <span>{systemStatus.skills} skills</span>
-              <span style={{ color: tokens.border }}>|</span>
-              <span>{systemStatus.models} models</span>
-            </div>
-          )}
-
-          {/* Quick Nav */}
-          <div style={{
-            display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 32,
-            justifyContent: 'center',
+      {/* Projects Section */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+        <h2 style={{ fontSize: 22, fontWeight: 700, fontFamily: tokens.fontHeading, margin: 0, color: tokens.text }}>Projects</h2>
+        <button
+          onClick={() => setShowCreate(!showCreate)}
+          style={{
+            padding: '8px 16px', background: tokens.cta, color: tokens.ctaText, border: 'none', borderRadius: 6,
+            cursor: 'pointer', fontWeight: 500, fontSize: 13, transition: tokens.transition,
           }}>
-            {navLinks.map(link => (
-              <NavIcon key={link.to} to={link.to} label={link.label}>
-                {link.icon}
-              </NavIcon>
-            ))}
-          </div>
+          + New Project
+        </button>
+      </div>
 
-          {/* Projects Section */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-            <h2 style={{ fontSize: 22, fontWeight: 700, fontFamily: tokens.fontHeading, margin: 0, color: tokens.text }}>Projects</h2>
+      {showCreate && (
+        <div style={{ background: tokens.surface, border: `1px solid ${tokens.border}`, borderRadius: 8, padding: 16, marginBottom: 20 }}>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <input type="text" placeholder="Project name" value={newName}
+              onChange={e => setNewName(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && handleCreateProject()}
+              style={{ flex: '1 1 200px', padding: '8px 12px', background: tokens.bg, border: `1px solid ${tokens.border}`, borderRadius: 4, color: tokens.text, fontSize: 14, outline: 'none' }} />
+            <input type="text" placeholder="Git URL (optional)" value={newGitUrl}
+              onChange={e => setNewGitUrl(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && handleCreateProject()}
+              style={{ flex: '1 1 300px', padding: '8px 12px', background: tokens.bg, border: `1px solid ${tokens.border}`, borderRadius: 4, color: tokens.text, fontSize: 14, outline: 'none' }} />
             <button
-              onClick={() => setShowCreate(!showCreate)}
-              style={{
-                padding: '8px 16px', background: tokens.cta, color: tokens.ctaText, border: 'none', borderRadius: 6,
-                cursor: 'pointer', fontWeight: 500, fontSize: 13, transition: tokens.transition,
-              }}>
-              + New Project
+              onClick={handleCreateProject}
+              disabled={creating || !newName.trim()}
+              style={{ padding: '8px 20px', background: tokens.cta, color: tokens.ctaText, border: 'none', borderRadius: 4, cursor: creating ? 'default' : 'pointer', fontWeight: 500, opacity: creating || !newName.trim() ? 0.5 : 1 }}>
+              {creating ? 'Creating...' : 'Create'}
             </button>
           </div>
-
-          {showCreate && (
-            <div style={{ background: tokens.surface, border: `1px solid ${tokens.border}`, borderRadius: 8, padding: 16, marginBottom: 20 }}>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                <input type="text" placeholder="Project name" value={newName}
-                  onChange={e => setNewName(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && handleCreateProject()}
-                  style={{ flex: '1 1 200px', padding: '8px 12px', background: tokens.bg, border: `1px solid ${tokens.border}`, borderRadius: 4, color: tokens.text, fontSize: 14, outline: 'none' }} />
-                <input type="text" placeholder="Git URL (optional)" value={newGitUrl}
-                  onChange={e => setNewGitUrl(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && handleCreateProject()}
-                  style={{ flex: '1 1 300px', padding: '8px 12px', background: tokens.bg, border: `1px solid ${tokens.border}`, borderRadius: 4, color: tokens.text, fontSize: 14, outline: 'none' }} />
-                <button
-                  onClick={handleCreateProject}
-                  disabled={creating || !newName.trim()}
-                  style={{ padding: '8px 20px', background: tokens.cta, color: tokens.ctaText, border: 'none', borderRadius: 4, cursor: creating ? 'default' : 'pointer', fontWeight: 500, opacity: creating || !newName.trim() ? 0.5 : 1 }}>
-                  {creating ? 'Creating...' : 'Create'}
-                </button>
-              </div>
-            </div>
-          )}
-
-          {projects.length === 0 ? (
-            <div style={{
-              textAlign: 'center', padding: '60px 0',
-              background: tokens.surface, borderRadius: 8,
-              border: `1px solid ${tokens.border}`,
-            }}>
-              <div style={{ marginBottom: 12, color: tokens.muted }}>
-                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round">
-                  <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/>
-                </svg>
-              </div>
-              <p style={{ color: tokens.muted, fontSize: 16, marginBottom: 8, fontWeight: 500 }}>No projects yet</p>
-              <p style={{ color: tokens.muted, fontSize: 14, marginBottom: 0 }}>Connect a Git repository to get started with OpenForge.</p>
-            </div>
-          ) : (
-            <div style={{
-              display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
-              gap: 16,
-            }}>
-              {projects.map(p => (
-                <Link key={p.id} to={`/project/${p.id}`} style={{ textDecoration: 'none' }}>
-                  <ProjectCard project={p} />
-                </Link>
-              ))}
-            </div>
-          )}
-        </main>
+        </div>
       )}
-    </div>
+
+      {!showContent ? <PageSkeleton cards={1} />
+      : projects.length === 0 ? (
+        <div style={{
+          textAlign: 'center', padding: '60px 0',
+          background: tokens.surface, borderRadius: 8,
+          border: `1px solid ${tokens.border}`,
+        }}>
+          <div style={{ marginBottom: 12, color: tokens.muted }}>
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round">
+              <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/>
+            </svg>
+          </div>
+          <p style={{ color: tokens.muted, fontSize: 16, marginBottom: 8, fontWeight: 500 }}>No projects yet</p>
+          <p style={{ color: tokens.muted, fontSize: 14, marginBottom: 0 }}>Connect a Git repository to get started with OpenForge.</p>
+        </div>
+      ) : (
+        <div style={{
+          display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
+          gap: 16,
+        }}>
+          {projects.map(p => (
+            <Link key={p.id} to={`/project/${p.id}`} style={{ textDecoration: 'none' }}>
+              <ProjectCard project={p} />
+            </Link>
+          ))}
+        </div>
+      )}
+    </AppLayout>
   );
 }

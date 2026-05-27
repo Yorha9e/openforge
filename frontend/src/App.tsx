@@ -17,6 +17,8 @@ const CircuitBreakerPage = lazy(() => import('./features/errors/CircuitBreakerPa
 const AdminPage = lazy(() => import('./features/admin/AdminPage'));
 const SkillPanel = lazy(() => import('./features/admin/SkillPanel'));
 const ComplianceReportPage = lazy(() => import('./features/compliance/ComplianceReportPage'));
+const GrafanaPage = lazy(() => import('./features/monitoring/GrafanaPage'));
+const ADRPage = lazy(() => import('./features/adr/ADRPage'));
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { token } = useAuth();
@@ -90,6 +92,20 @@ export function App() {
       {featureFlags?.compliance_suite && (
         <Route path="/compliance" element={
           <ProtectedRoute><Suspense fallback={<LoadingFallback />}><ComplianceReportPage /></Suspense></ProtectedRoute>
+        } />
+      )}
+      
+      {/* Production ops: conditionally registered when production_ops flag is ON */}
+      {featureFlags?.production_ops && (
+        <Route path="/monitoring" element={
+          <ProtectedRoute><Suspense fallback={<LoadingFallback />}><GrafanaPage /></Suspense></ProtectedRoute>
+        } />
+      )}
+      
+      {/* Distribution artifacts: conditionally registered when distribution_artifacts flag is ON */}
+      {featureFlags?.distribution_artifacts && (
+        <Route path="/adr" element={
+          <ProtectedRoute><Suspense fallback={<LoadingFallback />}><ADRPage /></Suspense></ProtectedRoute>
         } />
       )}
     </Routes>

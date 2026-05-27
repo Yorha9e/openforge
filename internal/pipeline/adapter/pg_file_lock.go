@@ -21,7 +21,7 @@ func NewPGFileLockStore(db *sql.DB) *PGFileLockStore {
 // Acquire inserts a file lock. Succeeds only when (project_id, file_path) is
 // not already locked (ON CONFLICT DO NOTHING).
 func (s *PGFileLockStore) Acquire(pipelineID, projectID, filePath string, lockType domain.LockType) error {
-	_, err := s.db.Exec(`
+	res, err := s.db.Exec(`
 		INSERT INTO file_lock
 			(pipeline_id, project_id, file_path, lock_type, estimated_duration, expires_at)
 		VALUES ($1, $2, $3, $4, $5, $6)
@@ -29,6 +29,13 @@ func (s *PGFileLockStore) Acquire(pipelineID, projectID, filePath string, lockTy
 	`, pipelineID, projectID, filePath, lockType, 300, time.Now().Add(10*time.Minute))
 	if err != nil {
 		return fmt.Errorf("acquire lock %s: %w", filePath, err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
+	if rows == 0 {
+		return domain.ErrFileLockConflict
 	}
 	return nil
 }

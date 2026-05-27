@@ -3,6 +3,7 @@ package domain
 import (
 	"hash/crc32"
 	"sort"
+	"strconv"
 	"sync"
 )
 
@@ -35,9 +36,13 @@ func (h *HashRing) AddNode(nodeID string, virtualNodes int) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
+	if _, exists := h.nodes[nodeID]; exists {
+		h.removeNodeLocked(nodeID)
+	}
+
 	h.nodes[nodeID] = virtualNodes
-	for i := range virtualNodes {
-		hash := crc32.ChecksumIEEE([]byte(nodeID + "-" + string(rune(i))))
+	for i := 0; i < virtualNodes; i++ {
+		hash := crc32.ChecksumIEEE([]byte(nodeID + "-" + strconv.Itoa(i)))
 		h.ring = append(h.ring, hash)
 		h.ringMap[hash] = nodeID
 	}
@@ -69,6 +74,10 @@ func (h *HashRing) RemoveNode(nodeID string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
+	h.removeNodeLocked(nodeID)
+}
+
+func (h *HashRing) removeNodeLocked(nodeID string) {
 	delete(h.nodes, nodeID)
 
 	newRing := make([]uint32, 0, len(h.ring))

@@ -1,0 +1,9 @@
+- generic [ref=e4]:
+  - heading "OpenForge" [level=1] [ref=e5]
+  - generic [ref=e6]:
+    - generic [ref=e7]: Username
+    - textbox "Username" [active] [ref=e8]
+  - generic [ref=e9]:
+    - generic [ref=e10]: Password
+    - textbox "Password" [ref=e11]
+  - button "Sign In" [ref=e12] [cursor=pointer]

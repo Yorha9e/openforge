@@ -14,7 +14,7 @@ import (
 func TestFeishuNotifier_Send_Success(t *testing.T) {
 	received := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body map[string]interface{}
+		var body map[string]any
 		json.NewDecoder(r.Body).Decode(&body)
 		if body["msg_type"] != nil {
 			received = true

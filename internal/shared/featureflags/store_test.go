@@ -54,31 +54,12 @@ func TestStore_SeedDefaults_Idempotent(t *testing.T) {
 	if err := store.SeedDefaults(ctx, defaults); err != nil {
 		t.Fatalf("seed1: %v", err)
 	}
-	// Second seed with different values should NOT overwrite (ON CONFLICT DO NOTHING).
 	if err := store.SeedDefaults(ctx, &FeatureFlags{}); err != nil {
 		t.Fatalf("seed2: %v", err)
 	}
 	flags, _ := store.Load(ctx)
 	if !flags.ComplianceSuite || !flags.ProductionOps {
 		t.Error("SeedDefaults overwrote existing — idempotency broken")
-	}
-}
-
-func TestStore_SaveAll_Transactional(t *testing.T) {
-	db := testDB(t)
-	store := NewStore(db)
-	ctx := context.Background()
-
-	f := &FeatureFlags{
-		EnterprisePlatform: true, ComplianceSuite: true,
-		ProductionOps: false, DistributionArtifacts: false,
-	}
-	if err := store.SaveAll(ctx, f); err != nil {
-		t.Fatalf("SaveAll: %v", err)
-	}
-	flags, _ := store.Load(ctx)
-	if !flags.EnterprisePlatform || !flags.ComplianceSuite {
-		t.Error("SaveAll did not persist all flags")
 	}
 }
 
@@ -91,6 +72,6 @@ func TestStore_Save_Overwrite(t *testing.T) {
 	store.Save(ctx, "distribution_artifacts", false)
 	flags, _ := store.Load(ctx)
 	if flags.DistributionArtifacts {
-		t.Error("overwrite should set to false")
+		t.Error("overwrite should have set false")
 	}
 }

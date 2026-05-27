@@ -1,4 +1,5 @@
 import { useSearchParams, useNavigate } from 'react-router-dom';
+import { tokens } from '../../shared/design-tokens';
 
 type ErrorCode = 404 | 500 | 503;
 
@@ -38,7 +39,7 @@ function getErrorConfig(code: ErrorCode): ErrorConfig {
   }
 }
 
-export function ErrorPage() {
+export default function ErrorPage() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const codeParam = searchParams.get('code');
@@ -57,9 +58,9 @@ export function ErrorPage() {
     <div
       style={{
         minHeight: '100vh',
-        background: '#0F172A',
-        color: '#F8FAFC',
-        fontFamily: "'Fira Sans', sans-serif",
+        background: tokens.bg,
+        color: tokens.text,
+        fontFamily: tokens.fontBody,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -68,8 +69,8 @@ export function ErrorPage() {
     >
       <div
         style={{
-          background: '#1E293B',
-          border: '1px solid #334155',
+          background: tokens.surface,
+          border: `1px solid ${tokens.border}`,
           borderRadius: 12,
           padding: '48px 40px',
           maxWidth: 480,
@@ -79,11 +80,11 @@ export function ErrorPage() {
       >
         <div
           style={{
-            fontFamily: "'Fira Code', monospace",
+            fontFamily: tokens.fontHeading,
             fontSize: 72,
             fontWeight: 700,
             lineHeight: 1,
-            color: '#EF4444',
+            color: tokens.error,
             marginBottom: 8,
           }}
         >
@@ -92,11 +93,11 @@ export function ErrorPage() {
 
         <h1
           style={{
-            fontFamily: "'Fira Code', monospace",
+            fontFamily: tokens.fontHeading,
             fontSize: 20,
             fontWeight: 600,
             margin: '0 0 8px',
-            color: '#F8FAFC',
+            color: tokens.text,
           }}
         >
           {config.title}
@@ -105,7 +106,7 @@ export function ErrorPage() {
         <p
           style={{
             fontSize: 14,
-            color: '#94a3b8',
+            color: tokens.muted,
             lineHeight: 1.6,
             margin: '0 0 16px',
           }}
@@ -118,10 +119,10 @@ export function ErrorPage() {
             style={{
               fontSize: 12,
               color: '#64748b',
-              fontFamily: "'Fira Code', monospace",
+              fontFamily: tokens.fontHeading,
               margin: '0 0 24px',
               padding: '8px 12px',
-              background: '#0F172A',
+              background: tokens.bg,
               borderRadius: 6,
               display: 'inline-block',
             }}
@@ -135,18 +136,18 @@ export function ErrorPage() {
             onClick={handleAction}
             style={{
               padding: '10px 24px',
-              background: '#22C55E',
-              color: '#0F172A',
+              background: tokens.cta,
+              color: tokens.ctaText,
               border: 'none',
               borderRadius: 6,
               cursor: 'pointer',
               fontSize: 14,
               fontWeight: 600,
-              fontFamily: "'Fira Sans', sans-serif",
-              transition: 'background 200ms',
+              fontFamily: tokens.fontBody,
+              transition: tokens.transition,
             }}
-            onMouseEnter={(e) => (e.currentTarget.style.background = '#16A34A')}
-            onMouseLeave={(e) => (e.currentTarget.style.background = '#22C55E')}
+            onMouseEnter={(e) => (e.currentTarget.style.background = tokens.ctaHover)}
+            onMouseLeave={(e) => (e.currentTarget.style.background = tokens.cta)}
           >
             {config.action.label}
           </button>

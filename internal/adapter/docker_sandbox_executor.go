@@ -34,14 +34,15 @@ var execLookPath = exec.LookPath
 
 // DockerSandboxConfig holds Docker sandbox launch parameters.
 type DockerSandboxConfig struct {
-	Image       string
-	MemoryMB    int
-	CPUs        int
-	MaxPids     int
-	NetworkMode      string
-	SeccompProfile   string   // Path to seccomp JSON profile (L3)
+	Image             string
+	MemoryMB          int
+	CPUs              int
+	MaxPids           int
+	NetworkMode       string
+	SeccompProfile    string   // Path to seccomp JSON profile (L3)
 	RegistryWhitelist []string // Allowed image registries (L4)
-	Timeout          time.Duration
+	Timeout           time.Duration
+	CacheLayer        string   // Shared Read-Only Dependency Cache Layer path
 }
 
 // dangerousPatterns matches commands that are hard-blocked.
@@ -73,6 +74,11 @@ func defaultDockerSandboxConfig() DockerSandboxConfig {
 // Run 'docker run --rm --read-only --cap-drop=ALL ...' for each command.
 type DockerSandboxExecutor struct {
 	cfg DockerSandboxConfig
+}
+
+// SetCacheLayer updates the read-only dependency cache mount path.
+func (e *DockerSandboxExecutor) SetCacheLayer(path string) {
+	e.cfg.CacheLayer = path
 }
 
 // NewDockerSandboxExecutor creates a new DockerSandboxExecutor.
@@ -140,6 +146,10 @@ func (e *DockerSandboxExecutor) buildDockerCmd(command string, opts kernel.ExecO
 		"docker run --rm --init --read-only --cap-drop=ALL --memory=%dm --cpus=%d --pids-limit=%d --network=%s",
 		e.cfg.MemoryMB, e.cfg.CPUs, e.cfg.MaxPids, e.cfg.NetworkMode,
 	)
+
+	if e.cfg.CacheLayer != "" {
+		dockerCmd = fmt.Sprintf("%s -v %s:/cache/deps:ro", dockerCmd, e.cfg.CacheLayer)
+	}
 
 	if e.cfg.SeccompProfile != "" {
 		dockerCmd = fmt.Sprintf("%s --security-opt=seccomp=%s", dockerCmd, e.cfg.SeccompProfile)

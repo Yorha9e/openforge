@@ -1,0 +1,83 @@
+- generic [ref=e155]:
+  - banner [ref=e156]:
+    - link "← Dashboard" [ref=e157] [cursor=pointer]:
+      - /url: /
+    - heading "Settings" [level=1] [ref=e158]
+  - main [ref=e159]:
+    - generic [ref=e160]:
+      - heading "Notifications" [level=2] [ref=e161]
+      - generic [ref=e162]:
+        - generic [ref=e166] [cursor=pointer]: Email notifications
+        - generic [ref=e167]:
+          - generic [ref=e168]: Webhook URL
+          - textbox "https://hooks.example.com/notify" [ref=e169]
+        - generic [ref=e170]:
+          - generic [ref=e171]: Notification Channels
+          - generic [ref=e172]:
+            - generic [ref=e173] [cursor=pointer]:
+              - checkbox "Email" [checked] [ref=e174]
+              - text: Email
+            - generic [ref=e175] [cursor=pointer]:
+              - checkbox "Slack" [ref=e176]
+              - text: Slack
+            - generic [ref=e177] [cursor=pointer]:
+              - checkbox "Webhook" [ref=e178]
+              - text: Webhook
+            - generic [ref=e179] [cursor=pointer]:
+              - checkbox "Sms" [ref=e180]
+              - text: Sms
+    - generic [ref=e181]:
+      - heading "Layout" [level=2] [ref=e182]
+      - generic [ref=e183]:
+        - generic [ref=e184]:
+          - generic [ref=e185]: "Editor Font Size: 14px"
+          - slider [ref=e186]: "14"
+          - generic [ref=e187]:
+            - generic [ref=e188]: 12px
+            - generic [ref=e189]: 24px
+        - generic [ref=e190]:
+          - generic [ref=e191]: Theme
+          - combobox [ref=e192]:
+            - option "Dark" [selected]
+            - option "Light"
+            - option "High Contrast"
+        - generic [ref=e193]:
+          - generic [ref=e194]: Default View Mode
+          - combobox [ref=e195]:
+            - option "Simple"
+            - option "Pro" [selected]
+    - generic [ref=e196]:
+      - heading "Language & Region" [level=2] [ref=e197]
+      - generic [ref=e198]:
+        - generic [ref=e199]:
+          - generic [ref=e200]: Language
+          - combobox [ref=e201]:
+            - option "English" [selected]
+            - option "中文"
+            - option "日本語"
+            - option "한국어"
+            - option "Deutsch"
+            - option "Français"
+        - generic [ref=e202]:
+          - generic [ref=e203]: Timezone
+          - combobox [ref=e204]:
+            - option "UTC" [selected]
+            - option "America/New_York"
+            - option "America/Chicago"
+            - option "America/Denver"
+            - option "America/Los_Angeles"
+            - option "Europe/London"
+            - option "Europe/Berlin"
+            - option "Europe/Paris"
+            - option "Asia/Shanghai"
+            - option "Asia/Tokyo"
+            - option "Asia/Kolkata"
+            - option "Australia/Sydney"
+            - option "Pacific/Auckland"
+    - generic [ref=e205]:
+      - heading "Project" [level=2] [ref=e206]
+      - generic [ref=e208]:
+        - generic [ref=e209]: Working Directory
+        - textbox "/path/to/your/project (e.g., D:\\projects\\myapp)" [ref=e210]
+        - paragraph [ref=e211]: Absolute path to your project directory on the server. Tools (read_file, bash, etc.) will execute relative to this directory.
+    - button "Save Settings" [ref=e212] [cursor=pointer]

@@ -33,10 +33,15 @@ services:
     ports:
       - "8080:8080"
     environment:
-      DATABASE_URL: postgres://openforge:openforge_dev@postgres:5432/openforge?sslmode=disable
       LLM_ROUTER_ADDR: nodejs-io:50051
       JWT_SECRET: ${JWT_SECRET:-dev-secret-change-in-production-32b!}
-      PROFILE: ${PROFILE:-standard}
+    command: ["-config", "config/profiles/docker-dev.yaml"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
     depends_on:
       postgres:
         condition: service_healthy

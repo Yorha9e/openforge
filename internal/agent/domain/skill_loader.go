@@ -540,6 +540,107 @@ func (sl *SkillLoader) Stop() {
 	close(sl.stopCh)
 }
 
+// UpdateSkillDeprecated updates the deprecated flag for a skill in all skill_config.yaml files.
+func (sl *SkillLoader) UpdateSkillDeprecated(name string, deprecated bool) error {
+	sl.mu.Lock()
+	defer sl.mu.Unlock()
+
+	for _, dir := range sl.scanDirs {
+		path := filepath.Join(dir, "skill_config.yaml")
+		data, err := os.ReadFile(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return fmt.Errorf("read %s: %w", path, err)
+		}
+
+		var wrapper struct {
+			Skills []SkillConfig `yaml:"skills"`
+		}
+		if err := yaml.Unmarshal(data, &wrapper); err != nil {
+			return fmt.Errorf("parse %s: %w", path, err)
+		}
+
+		changed := false
+		for i, sc := range wrapper.Skills {
+			if sc.Name == name {
+				wrapper.Skills[i].Deprecated = deprecated
+				if deprecated {
+					wrapper.Skills[i].Enabled = false
+				}
+				changed = true
+			}
+		}
+		if !changed {
+			continue
+		}
+
+		newData, err := yaml.Marshal(&wrapper)
+		if err != nil {
+			return err
+		}
+		tmpPath := path + ".tmp"
+		if err := os.WriteFile(tmpPath, newData, 0644); err != nil {
+			return err
+		}
+		if err := os.Rename(tmpPath, path); err != nil {
+			return err
+		}
+	}
+
+	return sl.Reload()
+}
+
+// UpdateSkillPriorities updates the current_priority for multiple skills in all skill_config.yaml files.
+func (sl *SkillLoader) UpdateSkillPriorities(priorities map[string]float64) error {
+	sl.mu.Lock()
+	defer sl.mu.Unlock()
+
+	for _, dir := range sl.scanDirs {
+		path := filepath.Join(dir, "skill_config.yaml")
+		data, err := os.ReadFile(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return fmt.Errorf("read %s: %w", path, err)
+		}
+
+		var wrapper struct {
+			Skills []SkillConfig `yaml:"skills"`
+		}
+		if err := yaml.Unmarshal(data, &wrapper); err != nil {
+			return fmt.Errorf("parse %s: %w", path, err)
+		}
+
+		changed := false
+		for i, sc := range wrapper.Skills {
+			if p, ok := priorities[sc.Name]; ok {
+				wrapper.Skills[i].CurrentPriority = p
+				changed = true
+			}
+		}
+		if !changed {
+			continue
+		}
+
+		newData, err := yaml.Marshal(&wrapper)
+		if err != nil {
+			return err
+		}
+		tmpPath := path + ".tmp"
+		if err := os.WriteFile(tmpPath, newData, 0644); err != nil {
+			return err
+		}
+		if err := os.Rename(tmpPath, path); err != nil {
+			return err
+		}
+	}
+
+	return sl.Reload()
+}
+
 // matchPattern checks if user message or file path matches a glob-like pattern.
 func matchPattern(text, pattern string) bool {
 	// Simple glob matching: * matches any sequence

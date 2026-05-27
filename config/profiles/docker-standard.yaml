@@ -1,0 +1,82 @@
+# docker-standard.yaml — Docker Compose 标准部署（deployments/docker-compose.standard.yaml 专用）
+# 基于 standard.yaml，修正了容器 hostname 并固化开发用凭证
+profile: docker-standard
+security_tier: dev
+
+secret_store: envfile
+container_runtime: docker
+object_store: localfs
+task_queue: redis-streams
+event_bus: redis-pubsub
+cache: redis
+telemetry: stdout
+service_registry: static
+disaster_recovery: local-backup
+load_balancer: nginx
+notifier: stdout
+command_executor: docker-sandbox
+dependency_cache: none
+
+docker:
+  host: "unix:///var/run/docker.sock"
+  api_version: "1.45"
+
+# ⚠️ host 必须匹配 docker-compose.standard.yaml 的 container_name
+database:
+  host: of-postgres
+  port: 5432
+  user: openforge
+  password: devpassword
+  dbname: openforge
+  sslmode: disable
+
+redis:
+  host: of-redis
+  port: 6379
+
+llm:
+  default_provider: deepseek
+  default_model: deepseek
+  models:
+    - alias: opus
+      provider: anthropic
+      model_id: claude-opus-4-7-20250514
+      base_url: https://api.anthropic.com
+      fallback: [sonnet, deepseek]
+    - alias: sonnet
+      provider: anthropic
+      model_id: claude-sonnet-4-6-20250514
+      base_url: https://api.anthropic.com
+      fallback: [haiku, deepseek]
+    - alias: haiku
+      provider: anthropic
+      model_id: claude-haiku-4-5-20251001
+      base_url: https://api.anthropic.com
+    - alias: deepseek
+      provider: deepseek
+      model_id: deepseek-v4-pro[1m]
+      base_url: https://api.deepseek.com/anthropic
+      fallback: [sonnet]
+
+grpc:
+  nodejs_io_addr: of-nodejs-io:50051
+  coordinator_addr: of-coordinator:50052
+
+jwt:
+  secret: "dev-secret-change-in-production-32b!"
+  access_ttl: "1h"
+  refresh_ttl: "24h"
+
+auth:
+  provider: jwt
+  oidc:
+    enabled: false
+    issuer_url: ""
+    client_id: ""
+    client_secret: ""
+    redirect_url: ""
+  builtin_users:
+    - username: admin
+      display_name: "Admin"
+      role: admin
+      password_hash: "$2a$10$e1lkCyWKt5Hn1eZRLkVtxesDCqNYVNicuZU5U.e8do4Fymo2TGK.K"  # admin123

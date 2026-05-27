@@ -81,6 +81,7 @@ type OpenForge struct {
 	DB              *sql.DB
 	DepCache        *adapter.DependencyCache
 	DataLifecycle   *compliance.DataLifecycle // G16: compliance data lifecycle manager
+	Shutdown        func()                    // G16: graceful shutdown callback
 }
 
 // Bootstrap creates a new OpenForge composition root from the given profile
@@ -307,6 +308,24 @@ func Bootstrap(cfg *Config) (*OpenForge, error) {
 			breaker: of.BreakerPool.Get("command_executor"),
 			next:    of.CommandExec,
 		}
+	}
+
+	// G16: Register cleanup on shutdown.
+	of.Shutdown = func() {
+		if of.DataLifecycle != nil {
+			of.DataLifecycle.Stop()
+		}
+		// Close enterprise adapter connections.
+		if vs, ok := of.Secrets.(io.Closer); ok {
+			vs.Close()
+		}
+		if ms, ok := of.Object.(io.Closer); ok {
+			ms.Close()
+		}
+		if dc, ok := of.Container.(io.Closer); ok {
+			dc.Close()
+		}
+		slog.Info("enterprise adapters shutdown complete")
 	}
 
 	return of, nil

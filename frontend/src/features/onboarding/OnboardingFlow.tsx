@@ -176,7 +176,7 @@ function ProjectSetup({
             background: setupType === 'existing' ? tokens.surface : tokens.bg,
             border: setupType === 'existing' ? `1px solid ${tokens.cta}` : `1px solid ${tokens.border}`,
             borderRadius: 6,
-            color: '#F8FAFC',
+            color: tokens.text,
             fontSize: 13,
             fontWeight: 500,
             cursor: 'pointer',
@@ -353,7 +353,7 @@ function DemoChat() {
  * 3-step onboarding flow: Role Selection -> Project Setup -> Demo Chat.
  * Shown on first login or via /onboarding route.
  */
-export function OnboardingFlow() {
+export default function OnboardingFlow() {
   const navigate = useNavigate();
   const [currentStep, setCurrentStep] = useState(1);
   const [selectedRole, setSelectedRole] = useState<Role | null>(null);

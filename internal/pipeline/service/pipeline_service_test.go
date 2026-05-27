@@ -62,6 +62,11 @@ func (m *mockPipelineRepo) IncrementBacktrack(_ context.Context, id string) erro
 	return nil
 }
 
+func (m *mockPipelineRepo) Delete(_ context.Context, id string) error {
+	delete(m.pipelines, id)
+	return nil
+}
+
 func newL3Pipeline(id string) *domain.Pipeline {
 	return &domain.Pipeline{
 		ID:           id,

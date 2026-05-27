@@ -1,0 +1,85 @@
+<h2>开关应该集成到 Profile 体系还是独立运行时系统？</h2>
+<p class="subtitle">你确认了开关控制的是「后端功能启用」——但实现方式有两种截然不同的路径。</p>
+
+<div class="split">
+  <div class="mockup">
+    <div class="mockup-header">方案 A：扩展 Profile YAML</div>
+    <div class="mockup-body" style="font-size:13px;line-height:1.7;color:#E2E8F0;">
+      <p style="color:#94A3B8;margin-bottom:12px;">在 minimal.yaml 等 Profile 文件中新增 feature_flags 字段：</p>
+      <pre style="background:#0F172A;padding:12px;border-radius:6px;font-size:12px;color:#7DD3FC;overflow-x:auto;">
+profile: minimal
+feature_flags:
+  grafana_dashboards: false
+  compliance_reports: false
+  multi_region_dr: false
+  k8s_container: false
+  data_lifecycle: false
+  notifier: stdout    # 已有字段，不变
+      </pre>
+      <div class="pros-cons" style="margin-top:12px;">
+        <div class="pros"><h4>✅ 优点</h4><ul>
+          <li>复用现有 Profile 加载机制，零新增基础设施</li>
+          <li>启动时一次性决策，行为可预测</li>
+          <li>变更需重启，天然防止误操作</li>
+        </ul></div>
+        <div class="cons"><h4>⚠️ 缺点</h4><ul>
+          <li>切换开关需要修改 YAML + 重启服务</li>
+          <li>无法在 Admin 面板中实时切换（需重启生效）</li>
+          <li>多人部署时配置文件同步问题</li>
+        </ul></div>
+      </div>
+    </div>
+  </div>
+  <div class="mockup">
+    <div class="mockup-header">方案 B：运行时 Feature Flags (DB)</div>
+    <div class="mockup-body" style="font-size:13px;line-height:1.7;color:#E2E8F0;">
+      <p style="color:#94A3B8;margin-bottom:12px;">新建 feature_flags 表，Admin 面板直接读写：</p>
+      <pre style="background:#0F172A;padding:12px;border-radius:6px;font-size:12px;color:#7DD3FC;overflow-x:auto;">
+CREATE TABLE feature_flags (
+  name  TEXT PRIMARY KEY,
+  enabled BOOLEAN DEFAULT false,
+  profile_min TEXT, -- 最低 Profile
+  updated_at TIMESTAMPTZ
+);
+      </pre>
+      <div class="pros-cons" style="margin-top:12px;">
+        <div class="pros"><h4>✅ 优点</h4><ul>
+          <li>Admin 面板开关 → 实时生效，无需重启</li>
+          <li>多实例共享 DB，天然一致</li>
+          <li>可做审计日志（谁在什么时候改了什么）</li>
+        </ul></div>
+        <div class="cons"><h4>⚠️ 缺点</h4><ul>
+          <li>新增 DB 表和 API 端点</li>
+          <li>部分功能（如 K8s Container Runtime）切换需重建连接池</li>
+          <li>运行时切换有状态一致性问题</li>
+        </ul></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="options" style="margin-top: 20px;">
+  <div class="option" data-choice="profile-extend" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>扩展 Profile YAML</h3>
+      <p>个人模式用户直接设置 minimal.yaml，企业部署用 enterprise.yaml，在配置文件中声明开关</p>
+    </div>
+  </div>
+  <div class="option" data-choice="runtime-flags" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>运行时 Feature Flags</h3>
+      <p>新建 feature_flags 表 + API，Admin 面板实时切换，不用重启</p>
+    </div>
+  </div>
+  <div class="option" data-choice="hybrid" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>混合方案</h3>
+      <p>Profile 设定默认值 + DB 覆盖。minimal 默认全关，enterprise 默认全开，Admin 面板可覆盖</p>
+    </div>
+  </div>
+</div>
+
+<p class="subtitle" style="margin-top: 24px;">👆 选择你倾向的方案，或直接告诉我你的想法</p>

@@ -113,11 +113,15 @@ func RegisterRoutes(of *profile.OpenForge, jwtSvc *service.JWTService, cfg *prof
 	mux.HandleFunc("GET /api/admin/feature-flags", withAdmin(handleGetFeatureFlags(of)))
 	mux.HandleFunc("PUT /api/admin/feature-flags", withAdmin(handleUpdateFeatureFlags(of, ffStore)))
 
-	// Compliance suite: Audit log export (admin-only, when compliance_suite flag is ON)
-	if of.FeatureFlags.ComplianceSuite {
-		mux.HandleFunc("GET /api/admin/audit/export", withAdmin(handleAuditExport(of)))
-		slog.Info("compliance_suite: registered audit export endpoint")
-	}
+	// Compliance suite: Audit log export (admin-only)
+	mux.HandleFunc("GET /api/admin/audit/export", withAdmin(handleAuditExport(of)))
+
+	// Production ops: Runbook API (auth required)
+	mux.HandleFunc("GET /api/runbook", authMw(handleRunbookList(of)))
+	mux.HandleFunc("GET /api/runbook/{id}", authMw(handleRunbookDetail(of)))
+
+	// Distribution artifacts: Offline deployment bundle download (admin-only)
+	mux.HandleFunc("GET /api/download/offline", withAdmin(handleDownloadOffline(of)))
 
 	// Pipeline messages (observer)
 	mux.HandleFunc("GET /api/pipelines/{pid}/messages", withRole("observer", handleGetMessages(of)))

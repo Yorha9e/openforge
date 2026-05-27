@@ -1,17 +1,17 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAuth, useRole } from '../../shared/auth';
 import { api, AdminStatus, FeatureFlags } from '../../shared/api';
 import { AppLayout } from '../../shared/AppLayout';
 import { tokens } from '../../shared/design-tokens';
-import SkillPanel from './SkillPanel';
 
 export default function AdminPage() {
   const { user } = useAuth();
   const role = useRole();
+  const navigate = useNavigate();
   const [status, setStatus] = useState<AdminStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [showSkillPanel, setShowSkillPanel] = useState(false);
   const [featureFlags, setFeatureFlags] = useState<FeatureFlags | null>(null);
   const [flagsLoading, setFlagsLoading] = useState(false);
 
@@ -56,15 +56,11 @@ export default function AdminPage() {
     } catch { return null; }
   })() : null;
 
-  if (showSkillPanel) {
-    return <SkillPanel />;
-  }
-
   return (
     <AppLayout>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
         <h1 style={{ fontSize: 24, fontWeight: 700, fontFamily: tokens.fontHeading, margin: 0, color: tokens.text }}>Admin Panel</h1>
-        <button onClick={() => setShowSkillPanel(true)}
+        <button onClick={() => navigate('/admin/skills')}
           style={{ padding: '8px 16px', background: tokens.surface, border: `1px solid ${tokens.border}`, borderRadius: 4, cursor: 'pointer', color: tokens.text, fontSize: 13 }}>
           Skill Management
         </button>
@@ -279,8 +275,8 @@ export default function AdminPage() {
         </div>
       </Section>
 
-      {/* Phase 9-10 Feature Toggles */}
-      <Section title="Phase 9-10 — Feature Toggles">
+      {/* Enterprise Features */}
+      <Section title="Enterprise Features — Feature Toggles">
         {featureFlags === null ? (
           <div style={{ textAlign: 'center', padding: 24, color: tokens.muted, fontSize: 14 }}>
             Feature flags unavailable — check admin access

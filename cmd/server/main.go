@@ -70,6 +70,11 @@ func main() {
 	<-quit
 	slog.Info("shutting down server")
 
+	// G16: Call enterprise adapter shutdown hooks
+	if of.Shutdown != nil {
+		of.Shutdown()
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	srv.Shutdown(ctx)

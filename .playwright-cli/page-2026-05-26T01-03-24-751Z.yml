@@ -1,0 +1,26 @@
+- region "Chat panel" [ref=e28]:
+  - generic [ref=e29]:
+    - generic [ref=e30]:
+      - link "← Project" [ref=e31] [cursor=pointer]:
+        - /url: /project/proj-1779630393741208800
+      - generic [ref=e32]: "Pipeline: pipe-1779757402729260100"
+      - generic [ref=e33]:
+        - 'generic "Skill: conduit-backend v1.0.0 Source: global Trigger Score: undefined Priority: undefined Tokens: ~undefined" [ref=e34]':
+          - generic [ref=e35]: 🧩
+          - text: conduit-backend v1.0.0
+        - 'generic "Skill: conduit-frontend v1.0.0 Source: global Trigger Score: undefined Priority: undefined Tokens: ~undefined" [ref=e36]':
+          - generic [ref=e37]: 🧩
+          - text: conduit-frontend v1.0.0
+    - button "deepseek" [ref=e39] [cursor=pointer]:
+      - generic [ref=e40]: deepseek
+      - img [ref=e42]
+  - button "Agents (0)" [expanded] [ref=e45] [cursor=pointer]:
+    - text: Agents (0)
+    - img [ref=e46]
+  - log "Chat messages" [ref=e49]
+  - generic [ref=e51]:
+    - textbox "Message input" [disabled] [ref=e52]:
+      - /placeholder: Connecting...
+    - button "Select skill" [disabled] [ref=e54]:
+      - img [ref=e55]
+    - button "Send message" [disabled] [ref=e59]: Send

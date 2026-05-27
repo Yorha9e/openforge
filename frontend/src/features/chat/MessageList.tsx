@@ -1,4 +1,4 @@
-import { useEffect, useRef, useMemo } from 'react';
+import { useEffect, useRef, useMemo, useState } from 'react';
 import { useChat } from './ChatProvider';
 import { sanitizeHTML } from '../../shared/sanitize';
 import { tokens } from '../../shared/design-tokens';
@@ -21,18 +21,164 @@ function renderMarkdown(text: string): string {
   }
 }
 
+// --- Elegant thinking / tool-use folding logic ---
+
+interface ContentPart {
+  type: 'text' | 'thinking';
+  content: string;
+  toolName?: string;
+  toolInput?: any;
+}
+
+function parseAgentContent(content: string): ContentPart[] {
+  const parts: ContentPart[] = [];
+  if (!content) return parts;
+
+  // 1. Try parsing as Anthropic multi-part JSON (raw array of blocks)
+  try {
+    if (content.trim().startsWith('[') && content.trim().endsWith(']')) {
+      const blocks = JSON.parse(content);
+      if (Array.isArray(blocks)) {
+        blocks.forEach((b: any) => {
+          if (b.type === 'text' && b.text) {
+            parts.push({ type: 'text', content: b.text });
+          } else if (b.type === 'tool_use') {
+            parts.push({
+              type: 'thinking',
+              content: `Calling tool: ${b.name}`,
+              toolName: b.name,
+              toolInput: b.input,
+            });
+          }
+        });
+        if (parts.length > 0) return parts;
+      }
+    }
+  } catch {
+    // Ignore parse errors, fall back to fenced-block regex
+  }
+
+  // 2. Fenced code block regex: extract ```json [...] ``` containing "tool_use"
+  const fencedRe = /```(?:json)?\s*(\[\s*\{\s*"type"\s*:\s*"tool_use"[\s\S]*?\])\s*```/g;
+  let match;
+  let lastIndex = 0;
+
+  while ((match = fencedRe.exec(content)) !== null) {
+    const textBefore = content.substring(lastIndex, match.index);
+    if (textBefore.trim()) {
+      parts.push({ type: 'text', content: textBefore });
+    }
+
+    try {
+      const jsonStr = match[1];
+      if (!jsonStr) continue;
+      const toolUseList = JSON.parse(jsonStr);
+      if (Array.isArray(toolUseList)) {
+        toolUseList.forEach((tu: any) => {
+          parts.push({
+            type: 'thinking',
+            content: `Calling tool: ${tu.name}`,
+            toolName: tu.name,
+            toolInput: tu.input,
+          });
+        });
+      } else {
+        parts.push({ type: 'thinking', content: 'Tool execution logs' });
+      }
+    } catch {
+      parts.push({ type: 'thinking', content: match[0] });
+    }
+    lastIndex = fencedRe.lastIndex;
+  }
+
+  const textAfter = content.substring(lastIndex);
+  if (textAfter.trim() || parts.length === 0) {
+    parts.push({ type: 'text', content: textAfter || content });
+  }
+
+  return parts;
+}
+
+function AgentThinkingBlock({ part }: { part: ContentPart }) {
+  const [expanded, setExpanded] = useState(false);
+  const hasInput = part.toolInput && Object.keys(part.toolInput).length > 0;
+
+  return (
+    <div style={{
+      margin: '6px 0',
+      background: 'rgba(30, 41, 59, 0.4)',
+      border: `1px solid ${tokens.border}`,
+      borderRadius: 6,
+      overflow: 'hidden',
+      fontSize: 12,
+      fontFamily: tokens.fontHeading,
+      transition: tokens.transition,
+    }}>
+      <div
+        onClick={() => hasInput && setExpanded(!expanded)}
+        style={{
+          padding: '6px 12px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          cursor: hasInput ? 'pointer' : 'default',
+          userSelect: 'none',
+          color: tokens.muted,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{
+            display: 'inline-block',
+            width: 6,
+            height: 6,
+            borderRadius: '50%',
+            background: tokens.cta,
+            boxShadow: `0 0 4px ${tokens.cta}`,
+          }} />
+          <span>
+            Thinking: Executing <strong>{part.toolName || 'tool'}</strong>
+          </span>
+        </div>
+        {hasInput && (
+          <span style={{ fontSize: 10, color: tokens.muted, opacity: 0.7 }}>
+            {expanded ? 'Collapse ▴' : 'Expand ▾'}
+          </span>
+        )}
+      </div>
+      {expanded && hasInput && (
+        <div style={{
+          padding: '8px 12px',
+          borderTop: `1px solid ${tokens.border}`,
+          background: 'rgba(15, 23, 42, 0.3)',
+          maxHeight: 200,
+          overflowY: 'auto',
+          whiteSpace: 'pre-wrap',
+          color: tokens.muted,
+          opacity: 0.85,
+        }}>
+          <code>{JSON.stringify(part.toolInput, null, 2)}</code>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function MessageList() {
-  const { messages, streaming } = useChat();
+  const { messages, streaming, thinking } = useChat();
   const bottomRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll to bottom when new messages arrive (only if already near bottom)
   useEffect(() => {
-    const el = listRef.current;
-    if (!el) return;
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 100;
-    if (nearBottom) {
-      bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    try {
+      const el = listRef.current;
+      if (!el) return;
+      const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 100;
+      if (nearBottom) {
+        bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+      }
+    } catch {
+      // Ignore scroll errors — element may have been detached during transition
     }
   }, [messages, streaming]);
 
@@ -67,19 +213,43 @@ export function MessageList() {
               {msg.role === 'user' ? (
                 <p style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{msg.content}</p>
               ) : (
-                <div
-                  className="markdown-body"
-                  dangerouslySetInnerHTML={{ __html: renderMarkdown(msg.content) }}
-                  style={{
-                    // Minimal markdown styling that stays within design system
-                    wordBreak: 'break-word',
-                  }}
-                />
+                <div>
+                  {parseAgentContent(msg.content).map((part, pIdx) => {
+                    if (part.type === 'thinking') {
+                      return <AgentThinkingBlock key={pIdx} part={part} />;
+                    }
+                    return (
+                      <div
+                        key={pIdx}
+                        className="markdown-body"
+                        dangerouslySetInnerHTML={{ __html: renderMarkdown(part.content) }}
+                        style={{
+                          wordBreak: 'break-word',
+                        }}
+                      />
+                    );
+                  })}
+                </div>
               )}
             </div>
           )}
         </div>
       ))}
+      {thinking && !streaming && (
+        <div style={{ display: 'flex', justifyContent: 'flex-start', marginBottom: 12 }}>
+          <div style={{
+            maxWidth: '80%', borderRadius: 8, padding: '10px 16px',
+            background: tokens.surface, color: tokens.muted, fontSize: 14,
+            lineHeight: 1.6, minWidth: 0,
+            display: 'flex', alignItems: 'center', gap: 4,
+          }}>
+            Thinking
+            <span className="thinking-dots">
+              <span>.</span><span>.</span><span>.</span>
+            </span>
+          </div>
+        </div>
+      )}
       {streaming && (
         <div style={{ display: 'flex', justifyContent: 'flex-start', marginBottom: 12 }}>
           <div style={{ maxWidth: '80%', borderRadius: 8, padding: '10px 16px', background: tokens.surface, color: tokens.text, fontSize: 14, lineHeight: 1.6, overflowX: 'auto', minWidth: 0 }}>
@@ -113,7 +283,12 @@ export function MessageList() {
         .markdown-body pre::-webkit-scrollbar-track,
         .markdown-body table::-webkit-scrollbar-track { background: transparent; }
         .markdown-body pre::-webkit-scrollbar-thumb,
-        .markdown-body table::-webkit-scrollbar-thumb { background: ${tokens.border}; border-radius: 3px; }`}
+        .markdown-body table::-webkit-scrollbar-thumb { background: ${tokens.border}; border-radius: 3px; }
+        .thinking-dots span { display: inline-block; opacity: 0; animation: dot-blink 1.4s infinite; }
+        .thinking-dots span:nth-child(1) { animation-delay: 0s; }
+        .thinking-dots span:nth-child(2) { animation-delay: 0.2s; }
+        .thinking-dots span:nth-child(3) { animation-delay: 0.4s; }
+        @keyframes dot-blink { 0%, 80%, 100% { opacity: 0; } 40% { opacity: 1; } }`}
       </style>
     </div>
   );

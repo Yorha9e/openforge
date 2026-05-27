@@ -1,6 +1,11 @@
 package domain
 
-import "time"
+import (
+	"errors"
+	"time"
+)
+
+var ErrFileLockConflict = errors.New("file lock conflict")
 
 // LockType represents the type of file lock.
 type LockType string

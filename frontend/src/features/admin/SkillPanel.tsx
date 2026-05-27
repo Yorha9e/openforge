@@ -1,7 +1,7 @@
-import { useState, useEffect, useMemo } from 'react';
-import { Link } from 'react-router-dom';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { tokens } from '../../shared/design-tokens';
 import { api } from '../../shared/api';
+import { AppLayout } from '../../shared/AppLayout';
 
 interface SkillEntry {
   name: string;
@@ -18,28 +18,49 @@ interface SkillEntry {
   workflow_steps: number;
 }
 
-export function SkillPanel() {
+export default function SkillPanel() {
   const [skills, setSkills] = useState<SkillEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [sourceFilter, setSourceFilter] = useState('all');
   const [selectedSkill, setSelectedSkill] = useState<SkillEntry | null>(null);
   const [deprecateConfirm, setDeprecateConfirm] = useState<string | null>(null);
   const [priorityEdits, setPriorityEdits] = useState<Record<string, number>>({});
+  const [apiLoading, setApiLoading] = useState(false);
+  const [apiError, setApiError] = useState<string | null>(null);
+  const searchTimer = useRef<ReturnType<typeof setTimeout>>(null);
 
+  // Search debounce: 200ms
   useEffect(() => {
+    if (searchTimer.current) clearTimeout(searchTimer.current);
+    searchTimer.current = setTimeout(() => {
+      setDebouncedSearch(search);
+    }, 200);
+    return () => {
+      if (searchTimer.current) clearTimeout(searchTimer.current);
+    };
+  }, [search]);
+
+  const loadSkills = useCallback(() => {
+    setLoading(true);
+    setError(null);
     api.listSkills()
       .then((data: SkillEntry[]) => { setSkills(Array.isArray(data) ? data : []); })
       .catch(err => setError(err instanceof Error ? err.message : 'Failed'))
       .finally(() => setLoading(false));
   }, []);
 
+  useEffect(() => {
+    loadSkills();
+  }, [loadSkills]);
+
   const filtered = useMemo(() => {
     return skills.filter(s => {
       if (sourceFilter !== 'all' && s.source !== sourceFilter) return false;
-      if (search) {
-        const q = search.toLowerCase();
+      if (debouncedSearch) {
+        const q = debouncedSearch.toLowerCase();
         return (
           s.name.toLowerCase().includes(q) ||
           s.keywords?.some(k => k.toLowerCase().includes(q)) ||
@@ -48,29 +69,62 @@ export function SkillPanel() {
       }
       return true;
     });
-  }, [skills, search, sourceFilter]);
+  }, [skills, debouncedSearch, sourceFilter]);
 
   const sorted = useMemo(() => {
     return [...filtered].sort((a, b) => b.current_priority - a.current_priority);
   }, [filtered]);
 
+  const handleDeprecateToggle = async (skillName: string, deprecated: boolean) => {
+    setApiLoading(true);
+    setApiError(null);
+    try {
+      await api.updateSkillDeprecated(skillName, deprecated);
+      setDeprecateConfirm(null);
+      setSelectedSkill(null);
+      loadSkills();
+    } catch (err) {
+      setApiError(err instanceof Error ? err.message : 'Failed to update skill');
+    } finally {
+      setApiLoading(false);
+    }
+  };
+
+  const handleSavePriorities = async () => {
+    if (Object.keys(priorityEdits).length === 0) return;
+    setApiLoading(true);
+    setApiError(null);
+    try {
+      await api.updateSkillPriorities(priorityEdits);
+      setPriorityEdits({});
+      loadSkills();
+    } catch (err) {
+      setApiError(err instanceof Error ? err.message : 'Failed to save priorities');
+    } finally {
+      setApiLoading(false);
+    }
+  };
+
   if (loading) {
-    return <div style={{ padding: 24, color: tokens.muted, fontFamily: tokens.fontBody }}>Loading skills...</div>;
+    return <AppLayout><p style={{ color: tokens.muted }}>Loading skills...</p></AppLayout>;
   }
 
   if (error) {
-    return <div style={{ padding: 24, color: tokens.error, fontFamily: tokens.fontBody }}>Error: {error}</div>;
+    return <AppLayout><p style={{ color: tokens.error }}>Error: {error}</p></AppLayout>;
   }
 
   return (
-    <div style={{ padding: 24, color: tokens.text, fontFamily: tokens.fontBody }}>
+    <AppLayout>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-          <Link to="/" style={{ color: tokens.muted, textDecoration: 'none', fontSize: 14 }}>&larr; Dashboard</Link>
-          <h1 style={{ fontSize: 24, fontWeight: 600, margin: 0 }}>Skill Management</h1>
-        </div>
+        <h1 style={{ fontSize: 22, fontWeight: 700, fontFamily: tokens.fontHeading, margin: 0, color: tokens.text }}>Skill Management</h1>
         <span style={{ fontSize: 13, color: tokens.muted }}>{skills.length} skills loaded</span>
       </div>
+
+      {apiError && (
+        <div style={{ padding: '8px 12px', background: '#7F1D1D', color: '#FCA5A5', borderRadius: 4, marginBottom: 16, fontSize: 13 }}>
+          {apiError}
+        </div>
+      )}
 
       <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
         <input
@@ -130,6 +184,20 @@ export function SkillPanel() {
                 ))}
               </tbody>
             </table>
+
+            {/* Save Priorities button */}
+            {Object.keys(priorityEdits).length > 0 && (
+              <div style={{ marginTop: 16, display: 'flex', gap: 8, alignItems: 'center' }}>
+                <button onClick={handleSavePriorities} disabled={apiLoading}
+                  style={{ padding: '8px 20px', background: tokens.cta, color: tokens.ctaText, border: 'none', borderRadius: 4, cursor: apiLoading ? 'not-allowed' : 'pointer', fontWeight: 500, opacity: apiLoading ? 0.6 : 1 }}>
+                  {apiLoading ? 'Saving...' : `Save Priorities (${Object.keys(priorityEdits).length} changed)`}
+                </button>
+                <button onClick={() => setPriorityEdits({})} disabled={apiLoading}
+                  style={{ padding: '8px 16px', background: 'transparent', border: `1px solid ${tokens.border}`, borderRadius: 4, cursor: 'pointer', color: tokens.text, fontSize: 13 }}>
+                  Cancel
+                </button>
+              </div>
+            )}
           </div>
 
           {selectedSkill && (
@@ -161,21 +229,29 @@ export function SkillPanel() {
 
               <div>
                 {selectedSkill.deprecated ? (
-                  <button onClick={() => setDeprecateConfirm(null)} style={{ padding: '6px 16px', background: tokens.cta, color: tokens.ctaText, border: 'none', borderRadius: 4, cursor: 'pointer', fontWeight: 500 }}>Restore</button>
+                  <button onClick={() => handleDeprecateToggle(selectedSkill.name, false)} disabled={apiLoading}
+                    style={{ padding: '6px 16px', background: tokens.cta, color: tokens.ctaText, border: 'none', borderRadius: 4, cursor: apiLoading ? 'not-allowed' : 'pointer', fontWeight: 500, opacity: apiLoading ? 0.6 : 1 }}>
+                    Restore
+                  </button>
                 ) : deprecateConfirm === selectedSkill.name ? (
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                     <span style={{ fontSize: 12, color: tokens.warning }}>Confirm deprecation?</span>
-                    <button onClick={() => setDeprecateConfirm(null)} style={{ padding: '4px 12px', background: tokens.error, color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer', fontSize: 12 }}>Confirm</button>
-                    <button onClick={() => setDeprecateConfirm(null)} style={{ padding: '4px 12px', background: tokens.surface, border: `1px solid ${tokens.border}`, borderRadius: 4, cursor: 'pointer', color: tokens.text, fontSize: 12 }}>Cancel</button>
+                    <button onClick={() => handleDeprecateToggle(selectedSkill.name, true)} disabled={apiLoading}
+                      style={{ padding: '4px 12px', background: tokens.error, color: 'white', border: 'none', borderRadius: 4, cursor: apiLoading ? 'not-allowed' : 'pointer', fontSize: 12, opacity: apiLoading ? 0.6 : 1 }}>Confirm</button>
+                    <button onClick={() => setDeprecateConfirm(null)} disabled={apiLoading}
+                      style={{ padding: '4px 12px', background: tokens.surface, border: `1px solid ${tokens.border}`, borderRadius: 4, cursor: 'pointer', color: tokens.text, fontSize: 12 }}>Cancel</button>
                   </div>
                 ) : (
-                  <button onClick={() => setDeprecateConfirm(selectedSkill.name)} style={{ padding: '6px 16px', background: 'transparent', color: tokens.error, border: `1px solid ${tokens.error}`, borderRadius: 4, cursor: 'pointer', fontSize: 12, fontWeight: 500 }}>Deprecate</button>
+                  <button onClick={() => setDeprecateConfirm(selectedSkill.name)} disabled={apiLoading}
+                    style={{ padding: '6px 16px', background: 'transparent', color: tokens.error, border: `1px solid ${tokens.error}`, borderRadius: 4, cursor: apiLoading ? 'not-allowed' : 'pointer', fontSize: 12, fontWeight: 500, opacity: apiLoading ? 0.6 : 1 }}>
+                    Deprecate
+                  </button>
                 )}
               </div>
             </div>
           )}
         </div>
       )}
-    </div>
+    </AppLayout>
   );
 }

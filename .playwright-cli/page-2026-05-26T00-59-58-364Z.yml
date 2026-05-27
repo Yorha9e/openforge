@@ -1,0 +1,12 @@
+- generic [ref=e2]:
+  - generic [ref=e4]:
+    - heading "OpenForge" [level=1] [ref=e5]
+    - alert [ref=e17]: Unauthorized
+    - generic [ref=e6]:
+      - generic [ref=e7]: Username
+      - textbox "Username" [ref=e8]: test
+    - generic [ref=e9]:
+      - generic [ref=e10]: Password
+      - textbox "Password" [ref=e11]: test
+    - button "Sign In" [ref=e12] [cursor=pointer]
+  - generic [ref=e18]: Unauthorized

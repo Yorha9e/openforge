@@ -61,7 +61,7 @@ export function GatePanel({ pipelineId, stage }: Props) {
         style={{
           width: '100%', padding: 8, background: tokens.bg, border: `1px solid ${tokens.border}`, borderRadius: 4, color: tokens.text,
           resize: 'vertical', marginBottom: 12, boxSizing: 'border-box', fontFamily: tokens.fontBody,
-          outline: textareaFocused ? '2px solid' : 'none', outlineColor: tokens.cta, outlineOffset: 2,
+          outlineWidth: textareaFocused ? 2 : 0, outlineStyle: textareaFocused ? 'solid' : 'none', outlineColor: tokens.cta, outlineOffset: 2,
           transition: tokens.transition,
         }}
       />

@@ -1,0 +1,82 @@
+# docker-dev.yaml — Docker Compose 开发环境（根 docker-compose.yml 专用）
+# 基于 minimal.yaml，修正了容器间 hostname
+profile: docker-dev
+security_tier: dev
+
+secret_store: envfile
+container_runtime: docker
+object_store: localfs
+task_queue: pg-skip-locked
+event_bus: goroutine-chan
+cache: memory
+telemetry: stdout
+service_registry: static
+disaster_recovery: local-backup
+load_balancer: none
+notifier: stdout
+command_executor: local-shell
+dependency_cache: none
+
+docker:
+  host: "unix:///var/run/docker.sock"
+  api_version: "1.45"
+
+# ⚠️ host 必须是 docker-compose.yml 中 postgres 服务的容器名
+database:
+  host: postgres
+  port: 5432
+  user: openforge
+  password: openforge_dev
+  dbname: openforge
+  sslmode: disable
+
+llm:
+  default_provider: deepseek
+  default_model: deepseek
+  models:
+    - alias: sonnet
+      provider: anthropic
+      model_id: claude-sonnet-4-6-20250514
+      base_url: https://api.anthropic.com
+      fallback: [haiku]
+    - alias: haiku
+      provider: anthropic
+      model_id: claude-haiku-4-5-20251001
+      base_url: https://api.anthropic.com
+    - alias: deepseek
+      provider: deepseek
+      model_id: deepseek-v4-pro[1m]
+      base_url: https://api.deepseek.com/anthropic
+      fallback: [sonnet]
+    - alias: ollama
+      provider: ollama
+      model_id: qwen3
+      base_url: http://localhost:11434
+
+# ⚠️ gRPC 地址必须是 nodejs-io 服务容器名
+grpc:
+  nodejs_io_addr: nodejs-io:50051
+  coordinator_addr: 127.0.0.1:50052
+
+jwt:
+  secret: "dev-secret-change-in-production-32b!"
+  access_ttl: "1h"
+  refresh_ttl: "24h"
+
+auth:
+  provider: jwt
+  oidc:
+    enabled: false
+    issuer_url: ""
+    client_id: ""
+    client_secret: ""
+    redirect_url: ""
+  builtin_users:
+    - username: admin
+      display_name: "Admin"
+      role: admin
+      password_hash: "$2a$10$e1lkCyWKt5Hn1eZRLkVtxesDCqNYVNicuZU5U.e8do4Fymo2TGK.K"  # admin123
+    - username: pm
+      display_name: "Product Manager"
+      role: pm
+      password_hash: "$2a$10$Rp/ogaMYlNMsRbymNKOAbO6Xympo2Ssn0tPibp4i5u7y/gksgeXd2"  # pm123

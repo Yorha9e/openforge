@@ -2,3 +2,9 @@ gen/
 nodejs-io/src/gen/
 node_modules/
 dist/
+.env
+
+# TLS certificates (generated locally)
+deployments/certs/*.key
+deployments/certs/*.crt
+deployments/certs/*.pem

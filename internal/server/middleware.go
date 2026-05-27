@@ -2,14 +2,60 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
+	authport "openforge/internal/auth/port"
 	"openforge/internal/auth/domain"
 	"openforge/internal/auth/service"
+	observabilitydomain "openforge/internal/observability/domain"
+	"openforge/internal/shared/profile"
 )
+
+type ResourceSnapshotProvider interface {
+	Snapshot() observabilitydomain.ResourceSnapshot
+}
+
+// ofResourceSnapshotProvider bridges OpenForge runtime state to load-shedding ResourceSnapshot.
+type ofResourceSnapshotProvider struct {
+	of *profile.OpenForge
+}
+
+func (p *ofResourceSnapshotProvider) Snapshot() observabilitydomain.ResourceSnapshot {
+	return observabilitydomain.ResourceSnapshot{
+		GoroutinesAvail:   10000,
+		GoroutinesMax:     10000,
+		SandboxWarm:       10,
+		SandboxMin:        5,
+		PGIdleConns:       20,
+		LLMQueueDepth:     0,
+		LLMQueueThreshold: 50,
+	}
+}
+
+func LoadShedMiddleware(ls *observabilitydomain.LoadShedder, provider ResourceSnapshotProvider, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		priorityStr := r.Header.Get("X-OpenForge-Priority")
+		priority := 3 // default lowest priority (P3)
+		if priorityStr != "" {
+			if p, err := strconv.Atoi(priorityStr); err == nil {
+				priority = p
+			}
+		}
+
+		decision := ls.Shed(provider.Snapshot(), priority)
+		if !decision.Accept {
+			w.Header().Set("Retry-After", fmt.Sprintf("%d", int(decision.RetryAfter.Seconds())))
+			writeError(w, http.StatusTooManyRequests, "load shedding: system capacity critical")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
 
 func AuthMiddleware(jwtSvc *service.JWTService) func(http.HandlerFunc) http.HandlerFunc {
 	return func(next http.HandlerFunc) http.HandlerFunc {
@@ -106,6 +152,60 @@ func RateLimitMiddleware(maxPerSec int) func(http.Handler) http.Handler {
 			} else {
 				b.count++
 			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// TenantMiddleware enforces multi-tenant project access isolation.
+// It reads user/project identity from JWT context (set by AuthMiddleware)
+// or falls back to X-User-ID / X-Project-ID headers for service-to-service calls.
+// Public endpoints (health, metrics, auth) are exempted.
+func TenantMiddleware(authRepo authport.AuthRepository) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Skip public endpoints that don't require tenant isolation.
+			path := r.URL.Path
+			if path == "/api/health" || path == "/metrics" ||
+				strings.HasPrefix(path, "/api/auth/") ||
+				strings.HasPrefix(path, "/ws/") {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			// TenantMiddleware runs OUTSIDE per-route AuthMiddleware, so JWT context
+			// is NOT available here for authenticated routes.  Only perform multi-tenant
+			// isolation when BOTH userID AND projectID are present (e.g. service-to-service
+			// calls via X-User-ID / X-Project-ID headers).  Regular browser requests are
+			// authenticated by AuthMiddleware inside each route handler.
+			userID := UserIDFromContext(r.Context())
+			projectID := ""
+			if v, ok := r.Context().Value(domain.ProjectIDContextKey).(string); ok {
+				projectID = v
+			}
+
+			if projectID == "" {
+				projectID = r.Header.Get("X-Project-ID")
+			}
+			if userID == "" {
+				userID = r.Header.Get("X-User-ID")
+			}
+
+			// Only enforce tenant isolation when both identities are available.
+			if userID != "" && projectID != "" {
+				role, _ := authRepo.GetUserRole(r.Context(), userID, projectID)
+				if role == nil {
+					http.Error(w, "unauthorized role assignment for project", http.StatusForbidden)
+					return
+				}
+				ctx := context.WithValue(r.Context(), domain.ProjectIDContextKey, projectID)
+				ctx = context.WithValue(ctx, domain.UserIDContextKey, userID)
+				ctx = context.WithValue(ctx, domain.UserRoleContextKey, role.Role)
+				next.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
+
+			// No tenant context — pass through. Auth is handled by per-route AuthMiddleware.
 			next.ServeHTTP(w, r)
 		})
 	}

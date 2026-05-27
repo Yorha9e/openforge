@@ -39,8 +39,8 @@ func NewFeishuNotifier(webhookURL string) *FeishuNotifier {
 
 // feishuMessage represents a Feishu webhook message.
 type feishuMessage struct {
-	MsgType string      `json:"msg_type"`
-	Content interface{} `json:"content"`
+	MsgType string `json:"msg_type"`
+	Content any    `json:"content"`
 }
 
 // feishuCard represents a Feishu card message.
@@ -153,7 +153,7 @@ func (f *FeishuNotifier) SendWithRetry(ctx context.Context, target kernel.Target
 }
 
 // sendJSON sends a JSON payload to the Feishu webhook.
-func (f *FeishuNotifier) sendJSON(ctx context.Context, payload interface{}) error {
+func (f *FeishuNotifier) sendJSON(ctx context.Context, payload any) error {
 	jsonData, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("failed to marshal payload: %w", err)

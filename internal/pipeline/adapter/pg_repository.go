@@ -102,6 +102,14 @@ func (r *PGRepository) IncrementBacktrack(ctx context.Context, id string) error 
 	return err
 }
 
+func (r *PGRepository) Delete(ctx context.Context, id string) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE pipeline SET deleted_at = NOW(), updated_at = NOW()
+		WHERE id = $1 AND deleted_at IS NULL
+	`, id)
+	return err
+}
+
 // --- GateRepository ---
 
 func (r *PGRepository) GetLatestHash(ctx context.Context, pipelineID string) (string, error) {
@@ -277,4 +285,76 @@ func (r *PGRepository) GetCurrentMonthUsage(ctx context.Context, projectID strin
 func nextMonthReset() time.Time {
 	now := time.Now()
 	return time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()).AddDate(0, 1, 0)
+}
+
+var _ port.ConversationRepository = (*PGRepository)(nil)
+
+// --- ConversationRepository ---
+
+func (r *PGRepository) SaveMessage(ctx context.Context, msg *port.DBMessage) error {
+	_, err := r.db.ExecContext(ctx, `
+		INSERT INTO conversation_message (pipeline_id, branch_id, msg_seq, role, msg_type, content, token_count)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		ON CONFLICT (pipeline_id, branch_id, msg_seq) DO UPDATE SET
+			content = EXCLUDED.content,
+			token_count = EXCLUDED.token_count
+	`, msg.PipelineID, msg.BranchID, msg.MsgSeq, msg.Role, msg.MsgType, msg.Content, msg.TokenCount)
+	return err
+}
+
+func (r *PGRepository) GetMessages(ctx context.Context, pipelineID string, branchID string) ([]*port.DBMessage, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, pipeline_id, branch_id, msg_seq, role, msg_type, content, COALESCE(token_count, 0), created_at
+		FROM conversation_message
+		WHERE pipeline_id = $1 AND branch_id = $2
+		ORDER BY msg_seq ASC
+	`, pipelineID, branchID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var msgs []*port.DBMessage
+	for rows.Next() {
+		var m port.DBMessage
+		if err := rows.Scan(&m.ID, &m.PipelineID, &m.BranchID, &m.MsgSeq, &m.Role, &m.MsgType, &m.Content, &m.TokenCount, &m.CreatedAt); err != nil {
+			return nil, err
+		}
+		msgs = append(msgs, &m)
+	}
+	return msgs, nil
+}
+
+func (r *PGRepository) CreateBranch(ctx context.Context, b *port.DBBranch) error {
+	_, err := r.db.ExecContext(ctx, `
+		INSERT INTO conversation_branch (id, pipeline_id, parent_branch, fork_msg_seq, status, created_by)
+		VALUES ($1, $2, $3, $4, $5, $6)
+	`, b.ID, b.PipelineID, b.ParentBranch, b.ForkMsgSeq, b.Status, b.CreatedBy)
+	return err
+}
+
+func (r *PGRepository) GetBranch(ctx context.Context, branchID string) (*port.DBBranch, error) {
+	var b port.DBBranch
+	err := r.db.QueryRowContext(ctx, `
+		SELECT id, pipeline_id, parent_branch, fork_msg_seq, status, created_by, created_at
+		FROM conversation_branch WHERE id = $1
+	`, branchID).Scan(&b.ID, &b.PipelineID, &b.ParentBranch, &b.ForkMsgSeq, &b.Status, &b.CreatedBy, &b.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return &b, err
+}
+
+func (r *PGRepository) GetActiveBranch(ctx context.Context, pipelineID string) (*port.DBBranch, error) {
+	var b port.DBBranch
+	err := r.db.QueryRowContext(ctx, `
+		SELECT id, pipeline_id, parent_branch, fork_msg_seq, status, created_by, created_at
+		FROM conversation_branch
+		WHERE pipeline_id = $1 AND status = 'active'
+		ORDER BY created_at DESC LIMIT 1
+	`, pipelineID).Scan(&b.ID, &b.PipelineID, &b.ParentBranch, &b.ForkMsgSeq, &b.Status, &b.CreatedBy, &b.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return &b, err
 }

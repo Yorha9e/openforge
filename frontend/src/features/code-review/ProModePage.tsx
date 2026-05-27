@@ -15,7 +15,7 @@ interface PipelineData {
   current_stage?: string;
 }
 
-export function ProModePage() {
+export default function ProModePage() {
   const { pid } = useParams<{ pid: string }>();
   const [pipeline, setPipeline] = useState<PipelineData | null>(null);
   const [selectedFile, setSelectedFile] = useState<string | null>(null);

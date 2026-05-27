@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useCallback, useRef, useEffect, type ReactNode } from 'react';
 import { useAuth } from '../../shared/auth';
 import { useWebSocket } from './useWebSocket';
+import { api } from '../../shared/api';
 import type { ToolStatus } from './ToolCallCard';
 
 interface Message {
@@ -18,17 +19,26 @@ interface Message {
   toolError?: string;
 }
 
+interface PipelineStageInfo {
+  stage: string;
+  status: string;
+  pipelineId: string;
+}
+
 interface ChatState {
   messages: Message[];
   streaming: string;
+  thinking: boolean;
   connected: boolean;
+  pipelineStage: PipelineStageInfo | null;
   send: (pipelineId: string, content: string) => void;
+  cancel: () => void;
   clear: () => void;
 }
 
 const ChatContext = createContext<ChatState>({
-  messages: [], streaming: '', connected: false,
-  send: () => {}, clear: () => {},
+  messages: [], streaming: '', thinking: false, connected: false, pipelineStage: null,
+  send: () => {}, cancel: () => {}, clear: () => {},
 });
 
 export function ChatProvider({ pipelineId, children }: { pipelineId: string; children: ReactNode }) {
@@ -36,15 +46,55 @@ export function ChatProvider({ pipelineId, children }: { pipelineId: string; chi
   const { status, send: wsSend, subscribe } = useWebSocket(token);
   const [messages, setMessages] = useState<Message[]>([]);
   const [streaming, setStreaming] = useState('');
+  const [thinking, setThinking] = useState(false);
+  const [pipelineStage, setPipelineStage] = useState<PipelineStageInfo | null>(null);
   const streamingRef = useRef('');
   const idCounter = useRef(0);
 
+  // Load historical messages from DB when pipeline changes
+  useEffect(() => {
+    setMessages([]);
+    setStreaming('');
+    setThinking(false);
+    streamingRef.current = '';
+    idCounter.current = 0;
+
+    if (!pipelineId || pipelineId === 'default') return;
+    api.getMessages(pipelineId).then((msgs: any[]) => {
+      if (!Array.isArray(msgs)) return;
+      const historical: Message[] = msgs.map((m: any, idx: number) => {
+        const base: Message = {
+          id: m.id || `hist-${idx}`,
+          role: m.role as Message['role'],
+          content: m.content || '',
+          timestamp: m.created_at ? new Date(m.created_at).getTime() : Date.now(),
+        };
+        if (m.role === 'tool') {
+          base.toolName = m.toolName;
+          base.toolInput = m.toolInput;
+          base.toolOutput = m.toolOutput;
+          base.toolOutputType = m.toolOutputType;
+          base.toolStatus = (m.toolStatus || 'success') as ToolStatus;
+          base.toolDurationMs = m.toolDurationMs;
+          base.toolError = m.toolError;
+        }
+        return base;
+      });
+      if (historical.length > 0) {
+        idCounter.current = historical.length;
+      }
+      setMessages(historical);
+    }).catch(() => { /* silent, show empty chat */ });
+  }, [pipelineId]);
+
   useEffect(() => {
     const unsub1 = subscribe('chat.stream', (p: any) => {
+      setThinking(false);
       streamingRef.current += p?.delta || '';
       setStreaming(streamingRef.current);
     });
     const unsub2 = subscribe('chat.stream_done', (p: any) => {
+      setThinking(false);
       const finalContent = p?.content || streamingRef.current;
       setMessages(prev => [...prev, {
         id: `agent-${++idCounter.current}`, role: 'agent',
@@ -54,6 +104,7 @@ export function ChatProvider({ pipelineId, children }: { pipelineId: string; chi
       streamingRef.current = '';
     });
     const unsub3 = subscribe('error', (p: any) => {
+      setThinking(false);
       setMessages(prev => [...prev, {
         id: `err-${++idCounter.current}`, role: 'system',
         content: `Error: ${p?.message || 'Unknown error'}`, timestamp: Date.now(),
@@ -69,7 +120,36 @@ export function ChatProvider({ pipelineId, children }: { pipelineId: string; chi
         timestamp: Date.now(),
       }]);
     });
-    // Pipeline stage/gate events are shown in the progress indicator, not as chat messages.
+    // Pipeline stage/gate events
+    const unsub9 = subscribe('pipeline.stage_change', (p: any) => {
+      setPipelineStage({
+        stage: p?.stage || '',
+        status: p?.status || '',
+        pipelineId: p?.pipeline_id || '',
+      });
+      setMessages(prev => [...prev, {
+        id: `stage-${++idCounter.current}`, role: 'system',
+        content: `Pipeline stage changed: ${p?.stage || 'unknown'} (${p?.status || 'unknown'})`,
+        timestamp: Date.now(),
+      }]);
+    });
+    const unsub10 = subscribe('pipeline.token_warning', (p: any) => {
+      const used = p?.used ?? 0;
+      const budget = p?.budget ?? 4096;
+      setMessages(prev => [...prev, {
+        id: `tokwarn-${++idCounter.current}`, role: 'system',
+        content: `Token usage warning: ${used}/${budget} tokens used`,
+        timestamp: Date.now(),
+      }]);
+    });
+    const unsub11 = subscribe('pipeline.finished', (p: any) => {
+      setPipelineStage(prev => prev ? { ...prev, status: p?.status || 'completed' } : null);
+      setMessages(prev => [...prev, {
+        id: `pf-${++idCounter.current}`, role: 'system',
+        content: `Pipeline finished: ${p?.status || 'completed'}`,
+        timestamp: Date.now(),
+      }]);
+    });
 
     // Tool execution events
     const toolStartTimes = new Map<string, number>();
@@ -174,24 +254,39 @@ export function ChatProvider({ pipelineId, children }: { pipelineId: string; chi
       }]);
     });
 
-    return () => { unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); unsub6(); unsub7(); unsub8(); };
+    return () => { unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); unsub6(); unsub7(); unsub8(); unsub9(); unsub10(); unsub11(); };
   }, [subscribe]);
 
   const send = useCallback((_pid: string, content: string) => {
+    if (status !== 'open') {
+      setMessages(prev => [...prev, {
+        id: `err-${++idCounter.current}`, role: 'system',
+        content: 'Cannot send message: WebSocket is not connected. Please wait for reconnection...',
+        timestamp: Date.now(),
+      }]);
+      return;
+    }
+    setThinking(true);
     setMessages(prev => [...prev, {
       id: `user-${++idCounter.current}`, role: 'user',
       content, timestamp: Date.now(),
     }]);
     const workDir = localStorage.getItem('openforge_work_dir') || '';
     wsSend('chat.send', { pipeline_id: pipelineId, message: content, work_dir: workDir });
-  }, [wsSend, pipelineId]);
+  }, [wsSend, pipelineId, status]);
+
+  const cancel = useCallback(() => {
+    setThinking(false);
+    if (status !== 'open') return;
+    wsSend('chat.stop', {});
+  }, [wsSend, status]);
 
   const clear = useCallback(() => {
-    setMessages([]); setStreaming(''); streamingRef.current = '';
+    setMessages([]); setStreaming(''); setThinking(false); streamingRef.current = '';
   }, []);
 
   return (
-    <ChatContext.Provider value={{ messages, streaming, connected: status === 'open', send, clear }}>
+    <ChatContext.Provider value={{ messages, streaming, thinking, connected: status === 'open', pipelineStage, send, cancel, clear }}>
       {children}
     </ChatContext.Provider>
   );

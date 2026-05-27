@@ -10,6 +10,7 @@ import (
 
 	"openforge/internal/agent/domain"
 	agentport "openforge/internal/agent/port"
+	authadapter "openforge/internal/auth/adapter"
 	"openforge/internal/auth/service"
 	"openforge/internal/shared/profile"
 
@@ -59,7 +60,9 @@ type authPayload struct {
 type wsConn struct {
 	conn     *websocket.Conn
 	jwtSvc   *service.JWTService
+	authRepo *authadapter.PGAuthRepository
 	userID   string
+	userRole string
 	mu       sync.Mutex
 	engines  map[string]*domain.QueryEngine
 	of       *profile.OpenForge
@@ -77,6 +80,7 @@ func handleChatWS(of *profile.OpenForge, jwtSvc *service.JWTService) http.Handle
 		c := &wsConn{
 			conn:     conn,
 			jwtSvc:   jwtSvc,
+			authRepo: authadapter.NewPGAuthRepository(of.DB),
 			engines:  make(map[string]*domain.QueryEngine),
 			of:       of,
 			pongFail: 0,
@@ -157,7 +161,8 @@ func (c *wsConn) authenticate() bool {
 	}
 
 	c.userID = claims.UserID
-	slog.Info("ws user authenticated", "user_id", c.userID)
+	c.userRole = claims.Role
+	slog.Info("ws user authenticated", "user_id", c.userID, "role", c.userRole)
 	return true
 }
 
@@ -178,6 +183,11 @@ func (c *wsConn) handleMessage(raw []byte) {
 		}
 
 		qe := c.getOrCreateEngine(p.PipelineID, p.WorkDir)
+		if qe == nil {
+			c.write(map[string]any{"type": "error", "payload": map[string]string{"message": "access denied: no role in project"}})
+			return
+		}
+
 		ctx := context.Background()
 
 		stream, err := qe.SubmitMessage(ctx, p.Message)
@@ -308,6 +318,25 @@ func (c *wsConn) getOrCreateEngine(pipelineID, workDir string) *domain.QueryEngi
 	// Try to resolve pipeline metadata from DB
 	if p, err := c.of.PipelineRepo.GetByID(context.Background(), pipelineID); err == nil && p != nil {
 		ctx.ProjectID = p.ProjectID
+
+		// Multi-tenant check: verify user has a role in this project.
+		if c.authRepo != nil && p.ProjectID != "" {
+			role, _ := c.authRepo.GetUserRole(context.Background(), c.userID, p.ProjectID)
+			if role == nil {
+				// Global admin bypasses per-project role check.
+				if c.userRole == "admin" || c.userRole == "superadmin" {
+					slog.Debug("ws global admin bypass", "user_id", c.userID, "project_id", p.ProjectID)
+				} else {
+					slog.Warn("ws access denied: no role in project",
+						"user_id", c.userID,
+						"project_id", p.ProjectID,
+						"pipeline_id", pipelineID,
+					)
+					return nil
+				}
+			}
+		}
+
 		if p.CurrentStage != "" {
 			ctx.Stage = p.CurrentStage
 		}
@@ -330,6 +359,17 @@ func (c *wsConn) getOrCreateEngine(pipelineID, workDir string) *domain.QueryEngi
 	}
 	qe := domain.NewQueryEngine(c.of.LLMRouter, cfg, c.of.PromptBuilder, ctx)
 		qe.SetToolRegistry(domain.DefaultToolRegistryWithWorkDir(workDir))
+	qe.SetConversationRepo(c.of.PipelineRepo)
+
+	// Preload conversation history from DB for reconnect resilience.
+	if dbMsgs, err := c.of.PipelineRepo.GetMessages(context.Background(), pipelineID, "main"); err == nil && len(dbMsgs) > 0 {
+		msgs := make([]agentport.Message, len(dbMsgs))
+		for i, dm := range dbMsgs {
+			msgs[i] = agentport.Message{Role: dm.Role, Content: dm.Content}
+		}
+		qe.LoadMessages(msgs)
+	}
+
 	c.engines[pipelineID] = qe
 	return qe
 }

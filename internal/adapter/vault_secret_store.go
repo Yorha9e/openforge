@@ -57,7 +57,7 @@ func NewVaultSecretStore(cfg VaultConfig) *VaultSecretStore {
 	} else if cfg.RoleID != "" && cfg.SecretID != "" {
 		// AppRole authentication
 		path := "auth/approle/login"
-		data := map[string]interface{}{
+		data := map[string]any{
 			"role_id":   cfg.RoleID,
 			"secret_id": cfg.SecretID,
 		}
@@ -73,6 +73,12 @@ func NewVaultSecretStore(cfg VaultConfig) *VaultSecretStore {
 		client.SetToken(secret.Auth.ClientToken)
 	}
 
+	// Ping to verify connectivity
+	if _, err := client.Sys().Health(); err != nil {
+		slog.Warn("vault ping failed, falling back to noop", "error", err)
+		return &VaultSecretStore{enabled: false}
+	}
+
 	mount := cfg.EnginePath
 	if mount == "" {
 		mount = "secret"
@@ -80,18 +86,19 @@ func NewVaultSecretStore(cfg VaultConfig) *VaultSecretStore {
 
 	// G14: Auto-detect KV engine version
 	isKVv2 := true // default to v2
-	if cfg.EngineVersion == "" {
+	switch cfg.EngineVersion {
+	case "":
 		// Try to detect by reading mount info
 		mountInfo, err := client.Logical().Read("sys/internal/ui/mounts/" + mount)
 		if err == nil && mountInfo != nil {
-			if data, ok := mountInfo.Data["options"].(map[string]interface{}); ok {
+			if data, ok := mountInfo.Data["options"].(map[string]any); ok {
 				if version, ok := data["version"].(string); ok && version == "1" {
 					isKVv2 = false
 					slog.Info("vault KV v1 detected", "mount", mount)
 				}
 			}
 		}
-	} else if cfg.EngineVersion == "v1" {
+	case "v1":
 		isKVv2 = false
 	}
 
@@ -142,7 +149,7 @@ func (v *VaultSecretStore) Get(ctx context.Context, key string) ([]byte, error) 
 	// KV v2 wraps data in a "data" field
 	data := secret.Data
 	if v.isKVv2 {
-		if inner, ok := data["data"].(map[string]interface{}); ok {
+		if inner, ok := data["data"].(map[string]any); ok {
 			data = inner
 		}
 	}

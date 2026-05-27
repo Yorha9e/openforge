@@ -1,0 +1,20 @@
+- region "Chat panel" [ref=e4]:
+  - generic [ref=e5]:
+    - generic [ref=e6]:
+      - link "← Project" [ref=e7] [cursor=pointer]:
+        - /url: /project/proj-1779630393741208800
+      - generic [ref=e8]: "Pipeline: pipe-1779757402729260100"
+    - button "deepseek" [ref=e10] [cursor=pointer]:
+      - generic [ref=e11]: deepseek
+      - img [ref=e13]
+  - button "Agents (0)" [expanded] [ref=e16] [cursor=pointer]:
+    - text: Agents (0)
+    - img [ref=e17]
+  - log "Chat messages" [ref=e20]:
+    - paragraph [ref=e33]: ls
+  - generic [ref=e22]:
+    - textbox "Message input" [ref=e23]:
+      - /placeholder: Type a message or /skill <name>...
+    - button "Select skill" [ref=e25] [cursor=pointer]:
+      - img [ref=e26]
+    - button "Send message" [disabled] [ref=e30]: Send

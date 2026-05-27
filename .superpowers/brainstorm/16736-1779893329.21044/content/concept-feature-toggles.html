@@ -1,0 +1,40 @@
+<h2>Concept: 将 Phase 9-10 计划功能做成可自由开启的开关</h2>
+<p class="subtitle">在 Admin 面板中，每项计划功能从静态卡片变为带开关的交互卡片。管理员可逐项启用/禁用。</p>
+
+<div class="section">
+  <h3>🔍 设计前需明确的核心问题</h3>
+  <p>在深入 UI 设计前，我们需要先理清几个关键概念：</p>
+</div>
+
+<div class="options">
+  <div class="option" data-choice="scope" onclick="toggleSelect(this)">
+    <div class="letter">①</div>
+    <div class="content">
+      <h3>"可自由开启" 的范围是什么？</h3>
+      <p>是只控制 UI 中是否<strong>展示</strong>该功能入口，还是真正控制后端的<strong>功能启用/禁用</strong>？这两者差别很大。</p>
+    </div>
+  </div>
+  <div class="option" data-choice="backend" onclick="toggleSelect(this)">
+    <div class="letter">②</div>
+    <div class="content">
+      <h3>开关状态存在哪里？</h3>
+      <p>是绑定到 Profile（如 enterprise.yaml 中声明启用哪些功能），还是存数据库（如 feature_flags 表），让管理员在运行时动态切换？</p>
+    </div>
+  </div>
+  <div class="option" data-choice="implied" onclick="toggleSelect(this)">
+    <div class="letter">③</div>
+    <div class="content">
+      <h3>这些功能之间有没有隐含依赖？</h3>
+      <p>比如开启 "Multi-Region DR" 是否要求先开启 "K8s Container Runtime" 才能工作？某些功能打开后，是否会连带要求其他功能也打开？</p>
+    </div>
+  </div>
+  <div class="option" data-choice="profile" onclick="toggleSelect(this)">
+    <div class="letter">④</div>
+    <div class="content">
+      <h3>开关粒度应该在哪个层面？</h3>
+      <p>是整个 Phase 为一组开关？还是 12 项功能独立开关？还是更细粒度（比如 MinIO 的 WORM 和 SSE 分开控制）？</p>
+    </div>
+  </div>
+</div>
+
+<p class="subtitle" style="margin-top: 24px;">👆 点击你想优先讨论的问题，我们从那里开始。</p>

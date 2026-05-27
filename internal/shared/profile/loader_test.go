@@ -78,6 +78,7 @@ service_registry: dns-srv
 disaster_recovery: pg-standby
 load_balancer: nginx
 notifier: feishu-webhook
+command_executor: docker-sandbox
 database:
   host: of-pg-primary.internal
   port: 5432
@@ -99,6 +100,12 @@ database:
 	}
 	if cfg.SecurityTier != "prod" {
 		t.Errorf("SecurityTier = %q, want %q", cfg.SecurityTier, "prod")
+	}
+	if cfg.TaskQueue != "redis-streams" {
+		t.Errorf("TaskQueue = %q, want %q", cfg.TaskQueue, "redis-streams")
+	}
+	if cfg.CommandExecutor != "docker-sandbox" {
+		t.Errorf("CommandExecutor = %q, want %q", cfg.CommandExecutor, "docker-sandbox")
 	}
 }
 

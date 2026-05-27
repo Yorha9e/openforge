@@ -52,6 +52,10 @@ func (s *stubPipelineRepo) IncrementBacktrack(ctx context.Context, id string) er
 	return nil
 }
 
+func (s *stubPipelineRepo) Delete(ctx context.Context, id string) error {
+	return nil
+}
+
 func withTestUser(ctx context.Context, userID string) context.Context {
 	return context.WithValue(ctx, authdomain.UserIDContextKey, userID)
 }

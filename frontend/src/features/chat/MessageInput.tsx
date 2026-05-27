@@ -16,13 +16,15 @@ const availableSkills: SkillOption[] = [
 
 export function MessageInput() {
   const [input, setInput] = useState('');
-  const { send, connected } = useChat();
+  const { send, cancel, connected, thinking, streaming } = useChat();
   const [params] = useSearchParams();
   const pipelineId = params.get('pipeline') || 'default';
   const [inputFocused, setInputFocused] = useState(false);
   const [btnHovered, setBtnHovered] = useState(false);
   const [showSkills, setShowSkills] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+
+  const generating = thinking || !!streaming;
 
   useEffect(() => {
     function handleClick(e: MouseEvent) {
@@ -47,7 +49,11 @@ export function MessageInput() {
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
-    doSend();
+    if (generating) {
+      cancel();
+    } else {
+      doSend();
+    }
   };
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -73,7 +79,7 @@ export function MessageInput() {
           style={{
             flex: 1, padding: '8px 12px', background: tokens.bg, border: `1px solid ${tokens.border}`, borderRadius: 4, color: tokens.text,
             resize: 'none', opacity: connected ? 1 : 0.5, fontFamily: tokens.fontBody,
-            outline: inputFocused ? '2px solid' : 'none', outlineColor: tokens.cta, outlineOffset: 2,
+            outlineWidth: inputFocused ? 2 : 0, outlineStyle: inputFocused ? 'solid' : 'none', outlineColor: tokens.cta, outlineOffset: 2,
             transition: tokens.transition,
           }} />
         <div ref={dropdownRef} style={{ position: 'relative' }}>
@@ -125,18 +131,43 @@ export function MessageInput() {
         </div>
         <button
           type="submit"
-          disabled={!connected || !input.trim()}
+          disabled={!connected || (!input.trim() && !generating)}
           onMouseEnter={() => setBtnHovered(true)}
           onMouseLeave={() => setBtnHovered(false)}
-          aria-label="Send message"
+          onClick={(e) => {
+            if (generating) {
+              e.preventDefault();
+              cancel();
+              return;
+            }
+          }}
+          aria-label={generating ? 'Stop generation' : 'Send message'}
+          title={generating ? 'Stop generation' : 'Send message'}
           style={{
-            padding: '8px 16px', background: btnHovered && connected && input.trim() ? tokens.ctaHover : tokens.cta,
-            color: tokens.ctaText, border: 'none', borderRadius: 4, fontWeight: 500,
-            cursor: connected && input.trim() ? 'pointer' : 'default',
-            opacity: connected && input.trim() ? 1 : 0.5, alignSelf: 'flex-end',
+            padding: '8px 16px', minWidth: 60, minHeight: 44,
+            background: generating
+              ? (btnHovered ? tokens.error : tokens.warning)
+              : (btnHovered && connected && input.trim() ? tokens.ctaHover : tokens.cta),
+            color: generating ? '#fff' : tokens.ctaText,
+            border: 'none', borderRadius: 4, fontWeight: 500,
+            cursor: generating ? 'pointer' : (connected && input.trim() ? 'pointer' : 'default'),
+            opacity: generating ? 1 : (connected && input.trim() ? 1 : 0.5),
+            alignSelf: 'flex-end',
             transition: tokens.transition,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
           }}>
-          Send
+          {generating ? (
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <rect x="4" y="4" width="16" height="16" rx="2" />
+            </svg>
+          ) : (
+            <>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" />
+              </svg>
+              Send
+            </>
+          )}
         </button>
       </div>
     </form>

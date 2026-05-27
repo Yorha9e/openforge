@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useSearchParams, Link, useNavigate } from 'react-router-dom';
+import { tokens } from '../../shared/design-tokens';
 
-export function CircuitBreakerPage() {
+export default function CircuitBreakerPage() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const reason = searchParams.get('reason') || 'The upstream service is currently unavailable due to repeated failures.';
@@ -32,9 +33,9 @@ export function CircuitBreakerPage() {
     <div
       style={{
         minHeight: '100vh',
-        background: '#0F172A',
-        color: '#F8FAFC',
-        fontFamily: "'Fira Sans', sans-serif",
+        background: tokens.bg,
+        color: tokens.text,
+        fontFamily: tokens.fontBody,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -43,8 +44,8 @@ export function CircuitBreakerPage() {
     >
       <div
         style={{
-          background: '#1E293B',
-          border: '1px solid #334155',
+          background: tokens.surface,
+          border: `1px solid ${tokens.border}`,
           borderRadius: 12,
           padding: '48px 40px',
           maxWidth: 480,
@@ -58,7 +59,7 @@ export function CircuitBreakerPage() {
           height={48}
           viewBox="0 0 24 24"
           fill="none"
-          stroke="#F59E0B"
+          stroke={tokens.warning}
           strokeWidth={2}
           strokeLinecap="round"
           strokeLinejoin="round"
@@ -71,11 +72,11 @@ export function CircuitBreakerPage() {
 
         <h1
           style={{
-            fontFamily: "'Fira Code', monospace",
+            fontFamily: tokens.fontHeading,
             fontSize: 20,
             fontWeight: 600,
             margin: '0 0 8px',
-            color: '#F8FAFC',
+            color: tokens.text,
           }}
         >
           Service Temporarily Unavailable
@@ -84,7 +85,7 @@ export function CircuitBreakerPage() {
         <p
           style={{
             fontSize: 14,
-            color: '#94a3b8',
+            color: tokens.muted,
             lineHeight: 1.6,
             margin: '0 0 20px',
           }}
@@ -95,10 +96,10 @@ export function CircuitBreakerPage() {
         {/* Auto-recovery countdown */}
         <div
           style={{
-            fontFamily: "'Fira Code', monospace",
+            fontFamily: tokens.fontHeading,
             fontSize: 36,
             fontWeight: 700,
-            color: remaining === 0 ? '#22C55E' : '#F59E0B',
+            color: remaining === 0 ? tokens.cta : tokens.warning,
             marginBottom: 4,
           }}
         >
@@ -107,7 +108,7 @@ export function CircuitBreakerPage() {
         <p
           style={{
             fontSize: 12,
-            color: '#64748b',
+            color: tokens.muted,
             margin: '0 0 24px',
           }}
         >
@@ -120,21 +121,21 @@ export function CircuitBreakerPage() {
             disabled={notifyText === 'Notification Requested'}
             style={{
               padding: '10px 24px',
-              background: notifyText === 'Notification Requested' ? '#334155' : '#22C55E',
-              color: notifyText === 'Notification Requested' ? '#94a3b8' : '#0F172A',
+              background: notifyText === 'Notification Requested' ? tokens.surface : tokens.cta,
+              color: notifyText === 'Notification Requested' ? tokens.muted : tokens.ctaText,
               border: 'none',
               borderRadius: 6,
               cursor: notifyText === 'Notification Requested' ? 'default' : 'pointer',
               fontSize: 14,
               fontWeight: 600,
-              fontFamily: "'Fira Sans', sans-serif",
-              transition: 'background 200ms',
+              fontFamily: tokens.fontBody,
+              transition: tokens.transition,
             }}
             onMouseEnter={(e) => {
-              if (notifyText !== 'Notification Requested') e.currentTarget.style.background = '#16A34A';
+              if (notifyText !== 'Notification Requested') e.currentTarget.style.background = tokens.ctaHover;
             }}
             onMouseLeave={(e) => {
-              if (notifyText !== 'Notification Requested') e.currentTarget.style.background = '#22C55E';
+              if (notifyText !== 'Notification Requested') e.currentTarget.style.background = tokens.cta;
             }}
           >
             {notifyText}
@@ -145,24 +146,24 @@ export function CircuitBreakerPage() {
             style={{
               padding: '10px 24px',
               background: 'transparent',
-              color: '#F8FAFC',
-              border: '1px solid #334155',
+              color: tokens.text,
+              border: `1px solid ${tokens.border}`,
               borderRadius: 6,
               cursor: 'pointer',
               fontSize: 14,
               fontWeight: 600,
-              fontFamily: "'Fira Sans', sans-serif",
+              fontFamily: tokens.fontBody,
               textDecoration: 'none',
               display: 'inline-flex',
               alignItems: 'center',
-              transition: 'border-color 200ms, background 200ms',
+              transition: tokens.transition,
             }}
             onMouseEnter={(e) => {
-              e.currentTarget.style.borderColor = '#22C55E';
-              e.currentTarget.style.background = 'rgba(34, 197, 94, 0.08)';
+              e.currentTarget.style.borderColor = tokens.cta;
+              e.currentTarget.style.background = `${tokens.cta}14`;
             }}
             onMouseLeave={(e) => {
-              e.currentTarget.style.borderColor = '#334155';
+              e.currentTarget.style.borderColor = tokens.border;
               e.currentTarget.style.background = 'transparent';
             }}
           >

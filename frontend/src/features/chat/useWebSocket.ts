@@ -56,10 +56,13 @@ export function useWebSocket(token: string | null) {
     };
   }, [connect]);
 
-  const send = useCallback((type: string, payload?: any) => {
+  const send = useCallback((type: string, payload?: any): boolean => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ type, payload }));
+      return true;
     }
+    console.warn(`[WS] Cannot send "${type}": WebSocket not connected`);
+    return false;
   }, []);
 
   const subscribe = useCallback((type: string, fn: (payload: any) => void) => {
