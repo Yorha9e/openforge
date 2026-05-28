@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	agentport "openforge/internal/agent/port"
 	pipelineport "openforge/internal/pipeline/port"
@@ -76,6 +77,12 @@ type QueryEngine struct {
 	convRepo        pipelineport.ConversationRepository
 	activeBranchID  string
 	mu              sync.Mutex
+	
+	// Message buffer for batch writes
+	messageBuffer   *MessageBuffer
+	flushTicker     *time.Ticker
+	done            chan struct{}
+	flushInterval   time.Duration
 }
 
 // NewQueryEngine creates a new QueryEngine with the given LLM client and config.
@@ -88,6 +95,10 @@ func NewQueryEngine(llmClient agentport.LLMRouterClient, config agentport.LLMCon
 		pipelineCtx:    pipelineCtx,
 		toolRegistry:   make(ToolRegistry),
 		activeBranchID: "main",
+		// Initialize message buffer
+		messageBuffer:  NewMessageBuffer(100),  // Buffer up to 100 messages
+		done:           make(chan struct{}),
+		flushInterval:  5 * time.Second,  // Flush every 5 seconds
 	}
 }
 
@@ -189,11 +200,63 @@ func (qe *QueryEngine) SetCheckpointRepo(repo CheckpointRepository) {
 	qe.checkpointRepo = repo
 }
 
+// startFlushLoop starts the background goroutine for periodic flushing.
+func (qe *QueryEngine) startFlushLoop() {
+	qe.flushTicker = time.NewTicker(qe.flushInterval)
+	go qe.flushLoop()
+}
+
+// flushLoop runs in a background goroutine and flushes messages periodically.
+func (qe *QueryEngine) flushLoop() {
+	for {
+		select {
+		case <-qe.flushTicker.C:
+			qe.flushMessages()
+		case <-qe.done:
+			// Final flush before shutdown
+			qe.flushMessages()
+			return
+		}
+	}
+}
+
+// flushMessages flushes all buffered messages to the database.
+func (qe *QueryEngine) flushMessages() {
+	if qe.convRepo == nil {
+		return
+	}
+
+	messages := qe.messageBuffer.Flush()
+	if len(messages) == 0 {
+		return
+	}
+
+	// Batch save to database
+	if err := qe.convRepo.BatchSaveMessages(context.Background(), messages); err != nil {
+		// Log error but don't crash - messages are best-effort
+		// In production, you might want to retry or use a persistent queue
+		fmt.Printf("Warning: failed to batch save messages: %v\n", err)
+	}
+}
+
+// StopFlushLoop stops the background flush goroutine.
+func (qe *QueryEngine) StopFlushLoop() {
+	if qe.flushTicker != nil {
+		qe.flushTicker.Stop()
+	}
+	close(qe.done)
+}
+
 // SetConversationRepo sets the conversation repository for chat persistence.
 func (qe *QueryEngine) SetConversationRepo(repo pipelineport.ConversationRepository) {
 	qe.mu.Lock()
 	defer qe.mu.Unlock()
 	qe.convRepo = repo
+	
+	// Start flush loop when repository is set
+	if repo != nil {
+		qe.startFlushLoop()
+	}
 }
 
 // saveMessage persists a message to the conversation store (best-effort, non-blocking).
@@ -202,14 +265,22 @@ func (qe *QueryEngine) saveMessage(msgSeq int, role, msgType, content string) {
 	if qe.convRepo == nil {
 		return
 	}
-	_ = qe.convRepo.SaveMessage(context.Background(), &pipelineport.DBMessage{
+	
+	msg := &pipelineport.DBMessage{
 		PipelineID: qe.pipelineCtx.PipelineID,
 		BranchID:   qe.activeBranchID,
 		MsgSeq:     msgSeq,
 		Role:       role,
 		MsgType:    msgType,
 		Content:    content,
-	})
+	}
+	
+	// Try to add to buffer
+	if !qe.messageBuffer.Add(msg) {
+		// Buffer full, flush immediately and retry
+		qe.flushMessages()
+		qe.messageBuffer.Add(msg)
+	}
 }
 
 // State returns the current query engine state.
@@ -236,7 +307,7 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, msg string) (<-chan St
 	qe.mu.Lock()
 	userMsgSeq := len(qe.messages)
 	qe.messages = append(qe.messages, agentport.Message{Role: "user", Content: msg})
-	qe.tokenCount += int64(len(msg) / 4)
+	qe.tokenCount += int64(utf8.RuneCountInString(msg) / 4)
 	history := make([]agentport.Message, len(qe.messages))
 	copy(history, qe.messages)
 	qe.mu.Unlock()
@@ -274,7 +345,7 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, msg string) (<-chan St
 	if resp.Usage != nil {
 		atomic.AddInt64(&qe.tokenCount, resp.Usage.InputTokens+resp.Usage.OutputTokens)
 	} else {
-		atomic.AddInt64(&qe.tokenCount, int64(len(resp.Content)/4))
+		atomic.AddInt64(&qe.tokenCount, int64(utf8.RuneCountInString(resp.Content)/4))
 	}
 
 	// Persist user message now that LLM call succeeded
@@ -422,7 +493,7 @@ func (qe *QueryEngine) runToolLoop(ctx context.Context, out chan<- StreamEvent, 
 		if resp.Usage != nil {
 			atomic.AddInt64(&qe.tokenCount, resp.Usage.InputTokens+resp.Usage.OutputTokens)
 		} else {
-			atomic.AddInt64(&qe.tokenCount, int64(len(resp.Content)/4))
+			atomic.AddInt64(&qe.tokenCount, int64(utf8.RuneCountInString(resp.Content)/4))
 		}
 
 		out <- StreamEvent{Type: "delta", Content: extractTextOnly(resp.Content)}
@@ -616,9 +687,26 @@ func extractTextOnly(content string) string {
 
 	if tuIdx := strings.Index(cleaned, `"tool_use"`); tuIdx >= 0 {
 		start := strings.LastIndex(cleaned[:tuIdx], "[")
-		endRel := strings.Index(cleaned[tuIdx:], "]")
-		if start >= 0 && endRel >= 0 {
-			cleaned = strings.TrimSpace(cleaned[:start] + cleaned[tuIdx+endRel+1:])
+		if start >= 0 {
+			// Properly match closing bracket with depth counter (handles multi-tool arrays)
+			depth := 0
+			endIdx := -1
+		bracketLoop:
+			for i := start; i < len(cleaned); i++ {
+				switch cleaned[i] {
+				case '[':
+					depth++
+				case ']':
+					depth--
+					if depth == 0 {
+						endIdx = i
+						break bracketLoop
+					}
+				}
+			}
+			if endIdx >= 0 {
+				cleaned = strings.TrimSpace(cleaned[:start] + cleaned[endIdx+1:])
+			}
 		}
 	}
 
@@ -717,7 +805,7 @@ func (qe *QueryEngine) LoadMessages(msgs []agentport.Message) {
 	copy(qe.messages, msgs)
 	tokens := int64(0)
 	for _, m := range msgs {
-		tokens += int64(len(m.Content) / 4)
+		tokens += int64(utf8.RuneCountInString(m.Content) / 4)
 	}
 	qe.tokenCount = tokens
 	qe.state = QueryStateAwaitingUser
