@@ -16,14 +16,21 @@ type MessageBuffer struct {
 
 // NewMessageBuffer creates a new MessageBuffer with the specified maximum size.
 func NewMessageBuffer(maxSize int) *MessageBuffer {
+	if maxSize <= 0 {
+		maxSize = 1 // Prevent panic from negative capacity
+	}
 	return &MessageBuffer{
 		messages: make([]*pipelineport.DBMessage, 0, maxSize),
 		maxSize:  maxSize,
 	}
 }
 
-// Add adds a message to the buffer. Returns false if buffer is full.
+// Add adds a message to the buffer. Returns false if buffer is full or msg is nil.
 func (mb *MessageBuffer) Add(msg *pipelineport.DBMessage) bool {
+	if msg == nil {
+		return false
+	}
+
 	mb.mu.Lock()
 	defer mb.mu.Unlock()
 
