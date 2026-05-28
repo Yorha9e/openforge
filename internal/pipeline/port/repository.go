@@ -80,6 +80,7 @@ type DBBranch struct {
 // ConversationRepository persists chat messages and branch history.
 type ConversationRepository interface {
 	SaveMessage(ctx context.Context, msg *DBMessage) error
+	BatchSaveMessages(ctx context.Context, msgs []*DBMessage) error
 	GetMessages(ctx context.Context, pipelineID string, branchID string) ([]*DBMessage, error)
 	CreateBranch(ctx context.Context, branch *DBBranch) error
 	GetBranch(ctx context.Context, branchID string) (*DBBranch, error)
