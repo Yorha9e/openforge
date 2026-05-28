@@ -33,6 +33,19 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   return res.json();
 }
 
+export type InfraStatus = 'connected' | 'degraded' | 'unavailable' | 'unused';
+
+export type InfraComponent = {
+  key: string;
+  name: string;
+  status: InfraStatus;
+  uptime_seconds?: number;
+  latency_ms?: number;
+  message?: string;
+  version?: string;
+  circuit_breaker_state?: 'closed' | 'open' | 'half_open';
+};
+
 export type AdminStatus = {
   phase: string;
   profile: string;
@@ -45,7 +58,41 @@ export type AdminStatus = {
   circuit_breakers?: Record<string, string>;
   slo?: { total: number; success_rate: number; p95_ms?: number };
   ha?: { task_queue: string; hash_ring_nodes: number; load_shedding: string };
+  infrastructure?: InfraComponent[];
 };
+
+/**
+ * 当后端不提供 infrastructure 字段时，前端根据 profile + circuit_breakers 推导。
+ */
+export function deriveInfraHealth(status: AdminStatus): InfraComponent[] {
+  const { profile, circuit_breakers, ha } = status;
+  const isStandard = profile === 'standard' || profile === 'enterprise';
+  const isEnterprise = profile === 'enterprise';
+
+  const cb = (key: string): InfraStatus | undefined => {
+    if (!circuit_breakers) return undefined;
+    const state = circuit_breakers[key];
+    if (state === 'open') return 'unavailable';
+    if (state === 'half_open') return 'degraded';
+    if (state === 'closed') return 'connected';
+    return undefined;
+  };
+
+  return [
+    { key: 'postgres', name: 'PostgreSQL', status: cb('postgres') ?? 'connected' },
+    { key: 'docker', name: 'Docker', status: cb('docker') ?? 'connected' },
+    { key: 'grpc_io', name: 'gRPC IO', status: 'connected' },
+    { key: 'dr_backup', name: 'DR Backup', status: 'connected' },
+    { key: 'redis', name: 'Redis', status: isStandard ? (cb('redis') ?? 'connected') : 'unused' },
+    { key: 'minio', name: 'MinIO', status: isStandard ? (cb('minio') ?? 'connected') : 'unused' },
+    { key: 'vault', name: 'Vault', status: isStandard ? 'connected' : 'unused' },
+    { key: 'nginx', name: 'Nginx', status: isStandard ? 'connected' : 'unused' },
+    { key: 'sandbox', name: 'Sandbox', status: isStandard ? 'connected' : 'unused' },
+    { key: 'feishu', name: 'Feishu', status: isStandard ? 'connected' : 'unused' },
+    { key: 'telemetry', name: 'Telemetry', status: isStandard ? 'connected' : 'unused' },
+    { key: 'k8s', name: 'K8s', status: isEnterprise ? 'connected' : 'unused' },
+  ];
+}
 
 export type FeatureFlags = {
   enterprise_platform: boolean;

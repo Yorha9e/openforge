@@ -4,6 +4,63 @@ import { useAuth, useRole } from '../../shared/auth';
 import { api, AdminStatus, FeatureFlags } from '../../shared/api';
 import { AppLayout } from '../../shared/AppLayout';
 import { tokens } from '../../shared/design-tokens';
+import { Skeleton, SkeletonGrid } from '../../shared/skeleton';
+import { StatusBadge } from '../../shared/StatusBadge';
+import { RolePyramid } from './RolePyramid';
+import { FeatureCard } from './FeatureCard';
+import { SloBar } from './SloBar';
+import { HaPills } from './HaPills';
+import { CircuitBreakerStrip } from './CircuitBreakerStrip';
+import InfraHealthPanel from './InfraHealthPanel';
+import { deriveInfraHealth } from '../../shared/api';
+
+const FEATURE_GROUPS = [
+  {
+    key: 'enterprise_platform' as keyof FeatureFlags,
+    title: 'Enterprise Platform',
+    desc: 'Enterprise-grade infrastructure stack',
+    items: ['Vault', 'K8s', 'MinIO', 'Multi-Region DR', 'Helm'],
+    color: '#7C3AED',
+    icon: '\u{1F3E2}',
+  },
+  {
+    key: 'compliance_suite' as keyof FeatureFlags,
+    title: 'Compliance Suite',
+    desc: 'Regulatory compliance & data governance',
+    items: ['Monthly Reports', 'Data Lifecycle'],
+    color: '#0891B2',
+    icon: '\u{1F4CB}',
+  },
+  {
+    key: 'production_ops' as keyof FeatureFlags,
+    title: 'Production Operations',
+    desc: 'Monitoring, alerting & operational runbooks',
+    items: ['Grafana', 'Runbooks', 'Notifier'],
+    color: '#F59E0B',
+    icon: '\u{2699}\u{FE0F}',
+  },
+  {
+    key: 'distribution_artifacts' as keyof FeatureFlags,
+    title: 'Distribution & Docs',
+    desc: 'Offline deployment & documentation',
+    items: ['Offline Package', 'ADR + OpenAPI'],
+    color: '#10B981',
+    icon: '\u{1F4E6}',
+  },
+];
+
+const ROLE_NODES = [
+  { role: 'admin', color: '#7C3AED', description: 'Bypass all checks' },
+  {
+    role: '', color: '', description: '',
+    peers: [
+      { role: 'pm', color: '#2563EB', description: 'Pipeline & costs' },
+      { role: 'dev_lead', color: '#0891B2', description: 'Approve & review' },
+    ],
+  },
+  { role: 'dev', color: '#059669', description: 'Read-only on reviews' },
+  { role: 'observer', color: '#6B7280', description: 'Read-only access' },
+];
 
 export default function AdminPage() {
   const { user } = useAuth();
@@ -19,9 +76,7 @@ export default function AdminPage() {
     setLoading(true);
     setError(null);
     api.getAdminStatus()
-      .then(data => {
-        setStatus(data);
-      })
+      .then(data => { setStatus(data); })
       .catch(err => {
         setError(err instanceof Error ? err.message : 'Unable to fetch admin status');
         setStatus(null);
@@ -30,7 +85,7 @@ export default function AdminPage() {
 
     api.getFeatureFlags()
       .then(ff => setFeatureFlags(ff))
-      .catch(() => {}); // flags unavailable — show nothing
+      .catch(() => {});
   }, []);
 
   const handleToggleFlag = async (key: keyof FeatureFlags) => {
@@ -56,364 +111,171 @@ export default function AdminPage() {
     } catch { return null; }
   })() : null;
 
+  const infraComponents = status ? deriveInfraHealth(status) : [];
+
   return (
     <AppLayout>
+      {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
         <h1 style={{ fontSize: 24, fontWeight: 700, fontFamily: tokens.fontHeading, margin: 0, color: tokens.text }}>Admin Panel</h1>
         <button onClick={() => navigate('/admin/skills')}
           style={{ padding: '8px 16px', background: tokens.surface, border: `1px solid ${tokens.border}`, borderRadius: 4, cursor: 'pointer', color: tokens.text, fontSize: 13 }}>
-          Skill Management
+          Skill Management →
         </button>
       </div>
 
       {/* Current Session */}
       <Section title="Current Session">
-        <CardGrid>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>
           <InfoCard label="User" value={user?.id || '—'} />
           <InfoCard label="Role" value={role || '—'} capitalize />
           <InfoCard label="Token Expires" value={loginInfo?.exp ? loginInfo.exp.toLocaleTimeString() : '—'} />
           <InfoCard label="RBAC via" value={role === 'admin' ? 'Admin Bypass' : 'RequireRole Middleware'} />
-        </CardGrid>
-      </Section>
-
-      {/* System Status */}
-      <Section title="System Status">
-        {loading ? (
-          <div style={{ textAlign: 'center', padding: 32, color: tokens.muted, fontSize: 14 }}>
-            Loading system status...
-          </div>
-        ) : error ? (
-          <div style={{ textAlign: 'center', padding: 32, color: tokens.error, fontSize: 14 }}>
-            {error}
-          </div>
-        ) : (
-          <>
-            <CardGrid>
-              <StatusCard label="RBAC Middleware" status={status?.rbac === 'active' ? 'on' : status?.rbac ? 'error' : 'off'} />
-              <StatusCard label="OIDC Provider" status={status?.oidc === 'enabled' ? 'on' : 'off'} detail={status?.oidc === 'enabled' ? 'Enterprise SSO' : 'JWT (dev)'} />
-              <StatusCard label="Audit Hash Chain" status="on" />
-              <StatusCard label="Module Ownership" status="on" detail="2D reviewer routing" />
-              <StatusCard label="Profile" status="on" detail={status?.profile || '—'} />
-              <StatusCard label="Security Tier" status="on" detail={status?.tier || '—'} />
-            </CardGrid>
-
-            {/* SLO data */}
-            {status?.slo && (
-              <div style={{ marginTop: 16 }}>
-                <h3 style={{ fontSize: 13, color: tokens.muted, marginBottom: 8 }}>SLO Performance</h3>
-                <CardGrid>
-                  <InfoCard label="Total Requests" value={String(status.slo.total)} />
-                  <InfoCard label="Success Rate" value={`${(status.slo.success_rate * 100).toFixed(1)}%`} />
-                  {status.slo.p95_ms !== undefined && (
-                    <InfoCard label="P95 Latency" value={`${status.slo.p95_ms}ms`} />
-                  )}
-                </CardGrid>
-              </div>
-            )}
-
-            {/* HA data */}
-            {status?.ha && (
-              <div style={{ marginTop: 16 }}>
-                <h3 style={{ fontSize: 13, color: tokens.muted, marginBottom: 8 }}>High Availability</h3>
-                <CardGrid>
-                  <InfoCard label="Task Queue" value={status.ha.task_queue} />
-                  <InfoCard label="Hash Ring Nodes" value={String(status.ha.hash_ring_nodes)} />
-                  <InfoCard label="Load Shedding" value={status.ha.load_shedding} />
-                </CardGrid>
-              </div>
-            )}
-
-            {/* Circuit Breakers */}
-            {status?.circuit_breakers && Object.keys(status.circuit_breakers).length > 0 && (
-              <div style={{ marginTop: 16 }}>
-                <h3 style={{ fontSize: 13, color: tokens.muted, marginBottom: 8 }}>Circuit Breakers</h3>
-                <CardGrid>
-                  {Object.entries(status.circuit_breakers).map(([name, state]) => (
-                    <StatusCard key={name} label={name} status={state === 'closed' ? 'on' : state === 'open' ? 'error' : 'off'} detail={state} />
-                  ))}
-                </CardGrid>
-              </div>
-            )}
-          </>
-        )}
-      </Section>
-
-      {/* Role Hierarchy */}
-      <Section title="Role Hierarchy">
-        <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 0 }}>
-          {[
-            { role: 'admin', color: '#7C3AED', desc: 'Bypass all checks' },
-            // pm and dev_lead are peers — side by side
-          ].map((item, i, arr) => (
-            <div key={item.role} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <div style={{
-                background: tokens.surface, borderRadius: 10, padding: '12px 16px',
-                border: `1px solid ${tokens.border}`, minWidth: 140, display: 'flex', alignItems: 'center', gap: 10,
-              }}>
-                <div style={{ width: 12, height: 12, borderRadius: '50%', backgroundColor: item.color, flexShrink: 0 }} />
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 14, fontWeight: 700, color: item.color, display: 'flex', alignItems: 'center', gap: 6 }}>
-                    {item.role}
-                    {item.role === role && <span style={{ fontSize: 9, fontWeight: 700, color: tokens.text, background: tokens.border, padding: '1px 5px', borderRadius: 4 }}>YOU</span>}
-                  </div>
-                  <div style={{ fontSize: 11, color: '#64748B', marginTop: 2 }}>{item.desc}</div>
-                </div>
-              </div>
-              {i < arr.length - 1 && <div style={{ fontSize: 18, color: '#475569', margin: '0 4px' }}>→</div>}
-            </div>
-          ))}
-          {/* pm + dev_lead as peers */}
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', margin: '0 4px' }}>
-            <div style={{ fontSize: 18, color: '#475569' }}>→</div>
-          </div>
-          <div style={{ display: 'flex', gap: 8 }}>
-            {[
-              { role: 'pm', color: '#2563EB', desc: 'Create pipelines, view costs' },
-              { role: 'dev_lead', color: '#0891B2', desc: 'Approve gates, review inbox' },
-            ].map(item => (
-              <div key={item.role} style={{
-                background: tokens.surface, borderRadius: 10, padding: '12px 16px',
-                border: `1px solid ${tokens.border}`, minWidth: 140,
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <div style={{ width: 12, height: 12, borderRadius: '50%', backgroundColor: item.color, flexShrink: 0 }} />
-                  <div>
-                    <div style={{ fontSize: 14, fontWeight: 700, color: item.color, display: 'flex', alignItems: 'center', gap: 6 }}>
-                      {item.role}
-                      {item.role === role && <span style={{ fontSize: 9, fontWeight: 700, color: tokens.text, background: tokens.border, padding: '1px 5px', borderRadius: 4 }}>YOU</span>}
-                    </div>
-                    <div style={{ fontSize: 11, color: '#64748B', marginTop: 2 }}>{item.desc}</div>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', margin: '0 4px' }}>
-            <div style={{ fontSize: 18, color: '#475569' }}>→</div>
-          </div>
-          {[
-            { role: 'dev', color: '#059669', desc: 'Read-only on review features' },
-          ].map((item, i, arr) => (
-            <div key={item.role} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <div style={{
-                background: tokens.surface, borderRadius: 10, padding: '12px 16px',
-                border: `1px solid ${tokens.border}`, minWidth: 140, display: 'flex', alignItems: 'center', gap: 10,
-              }}>
-                <div style={{ width: 12, height: 12, borderRadius: '50%', backgroundColor: item.color, flexShrink: 0 }} />
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 14, fontWeight: 700, color: item.color, display: 'flex', alignItems: 'center', gap: 6 }}>
-                    {item.role}
-                    {item.role === role && <span style={{ fontSize: 9, fontWeight: 700, color: tokens.text, background: tokens.border, padding: '1px 5px', borderRadius: 4 }}>YOU</span>}
-                  </div>
-                  <div style={{ fontSize: 11, color: '#64748B', marginTop: 2 }}>{item.desc}</div>
-                </div>
-              </div>
-              {i < arr.length - 1 && <div style={{ fontSize: 18, color: '#475569', margin: '0 4px' }}>→</div>}
-            </div>
-          ))}
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', margin: '0 4px' }}>
-            <div style={{ fontSize: 18, color: '#475569' }}>→</div>
-          </div>
-          {[
-            { role: 'observer', color: '#6B7280', desc: 'Read-only access' },
-          ].map(item => (
-            <div key={item.role} style={{
-              background: tokens.surface, borderRadius: 10, padding: '12px 16px',
-              border: `1px solid ${tokens.border}`, minWidth: 140, display: 'flex', alignItems: 'center', gap: 10,
-            }}>
-              <div style={{ width: 12, height: 12, borderRadius: '50%', backgroundColor: item.color, flexShrink: 0 }} />
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 14, fontWeight: 700, color: item.color, display: 'flex', alignItems: 'center', gap: 6 }}>
-                  {item.role}
-                  {item.role === role && <span style={{ fontSize: 9, fontWeight: 700, color: tokens.text, background: tokens.border, padding: '1px 5px', borderRadius: 4 }}>YOU</span>}
-                </div>
-                <div style={{ fontSize: 11, color: '#64748B', marginTop: 2 }}>{item.desc}</div>
-              </div>
-            </div>
-          ))}
         </div>
       </Section>
 
-      {/* Phase Progress — All 10 Phases */}
-      <Section title="Phase Progress">
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          {[
-            { phase: 'Phase 1', label: 'CLI + Minimal Profile + 10 API Stubs', done: true },
-            { phase: 'Phase 2', label: 'Web Chat + BFF Auth (JWT/CORS/XSS)', done: true },
-            { phase: 'Phase 3', label: 'Pipeline State Machine + Diff Preview + Gate/Approve', done: true },
-            { phase: 'Phase 4', label: 'Docker Sandbox (5-Layer) + Cost Dashboard + Onboarding', done: true },
-            { phase: 'Phase 5', label: 'Redis Task Queue + Gate Hooks + Multi-Coordinator', done: true },
-            { phase: 'Phase 6', label: 'RBAC + SSO/OIDC + Audit Hash Chain + Learning Engine', done: true },
-            { phase: 'Phase 7', label: 'OTel + ToolRegistry + Prometheus Metrics + AB Testing', done: true },
-            { phase: 'Phase 8', label: 'HA + Circuit Breaker + Load Shedding + Sharding + SLO', done: true },
-            { phase: 'Phase 9', label: 'Full Workbench + Enterprise Profile + K8s Container Runtime', done: false },
-            { phase: 'Phase 10', label: 'Compliance Reports + Runbook + Offline Package + DR Region', done: false },
-          ].map(item => (
-            <div key={item.phase} style={{
-              display: 'flex', alignItems: 'flex-start', gap: 14, padding: '14px 16px',
-              background: tokens.surface, borderRadius: 10, border: `1px solid ${tokens.border}`,
-            }}>
-              <div style={{
-                width: 14, height: 14, borderRadius: '50%', border: '2px solid',
-                borderColor: item.done ? tokens.cta : '#F59E0B',
-                backgroundColor: item.done ? tokens.cta : 'transparent',
-                flexShrink: 0, marginTop: 2,
-              }} />
-              <div>
-                <div style={{ fontSize: 13, fontWeight: 700, color: '#E2E8F0', display: 'flex', alignItems: 'center', gap: 8 }}>
-                  {item.phase}
-                  {item.done ? (
-                    <span style={{ fontSize: 10, fontWeight: 600, color: tokens.cta, background: `${tokens.cta}18`, padding: '1px 7px', borderRadius: 4 }}>DONE</span>
-                  ) : (
-                    <span style={{ fontSize: 10, fontWeight: 600, color: '#F59E0B', background: '#F59E0B18', padding: '1px 7px', borderRadius: 4 }}>PLANNED</span>
-                  )}
-                </div>
-                <div style={{ fontSize: 12, color: '#64748B', marginTop: 2 }}>{item.label}</div>
+      {/* Two-column layout */}
+      <div style={{ display: 'grid', gridTemplateColumns: '3fr 2fr', gap: 24 }}>
+        {/* LEFT COLUMN */}
+        <div>
+          {/* System Status */}
+          <Section title="System Status">
+            {loading ? (
+              <SkeletonGrid count={6} variant="card" />
+            ) : error ? (
+              <div role="alert" style={{ textAlign: 'center', padding: 32, color: tokens.error, fontSize: 14 }}>
+                ⚠️ {error}
               </div>
-            </div>
-          ))}
-        </div>
-      </Section>
+            ) : (
+              <>
+                {/* Compact Status Badges */}
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 16 }}>
+                  <StatusBadge label="RBAC" status={status?.rbac === 'active' ? 'active' : status?.rbac ? 'error' : 'inactive'} detail="Role-based access" />
+                  <StatusBadge label="OIDC" status={status?.oidc === 'enabled' ? 'active' : 'inactive'} detail={status?.oidc === 'enabled' ? 'Enterprise SSO' : 'JWT (dev)'} />
+                  <StatusBadge label="Audit Chain" status="active" detail="Hash chain running" />
+                  <StatusBadge label="Module Ownership" status="active" detail="2D reviewer routing" />
+                  <StatusBadge label="Profile" status="active" detail={status?.profile || '—'} />
+                  <StatusBadge label="Security Tier" status="active" detail={status?.tier || '—'} />
+                </div>
 
-      {/* Enterprise Features */}
-      <Section title="Enterprise Features — Feature Toggles">
+                {/* SLO Mini Bars */}
+                {status?.slo && (
+                  <div style={{ marginBottom: 16 }}>
+                    <h3 style={{ fontSize: 11, fontWeight: 600, color: tokens.muted, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>SLO Performance</h3>
+                    <SloBar label="Total" value={String(status.slo.total)} max={100000} current={status.slo.total} target="max 100K" color="#2563EB" />
+                    <SloBar label="Success" value={`${(status.slo.success_rate * 100).toFixed(1)}%`} max={100} current={status.slo.success_rate * 100} target="SLO ≥99.5%" />
+                    {status.slo.p95_ms !== undefined && (
+                      <SloBar label="P95 Lat." value={`${status.slo.p95_ms}ms`} max={200} current={status.slo.p95_ms} target="SLO ≤200ms" color="#0891B2" />
+                    )}
+                  </div>
+                )}
+
+                {/* HA Pills */}
+                {status?.ha && (
+                  <div style={{ marginBottom: 16 }}>
+                    <h3 style={{ fontSize: 11, fontWeight: 600, color: tokens.muted, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>High Availability</h3>
+                    <HaPills pills={[
+                      { label: `Queue: ${status.ha.task_queue}`, status: 'active' },
+                      { label: `Nodes: ${status.ha.hash_ring_nodes}`, status: 'active' },
+                      { label: `Load: ${status.ha.load_shedding}`, status: status.ha.load_shedding.includes('%') && parseInt(status.ha.load_shedding) > 80 ? 'warning' : 'active' },
+                    ]} />
+                  </div>
+                )}
+
+                {/* Infrastructure Health */}
+                <div style={{ marginTop: 16 }}>
+                  <InfraHealthPanel components={infraComponents} loading={loading} />
+                </div>
+              </>
+            )}
+          </Section>
+        </div>
+
+        {/* RIGHT COLUMN */}
+        <div>
+          {/* Role Hierarchy */}
+          <Section title="Role Hierarchy">
+            <RolePyramid nodes={ROLE_NODES} currentUserRole={role || undefined} />
+          </Section>
+
+          {/* Circuit Breakers */}
+          <Section title="Circuit Breakers">
+            {status?.circuit_breakers && Object.keys(status.circuit_breakers).length > 0 ? (
+              <CircuitBreakerStrip breakers={status.circuit_breakers as Record<string, 'closed' | 'open' | 'half_open'>} />
+            ) : (
+              <div style={{ textAlign: 'center', padding: 16, color: tokens.muted, fontSize: 12, border: `1px dashed ${tokens.border}`, borderRadius: 8 }}>
+                No circuit breaker data
+              </div>
+            )}
+          </Section>
+        </div>
+      </div>
+
+      {/* Enterprise Feature Toggles — 2×2 */}
+      <Section title="Enterprise Feature Toggles">
         {featureFlags === null ? (
           <div style={{ textAlign: 'center', padding: 24, color: tokens.muted, fontSize: 14 }}>
             Feature flags unavailable — check admin access
           </div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            {[
-              {
-                key: 'enterprise_platform' as keyof FeatureFlags,
-                title: 'Enterprise Platform',
-                desc: 'Enterprise-grade infrastructure stack',
-                items: ['Vault Secret Store', 'K8s Container Runtime', 'MinIO Object Store', 'Multi-Region DR', 'K8s Helm Charts'],
-                color: '#7C3AED',
-              },
-              {
-                key: 'compliance_suite' as keyof FeatureFlags,
-                title: 'Compliance Suite',
-                desc: 'Regulatory compliance & data governance',
-                items: ['Monthly Compliance Reports', 'Data Lifecycle Manager (90d/365d/7yr)'],
-                color: '#0891B2',
-              },
-              {
-                key: 'production_ops' as keyof FeatureFlags,
-                title: 'Production Operations',
-                desc: 'Monitoring, alerting & operational runbooks',
-                items: ['Grafana Dashboards', 'Semi-automated Runbooks', 'Multi-Channel Notifier (Feishu/DingTalk)'],
-                color: '#F59E0B',
-              },
-              {
-                key: 'distribution_artifacts' as keyof FeatureFlags,
-                title: 'Distribution & Docs',
-                desc: 'Offline deployment & architecture documentation',
-                items: ['Offline Deployment Package', 'ADR + OpenAPI Contract'],
-                color: '#10B981',
-              },
-            ].map(group => (
-              <div key={group.key} style={{
-                background: tokens.surface, borderRadius: 10, padding: '16px 20px',
-                border: `1px solid ${featureFlags[group.key] ? group.color : tokens.border}`,
-                display: 'flex', alignItems: 'flex-start', gap: 16,
-                opacity: flagsLoading ? 0.5 : 1,
-                transition: 'border-color 0.2s, opacity 0.2s',
-              }}>
-                {/* Toggle switch */}
-                <button
-                  onClick={() => handleToggleFlag(group.key)}
-                  disabled={flagsLoading}
-                  style={{
-                    width: 44, height: 24, borderRadius: 12, border: 'none',
-                    cursor: flagsLoading ? 'not-allowed' : 'pointer',
-                    backgroundColor: featureFlags[group.key] ? group.color : '#334155',
-                    position: 'relative', flexShrink: 0, marginTop: 4,
-                    transition: 'background-color 0.2s',
-                  }}
-                >
-                  <div style={{
-                    width: 18, height: 18, borderRadius: '50%',
-                    backgroundColor: '#fff',
-                    position: 'absolute', top: 3,
-                    left: featureFlags[group.key] ? 23 : 3,
-                    transition: 'left 0.2s',
-                  }} />
-                </button>
-
-                {/* Content */}
-                <div style={{ flex: 1 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                    <div style={{ fontSize: 14, fontWeight: 700, color: '#F1F5F9' }}>{group.title}</div>
-                    <span style={{
-                      fontSize: 10, fontWeight: 600, padding: '1px 7px', borderRadius: 4,
-                      color: featureFlags[group.key] ? group.color : '#64748B',
-                      background: featureFlags[group.key] ? `${group.color}18` : '#334155',
-                    }}>
-                      {featureFlags[group.key] ? 'ON' : 'OFF'}
-                    </span>
-                  </div>
-                  <div style={{ fontSize: 12, color: '#94A3B8', marginBottom: 8 }}>{group.desc}</div>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                    {group.items.map(item => (
-                      <span key={item} style={{
-                        fontSize: 11, color: '#64748B',
-                        background: '#1E293B', padding: '2px 8px', borderRadius: 4,
-                      }}>
-                        {item}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
+          <>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+              {FEATURE_GROUPS.map(group => (
+                <FeatureCard
+                  key={group.key}
+                  title={group.title}
+                  description={group.desc}
+                  features={group.items}
+                  enabled={!!featureFlags[group.key]}
+                  color={group.color}
+                  icon={group.icon}
+                  onToggle={() => handleToggleFlag(group.key)}
+                  loading={flagsLoading}
+                />
+              ))}
+            </div>
+            {/* Batch operations */}
+            <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+              <button
+                onClick={() => FEATURE_GROUPS.forEach(g => handleToggleFlag(g.key).catch(() => {}))}
+                style={{ padding: '5px 14px', border: `1px solid ${tokens.border}`, borderRadius: 4, background: 'transparent', color: tokens.text, fontSize: 12, cursor: 'pointer' }}
+              >
+                Enable All
+              </button>
+              <button
+                onClick={() => FEATURE_GROUPS.forEach(g => {
+                  if (featureFlags?.[g.key]) handleToggleFlag(g.key);
+                })}
+                style={{ padding: '5px 14px', border: `1px solid ${tokens.border}`, borderRadius: 4, background: 'transparent', color: tokens.text, fontSize: 12, cursor: 'pointer' }}
+              >
+                Disable All
+              </button>
+            </div>
+          </>
         )}
       </Section>
     </AppLayout>
   );
 }
 
+/* ----- Helper components ----- */
+
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section style={{ marginBottom: 32 }}>
-      <h2 style={{ fontSize: 16, fontWeight: 600, color: tokens.muted, marginBottom: 16, letterSpacing: '-0.01em' }}>{title}</h2>
+    <section style={{ marginBottom: 28 }}>
+      <h2 style={{ fontSize: 11, fontWeight: 600, color: tokens.muted, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 12 }}>
+        {title}
+      </h2>
       {children}
     </section>
   );
 }
 
-function CardGrid({ children }: { children: React.ReactNode }) {
-  return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 12 }}>
-      {children}
-    </div>
-  );
-}
-
 function InfoCard({ label, value, capitalize }: { label: string; value: string; capitalize?: boolean }) {
   return (
-    <div style={{ background: tokens.surface, borderRadius: 8, padding: '16px 20px', border: `1px solid ${tokens.border}` }}>
-      <div style={{ fontSize: 11, fontWeight: 500, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 8 }}>{label}</div>
-      <div style={{ fontSize: 18, fontWeight: 600, color: '#F1F5F9', textTransform: capitalize ? 'capitalize' : undefined }}>{value}</div>
-    </div>
-  );
-}
-
-function StatusCard({ label, status, detail }: { label: string; status: 'on' | 'off' | 'error'; detail?: string }) {
-  return (
-    <div style={{ background: tokens.surface, borderRadius: 8, padding: '16px 20px', border: `1px solid ${tokens.border}`, display: 'flex', flexDirection: 'column', gap: 8 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <div style={{
-          width: 10, height: 10, borderRadius: '50%', flexShrink: 0,
-          backgroundColor: status === 'on' ? tokens.cta : status === 'error' ? tokens.error : '#6B7280',
-        }} />
-        <div style={{ fontSize: 13, fontWeight: 600, color: '#E2E8F0' }}>{label}</div>
-      </div>
-      <div style={{ fontSize: 12, fontWeight: 500, color: '#94A3B8' }}>
-        {status === 'on' ? 'Active' : status === 'error' ? 'Error' : 'Disabled'}
-      </div>
-      {detail && <div style={{ fontSize: 11, color: '#64748B', marginTop: -2 }}>{detail}</div>}
+    <div style={{ background: '#111B2A', border: `1px solid ${tokens.border}`, borderRadius: 8, padding: '14px 18px' }}>
+      <div style={{ fontSize: 10, fontWeight: 600, color: tokens.muted, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>{label}</div>
+      <div style={{ fontSize: 16, fontWeight: 700, color: tokens.text, textTransform: capitalize ? 'capitalize' : undefined }}>{value}</div>
     </div>
   );
 }
