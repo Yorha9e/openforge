@@ -1,9 +1,5 @@
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://img.shields.io/badge/OpenForge-ffffff?style=for-the-badge&logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSJ3aGl0ZSIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjxwYXRoIGQ9Ik0xMiAyMHYtNiIvPjxwYXRoIGQ9Ik02IDIwdi00Ii8+PHBhdGggZD0iTTE4IDIwVjYiLz48cGF0aCBkPSJNOSAxNi44IDEyIDE0bDMgMi44TDEyIDE4WiIvPjxwYXRoIGQ9Ik0xMiAyVjE0Ii8+PHBhdGggZD0ibTggOCA0LTQgNCA0Ii8+PC9zdmc+">
-    <source media="(prefers-color-scheme: light)" srcset="https://img.shields.io/badge/OpenForge-1a1a2e?style=for-the-badge&logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSJ3aGl0ZSIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjxwYXRoIGQ9Ik0xMiAyMHYtNiIvPjxwYXRoIGQ9Ik02IDIwdi00Ii8+PHBhdGggZD0iTTE4IDIwVjYiLz48cGF0aCBkPSJNOSAxNi44IDEyIDE0bDMgMi44TDEyIDE4WiIvPjxwYXRoIGQ9Ik0xMiAyVjE0Ii8+PHBhdGggZD0ibTggOCA0LTQgNCA0Ii8+PC9zdmc+">
-    <img alt="OpenForge" src="https://img.shields.io/badge/OpenForge-1a1a2e?style=for-the-badge">
-  </picture>
+  <img alt="OpenForge" src="https://img.shields.io/badge/OpenForge-1a1a2e?style=for-the-badge" width="180" height="40">
 </p>
 
 <p align="center">

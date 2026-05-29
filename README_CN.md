@@ -1,5 +1,5 @@
 <p align="center">
-  <strong style="font-size: 2em;">OpenForge</strong><br>
+  <img alt="OpenForge" src="https://img.shields.io/badge/OpenForge-1a1a2e?style=for-the-badge" width="180" height="40"><br>
   <strong>AI 驱动的端到端全栈开发工作台</strong><br>
   <sub>从需求到部署 — 一切通过对话完成</sub>
 </p>
