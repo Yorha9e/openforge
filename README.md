@@ -185,8 +185,6 @@ cd frontend && npm run lint
 
 **Use environment variables for all secrets.** See `.env` → `.env.example` pattern.
 
----
+## License
 
-<p align="center">
-  <sub>Built for the Agent-Assisted Full-Stack Challenge · Topic 1: AI Engineering Tools</sub>
-</p>
+*To be determined*
