@@ -185,10 +185,6 @@ cd frontend && npm run lint
 
 **Use environment variables for all secrets.** See `.env` → `.env.example` pattern.
 
-## License
-
-*To be determined*
-
 ---
 
 <p align="center">

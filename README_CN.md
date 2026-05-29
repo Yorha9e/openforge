@@ -182,10 +182,6 @@ cd frontend && npm run lint
 
 **所有敏感信息通过环境变量注入。** 参考 `.env` → `.env.example` 模式。
 
-## 许可证
-
-*待定*
-
 ---
 
 <p align="center">
