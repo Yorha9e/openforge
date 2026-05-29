@@ -21,6 +21,7 @@ type Pipeline struct {
 	ParentPipelineID *string        `json:"parent_pipeline_id,omitempty"`
 	Region           string         `json:"region"`
 	Config           PipelineConfig `json:"config"`
+	ChangedFiles     []ChangedFile  `json:"changed_files,omitempty"`
 	CreatedAt        time.Time      `json:"created_at"`
 	UpdatedAt        time.Time      `json:"updated_at"`
 }
@@ -33,6 +34,12 @@ type PipelineConfig struct {
 }
 
 func (c PipelineConfig) Clone() PipelineConfig { return c }
+
+// ChangedFile represents a file that was modified in the pipeline.
+type ChangedFile struct {
+	Path   string `json:"path"`
+	Status string `json:"status"` // added, modified, deleted
+}
 
 func NewPipeline(id, projectID, title, createdBy string, files, modules int) *Pipeline {
 	level := ClassifyComplexity(files, modules)

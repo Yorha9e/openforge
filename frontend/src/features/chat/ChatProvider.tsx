@@ -23,31 +23,40 @@ interface PipelineStageInfo {
   stage: string;
   status: string;
   pipelineId: string;
+  tokenUsed: number;
+  tokenBudget: number;
 }
 
 interface ChatState {
+  pipelineId: string;
   messages: Message[];
   streaming: string;
   thinking: boolean;
   connected: boolean;
   pipelineStage: PipelineStageInfo | null;
+  tokenUsed: number;
+  tokenBudget: number;
   send: (pipelineId: string, content: string) => void;
   cancel: () => void;
   clear: () => void;
 }
 
 const ChatContext = createContext<ChatState>({
+  pipelineId: 'default',
   messages: [], streaming: '', thinking: false, connected: false, pipelineStage: null,
+  tokenUsed: 0, tokenBudget: 0,
   send: () => {}, cancel: () => {}, clear: () => {},
 });
 
-export function ChatProvider({ pipelineId, children }: { pipelineId: string; children: ReactNode }) {
+export function ChatProvider({ pipelineId, children, onLogEntry }: { pipelineId: string; children: ReactNode; onLogEntry?: (entry: any) => void }) {
   const { token } = useAuth();
   const { status, send: wsSend, subscribe } = useWebSocket(token);
   const [messages, setMessages] = useState<Message[]>([]);
   const [streaming, setStreaming] = useState('');
   const [thinking, setThinking] = useState(false);
   const [pipelineStage, setPipelineStage] = useState<PipelineStageInfo | null>(null);
+  const [tokenUsed, setTokenUsed] = useState(0);
+  const [tokenBudget, setTokenBudget] = useState(0);
   const streamingRef = useRef('');
   const idCounter = useRef(0);
 
@@ -122,33 +131,31 @@ export function ChatProvider({ pipelineId, children }: { pipelineId: string; chi
     });
     // Pipeline stage/gate events
     const unsub9 = subscribe('pipeline.stage_change', (p: any) => {
-      setPipelineStage({
-        stage: p?.stage || '',
-        status: p?.status || '',
-        pipelineId: p?.pipeline_id || '',
-      });
-      setMessages(prev => [...prev, {
-        id: `stage-${++idCounter.current}`, role: 'system',
-        content: `Pipeline stage changed: ${p?.stage || 'unknown'} (${p?.status || 'unknown'})`,
+      const stage = p?.stage || '';
+      const status = p?.status || '';
+      const pid = p?.pipeline_id || '';
+      setPipelineStage(prev => ({
+        stage, status, pipelineId: pid,
+        tokenUsed: prev?.tokenUsed ?? 0,
+        tokenBudget: prev?.tokenBudget ?? 0,
+      }));
+      onLogEntry?.({
+        type: 'stage_change',
+        stage,
+        status,
+        pipeline_id: pid,
         timestamp: Date.now(),
-      }]);
+      });
     });
     const unsub10 = subscribe('pipeline.token_warning', (p: any) => {
       const used = p?.used ?? 0;
       const budget = p?.budget ?? 4096;
-      setMessages(prev => [...prev, {
-        id: `tokwarn-${++idCounter.current}`, role: 'system',
-        content: `Token usage warning: ${used}/${budget} tokens used`,
-        timestamp: Date.now(),
-      }]);
+      setTokenUsed(used);
+      setTokenBudget(budget);
+      setPipelineStage(prev => prev ? { ...prev, tokenUsed: used, tokenBudget: budget } : null);
     });
     const unsub11 = subscribe('pipeline.finished', (p: any) => {
       setPipelineStage(prev => prev ? { ...prev, status: p?.status || 'completed' } : null);
-      setMessages(prev => [...prev, {
-        id: `pf-${++idCounter.current}`, role: 'system',
-        content: `Pipeline finished: ${p?.status || 'completed'}`,
-        timestamp: Date.now(),
-      }]);
     });
 
     // Tool execution events
@@ -166,6 +173,12 @@ export function ChatProvider({ pipelineId, children }: { pipelineId: string; chi
         toolInput: p?.input,
         toolStatus: 'running',
       }]);
+      onLogEntry?.({
+        type: 'tool.start',
+        tool_name: p?.tool_name,
+        input: p?.input,
+        timestamp: Date.now(),
+      });
     });
     const unsub6 = subscribe('tool.done', (p: any) => {
       setMessages(prev => {
@@ -189,6 +202,7 @@ export function ChatProvider({ pipelineId, children }: { pipelineId: string; chi
         // Update existing tool message
         const idx = prev.length - 1 - lastToolIdx;
         const toolMsg = prev[idx];
+        if (!toolMsg) return prev;
         const durationMs = toolStartTimes.get(toolMsg.id)
           ? Date.now() - toolStartTimes.get(toolMsg.id)!
           : undefined;
@@ -204,6 +218,14 @@ export function ChatProvider({ pipelineId, children }: { pipelineId: string; chi
           toolDurationMs: durationMs,
         };
         return updated;
+      });
+      onLogEntry?.({
+        type: 'tool.done',
+        tool_name: p?.tool_name,
+        output: p?.output,
+        output_type: p?.output_type,
+        status: 'success',
+        timestamp: Date.now(),
       });
     });
     const unsub7 = subscribe('tool.error', (p: any) => {
@@ -227,6 +249,7 @@ export function ChatProvider({ pipelineId, children }: { pipelineId: string; chi
         // Update existing tool message
         const idx = prev.length - 1 - lastToolIdx;
         const toolMsg = prev[idx];
+        if (!toolMsg) return prev;
         const durationMs = toolStartTimes.get(toolMsg.id)
           ? Date.now() - toolStartTimes.get(toolMsg.id)!
           : undefined;
@@ -242,6 +265,12 @@ export function ChatProvider({ pipelineId, children }: { pipelineId: string; chi
         };
         return updated;
       });
+      onLogEntry?.({
+        type: 'tool.error',
+        tool_name: p?.tool_name,
+        error: p?.error,
+        timestamp: Date.now(),
+      });
     });
 
     // Context compression notification
@@ -252,6 +281,13 @@ export function ChatProvider({ pipelineId, children }: { pipelineId: string; chi
         content: `Context compressed: ${p?.before_tokens} → ${p?.after_tokens} tokens (${p?.rounds_compressed} rounds)`,
         timestamp: Date.now(),
       }]);
+      onLogEntry?.({
+        type: 'context.compress',
+        before_tokens: p?.before_tokens,
+        after_tokens: p?.after_tokens,
+        rounds_compressed: p?.rounds_compressed,
+        timestamp: Date.now(),
+      });
     });
 
     return () => { unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); unsub6(); unsub7(); unsub8(); unsub9(); unsub10(); unsub11(); };
@@ -286,7 +322,7 @@ export function ChatProvider({ pipelineId, children }: { pipelineId: string; chi
   }, []);
 
   return (
-    <ChatContext.Provider value={{ messages, streaming, thinking, connected: status === 'open', pipelineStage, send, cancel, clear }}>
+    <ChatContext.Provider value={{ pipelineId, messages, streaming, thinking, connected: status === 'open', pipelineStage, tokenUsed, tokenBudget, send, cancel, clear }}>
       {children}
     </ChatContext.Provider>
   );

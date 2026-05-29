@@ -96,8 +96,18 @@ deployments/certs/*.pem
 config/profiles/minimal.yaml
 config/profiles/docker-dev.yaml
 
+# Claude local settings (may contain credentials)
+.claude/settings.local.json
+
 # Superpowers worktrees
 .claude/worktrees/
+
+# IDE plugins
+.codebuddy/
+.superpowers/
+
+# Docs (plans/specs — not for public repo)
+docs/
 
 # Brain artifacts
 brain/
@@ -105,3 +115,15 @@ brain/
 # Test outputs
 test_output*.txt
 profile_test.txt
+
+# Desktop app (not yet ready for commit)
+desktop/
+
+# Dev artifacts
+test-promode.md
+ts-errors.txt
+ts-out.txt
+
+# External / unrelated
+openforgefinal/
+*.lnk

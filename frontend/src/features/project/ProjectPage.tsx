@@ -98,6 +98,36 @@ export function ProjectPage() {
     }
   }, [toast]);
 
+  const [deletingProject, setDeletingProject] = useState(false);
+
+  const handleDeleteProject = useCallback(async () => {
+    if (!id || !project) return;
+    const confirmed = window.confirm(
+      `Are you sure you want to delete the project "${project.name}"?\n\n` +
+      `This will soft-delete all pipelines in this project. Data is recoverable for 30 days.`
+    );
+    if (!confirmed) return;
+
+    // Second confirmation: type project name
+    const typed = window.prompt(`Type "${project.name}" to confirm permanent deletion:`)?.trim();
+    if (typed !== project.name) {
+      toast('Project name did not match. Deletion cancelled.');
+      return;
+    }
+
+    setDeletingProject(true);
+    try {
+      await api.deleteProject(id);
+      toast('Project deleted. Redirecting...');
+      navigate('/');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to delete project';
+      toast(msg);
+    } finally {
+      setDeletingProject(false);
+    }
+  }, [id, project, toast, navigate]);
+
   const filteredPipelines = pipelines.filter(p => {
     if (pipeLineFilter === 'active') return ['running', 'pending', 'paused'].includes(p.status);
     if (pipeLineFilter === 'completed') return ['completed', 'rejected', 'cancelled'].includes(p.status);
@@ -290,6 +320,61 @@ export function ProjectPage() {
                   </div>
                 );
               })}
+            </div>
+          )}
+
+          {/* Danger Zone */}
+          {project && (
+            <div style={{
+              marginTop: 40, paddingTop: 24,
+              borderTop: `1px solid ${tokens.border}`,
+            }}>
+              <h2 style={{
+                fontSize: 14, fontWeight: 700, fontFamily: tokens.fontHeading,
+                margin: '0 0 4px 0', color: tokens.error,
+              }}>
+                Danger Zone
+              </h2>
+              <p style={{ fontSize: 13, color: tokens.muted, margin: '0 0 16px 0' }}>
+                Irreversible actions. Please proceed with caution.
+              </p>
+              <div style={{
+                background: `${tokens.error}08`, border: `1px solid ${tokens.error}30`,
+                borderRadius: 8, padding: '16px 20px',
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              }}>
+                <div>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: tokens.text }}>
+                    Delete this project
+                  </div>
+                  <div style={{ fontSize: 12, color: tokens.muted, marginTop: 2 }}>
+                    Soft-deletes the project and all pipelines. Recoverable for 30 days.
+                  </div>
+                </div>
+                <button
+                  onClick={handleDeleteProject}
+                  disabled={deletingProject}
+                  style={{
+                    padding: '8px 18px', background: 'transparent',
+                    color: tokens.error, border: `1px solid ${tokens.error}60`,
+                    borderRadius: 6, cursor: deletingProject ? 'default' : 'pointer',
+                    fontSize: 13, fontWeight: 600, transition: tokens.transition,
+                    opacity: deletingProject ? 0.5 : 1,
+                  }}
+                  onMouseEnter={e => {
+                    if (!deletingProject) {
+                      e.currentTarget.style.background = `${tokens.error}15`;
+                      e.currentTarget.style.borderColor = tokens.error;
+                    }
+                  }}
+                  onMouseLeave={e => {
+                    e.currentTarget.style.background = 'transparent';
+                    e.currentTarget.style.borderColor = `${tokens.error}60`;
+                  }}
+                >
+                  {deletingProject ? 'Deleting...' : 'Delete Project'}
+                </button>
+              </div>
             </div>
           )}
         </>

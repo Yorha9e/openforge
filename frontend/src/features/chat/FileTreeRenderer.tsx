@@ -37,7 +37,12 @@ function parseLsOutput(content: string): FileEntry[] {
     // Parse ls -la format: permissions links owner group size date name
     const match = line.match(/^([d\-l][rwxsSt\-]{9})\s+\d+\s+(\S+)\s+(\S+)\s+(\d+)\s+(\w+\s+\d+\s+[\d:]+)\s+(.+)$/);
     if (match) {
-      const [, permissions, owner, group, sizeStr, modTime, name] = match;
+      const permissions = match[1] ?? '';
+      const owner = match[2] ?? '';
+      const group = match[3] ?? '';
+      const sizeStr = match[4] ?? '0';
+      const modTime = match[5] ?? '';
+      const name = match[6] ?? '';
       // Skip . and .. entries
       if (name === '.' || name === '..') continue;
 

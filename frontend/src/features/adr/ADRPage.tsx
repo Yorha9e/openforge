@@ -29,7 +29,7 @@ function ErrorBanner({ message }: { message: string }) {
   );
 }
 
-export function ADRPage() {
+export default function ADRPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 

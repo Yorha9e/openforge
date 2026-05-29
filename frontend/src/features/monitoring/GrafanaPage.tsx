@@ -29,7 +29,7 @@ function ErrorBanner({ message }: { message: string }) {
   );
 }
 
-export function GrafanaPage() {
+export default function GrafanaPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 

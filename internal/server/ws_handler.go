@@ -58,15 +58,18 @@ type authPayload struct {
 }
 
 type wsConn struct {
-	conn     *websocket.Conn
-	jwtSvc   *service.JWTService
-	authRepo *authadapter.PGAuthRepository
-	userID   string
-	userRole string
-	mu       sync.Mutex
-	engines  map[string]*domain.QueryEngine
-	of       *profile.OpenForge
-	pongFail int
+	conn              *websocket.Conn
+	jwtSvc            *service.JWTService
+	authRepo          *authadapter.PGAuthRepository
+	userID            string
+	userRole          string
+	mu                sync.Mutex
+	engines           map[string]*domain.QueryEngine
+	of                *profile.OpenForge
+	pongFail          int
+	lastPipelineStage string
+	lastPipelineStatus string
+	wsRPC             *domain.WSRPC
 }
 
 func handleChatWS(of *profile.OpenForge, jwtSvc *service.JWTService) http.HandlerFunc {
@@ -84,6 +87,7 @@ func handleChatWS(of *profile.OpenForge, jwtSvc *service.JWTService) http.Handle
 			engines:  make(map[string]*domain.QueryEngine),
 			of:       of,
 			pongFail: 0,
+			wsRPC:    domain.NewWSRPC(conn, 30*time.Second),
 		}
 		c.run()
 	}
@@ -91,6 +95,7 @@ func handleChatWS(of *profile.OpenForge, jwtSvc *service.JWTService) http.Handle
 
 func (c *wsConn) run() {
 	defer c.conn.Close()
+	defer c.cleanupEngines() // Flush all message buffers on disconnect
 
 	// First-frame auth with timeout
 	if !c.authenticate() {
@@ -251,22 +256,57 @@ func (c *wsConn) handleMessage(raw []byte) {
 
 		pipeline, err := c.of.PipelineRepo.GetByID(ctx, p.PipelineID)
 		if err == nil {
-			c.write(map[string]any{
-				"type": "pipeline.stage_change",
-				"payload": map[string]string{
-					"pipeline_id": pipeline.ID,
-					"stage":       pipeline.CurrentStage,
-					"status":      pipeline.Status,
-				},
-			})
+			// Only emit stage_change when stage or status actually changed
+			if pipeline.CurrentStage != c.lastPipelineStage || pipeline.Status != c.lastPipelineStatus {
+				c.lastPipelineStage = pipeline.CurrentStage
+				c.lastPipelineStatus = pipeline.Status
+				c.write(map[string]any{
+					"type": "pipeline.stage_change",
+					"payload": map[string]string{
+						"pipeline_id": pipeline.ID,
+						"stage":       pipeline.CurrentStage,
+						"status":      pipeline.Status,
+					},
+				})
+
+				// Emit files_changed event if there are changed files
+				if len(pipeline.ChangedFiles) > 0 {
+					c.write(map[string]any{
+						"type": "pipeline.files_changed",
+						"payload": map[string]any{
+							"pipeline_id":   pipeline.ID,
+							"changed_files": pipeline.ChangedFiles,
+						},
+					})
+				}
+			}
 		}
 
-		if qe.TokenUsed() > 3200 {
+		// Token budget by pipeline level (with fallback to pipeline from DB)
+		var budget int
+		if err == nil && pipeline != nil {
+			switch pipeline.Level {
+			case "L1":
+				budget = 4096
+			case "L2":
+				budget = 8192
+			case "L3":
+				budget = 16384
+			case "L4":
+				budget = 32768
+			default:
+				budget = 4096
+			}
+		} else {
+			budget = 4096
+		}
+		used := qe.TokenUsed()
+		if budget > 0 && float64(used)/float64(budget) > 0.7 {
 			c.write(map[string]any{
 				"type": "pipeline.token_warning",
 				"payload": map[string]int{
-					"used":   qe.TokenUsed(),
-					"budget": 4096,
+					"used":   used,
+					"budget": budget,
 				},
 			})
 		}
@@ -295,6 +335,12 @@ func (c *wsConn) handleMessage(raw []byte) {
 		c.write(map[string]any{"type": "pipeline.finished", "payload": map[string]string{
 			"pipeline_id": cp.PipelineID, "status": "cancelled",
 		}})
+
+	case "tool.proxy_result":
+		if err := c.wsRPC.HandleProxyResult(msg.Payload); err != nil {
+			slog.Error("failed to handle proxy result", "error", err)
+			c.write(map[string]any{"type": "error", "payload": map[string]string{"message": err.Error()}})
+		}
 
 	case "ping":
 		c.write(map[string]any{"type": "pong"})
@@ -358,7 +404,19 @@ func (c *wsConn) getOrCreateEngine(pipelineID, workDir string) *domain.QueryEngi
 		MaxTokens: 4096,
 	}
 	qe := domain.NewQueryEngine(c.of.LLMRouter, cfg, c.of.PromptBuilder, ctx)
-		qe.SetToolRegistry(domain.DefaultToolRegistryWithWorkDir(workDir))
+	
+	// Create tool registry with proxy executor for local file operations
+	toolRegistry := domain.DefaultToolRegistryWithWorkDir(workDir)
+	if c.wsRPC != nil {
+		proxyExecutor := domain.NewToolProxyExecutor(c.wsRPC)
+		// Override file operation tools with proxy executor
+		toolRegistry["read_file"] = domain.ProxyExecutorMeta("read_file", proxyExecutor)
+		toolRegistry["write_file"] = domain.ProxyExecutorMeta("write_file", proxyExecutor)
+		toolRegistry["list_dir"] = domain.ProxyExecutorMeta("list_dir", proxyExecutor)
+		toolRegistry["search_file"] = domain.ProxyExecutorMeta("search_file", proxyExecutor)
+		toolRegistry["search_content"] = domain.ProxyExecutorMeta("search_content", proxyExecutor)
+	}
+	qe.SetToolRegistry(toolRegistry)
 	qe.SetConversationRepo(c.of.PipelineRepo)
 
 	// Preload conversation history from DB for reconnect resilience.
@@ -372,6 +430,21 @@ func (c *wsConn) getOrCreateEngine(pipelineID, workDir string) *domain.QueryEngi
 
 	c.engines[pipelineID] = qe
 	return qe
+}
+
+// cleanupEngines stops flush loops for all engines to ensure buffered messages are persisted.
+func (c *wsConn) cleanupEngines() {
+	c.mu.Lock()
+	engines := make([]*domain.QueryEngine, 0, len(c.engines))
+	for _, qe := range c.engines {
+		engines = append(engines, qe)
+	}
+	c.engines = make(map[string]*domain.QueryEngine) // Clear map
+	c.mu.Unlock()
+	
+	for _, qe := range engines {
+		qe.StopFlushLoop()
+	}
 }
 
 func (c *wsConn) write(v any) {

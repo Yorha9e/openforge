@@ -52,6 +52,10 @@ func (m *MockConversationRepository) GetActiveBranch(ctx context.Context, pipeli
 	return nil, nil
 }
 
+func (m *MockConversationRepository) ListBranches(ctx context.Context, pipelineID string) ([]*pipelineport.DBBranch, error) {
+	return nil, nil
+}
+
 func TestQueryEngine_MessageBuffer(t *testing.T) {
 	mockRepo := &MockConversationRepository{}
 	

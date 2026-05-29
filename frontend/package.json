@@ -12,6 +12,8 @@
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
+    "@types/cytoscape": "^3.21.9",
+    "cytoscape": "^3.33.4",
     "dockview": "^6.4.0",
     "dompurify": "^3.2.0",
     "marked": "^18.0.4",

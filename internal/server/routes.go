@@ -36,10 +36,29 @@ func RegisterRoutes(of *profile.OpenForge, jwtSvc *service.JWTService, cfg *prof
 	// Background gate timeout scanner — prevents indefinite goroutine deadlock.
 	StartGateTimeoutChecker(of.GateRequestRepo, of.PipelineSvc)
 
+	// Background project/pipeline soft-delete hard-cleanup (30-day retention).
+	StartSoftDeleteCleaner(of.DB)
+
 	// Health
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	})
+
+	// Database health check with connection pool stats
+	mux.HandleFunc("GET /api/health/db", func(w http.ResponseWriter, r *http.Request) {
+		dbStats := of.DB.Stats()
+		json.NewEncoder(w).Encode(map[string]any{
+			"status":              "ok",
+			"max_open_connections": dbStats.MaxOpenConnections,
+			"open_connections":    dbStats.OpenConnections,
+			"in_use":              dbStats.InUse,
+			"idle":                dbStats.Idle,
+			"wait_count":          dbStats.WaitCount,
+			"wait_duration":       dbStats.WaitDuration.String(),
+			"max_idle_closed":     dbStats.MaxIdleClosed,
+			"max_lifetime_closed": dbStats.MaxLifetimeClosed,
+		})
 	})
 
 	// Prometheus Metrics
@@ -74,9 +93,11 @@ func RegisterRoutes(of *profile.OpenForge, jwtSvc *service.JWTService, cfg *prof
 	mux.HandleFunc("GET /api/projects", withRole("observer", handleListProjects(of)))
 	mux.HandleFunc("GET /api/projects/{id}", withRole("observer", handleGetProject(of)))
 	mux.HandleFunc("POST /api/projects", withRole("pm", handleCreateProject(of)))
+	mux.HandleFunc("DELETE /api/projects/{id}", withRole("pm", handleDeleteProject(of)))
 
 	// Pipeline (auth + role)
 	mux.HandleFunc("GET /api/pipelines/{id}", withRole("observer", handleGetPipeline(of)))
+	mux.HandleFunc("GET /api/pipelines/{id}/diff", withRole("observer", handleGetDiff(of)))
 	mux.HandleFunc("GET /api/projects/{id}/pipelines", withRole("observer", handleListPipelines(of)))
 	mux.HandleFunc("POST /api/projects/{id}/pipelines", withRole("pm", handleCreatePipeline(of)))
 	
@@ -113,6 +134,9 @@ func RegisterRoutes(of *profile.OpenForge, jwtSvc *service.JWTService, cfg *prof
 	mux.HandleFunc("GET /api/admin/feature-flags", withAdmin(handleGetFeatureFlags(of)))
 	mux.HandleFunc("PUT /api/admin/feature-flags", withAdmin(handleUpdateFeatureFlags(of, ffStore)))
 
+	// Admin: Experiments (admin-only)
+	mux.HandleFunc("GET /api/admin/experiments", withAdmin(handleListExperiments()))
+
 	// Compliance suite: Audit log export (admin-only)
 	mux.HandleFunc("GET /api/admin/audit/export", withAdmin(handleAuditExport(of)))
 
@@ -125,6 +149,13 @@ func RegisterRoutes(of *profile.OpenForge, jwtSvc *service.JWTService, cfg *prof
 
 	// Pipeline messages (observer)
 	mux.HandleFunc("GET /api/pipelines/{pid}/messages", withRole("observer", handleGetMessages(of)))
+
+	// Pipeline branches (observer)
+	mux.HandleFunc("GET /api/pipelines/{pid}/branches", withRole("observer", handleListBranches(of)))
+
+	// File system browsing (observer)
+	mux.HandleFunc("GET /api/files", withRole("observer", handleListFiles()))
+	mux.HandleFunc("GET /api/files/content", withRole("observer", handleFileContent()))
 
 	// OIDC (conditionally registered when auth.provider is "oidc")
 	if cfg.Auth.Provider == "oidc" {
@@ -915,6 +946,153 @@ func handleGetMessages(of *profile.OpenForge) http.HandlerFunc {
 	}
 }
 
+func handleListBranches(of *profile.OpenForge) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		pipelineID := r.PathValue("pid")
+
+		// 1. 获取 Pipeline 详情，以便验证归属项目
+		p, err := of.PipelineRepo.GetByID(r.Context(), pipelineID)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "pipeline not found")
+			return
+		}
+
+		// 2. 越权校验: 如果上下文有关联 ProjectID，进行一致性校验
+		ctxProjectID, _ := r.Context().Value(authdomain.ProjectIDContextKey).(string)
+		if ctxProjectID != "" && p.ProjectID != ctxProjectID {
+			writeError(w, http.StatusForbidden, "forbidden: access to this pipeline is denied")
+			return
+		}
+
+		branches, err := of.PipelineRepo.ListBranches(r.Context(), pipelineID)
+		if err != nil {
+			writeError(w, 500, sanitizeError(err))
+			return
+		}
+		writeJSON(w, 200, map[string]any{"branches": branches})
+	}
+}
+
+func handleListExperiments() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// TODO: Implement experiments feature
+		// For now, return empty array
+		writeJSON(w, 200, []any{})
+	}
+}
+
+func handleListFiles() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		dirPath := r.URL.Query().Get("path")
+		if dirPath == "" {
+			writeError(w, 400, "path parameter required")
+			return
+		}
+
+		// Security: prevent directory traversal
+		cleanPath := filepath.Clean(dirPath)
+		if strings.Contains(cleanPath, "..") {
+			writeError(w, 400, "invalid path")
+			return
+		}
+
+		entries, err := os.ReadDir(cleanPath)
+		if err != nil {
+			writeError(w, 400, fmt.Sprintf("cannot read directory: %v", err))
+			return
+		}
+
+		type FileInfo struct {
+			Name  string `json:"name"`
+			IsDir bool   `json:"is_dir"`
+			Size  int64  `json:"size"`
+			Path  string `json:"path"`
+		}
+
+		files := make([]FileInfo, 0, len(entries))
+		for _, entry := range entries {
+			// Skip hidden files
+			if strings.HasPrefix(entry.Name(), ".") {
+				continue
+			}
+			info, err := entry.Info()
+			if err != nil {
+				continue
+			}
+			files = append(files, FileInfo{
+				Name:  entry.Name(),
+				IsDir: entry.IsDir(),
+				Size:  info.Size(),
+				Path:  filepath.Join(cleanPath, entry.Name()),
+			})
+		}
+
+		writeJSON(w, 200, map[string]any{
+			"files": files,
+			"count": len(files),
+			"path":  cleanPath,
+		})
+	}
+}
+
+func handleFileContent() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		filePath := r.URL.Query().Get("path")
+		if filePath == "" {
+			writeError(w, 400, "path parameter required")
+			return
+		}
+
+		// Security: prevent directory traversal
+		cleanPath := filepath.Clean(filePath)
+		if strings.Contains(cleanPath, "..") {
+			writeError(w, 400, "invalid path")
+			return
+		}
+
+		// Check if file exists and is a regular file
+		info, err := os.Stat(cleanPath)
+		if err != nil {
+			writeError(w, 404, fmt.Sprintf("file not found: %v", err))
+			return
+		}
+		if info.IsDir() {
+			writeError(w, 400, "path is a directory, not a file")
+			return
+		}
+
+		// Read file content
+		content, err := os.ReadFile(cleanPath)
+		if err != nil {
+			writeError(w, 500, fmt.Sprintf("cannot read file: %v", err))
+			return
+		}
+
+		// Determine language from file extension
+		ext := strings.ToLower(filepath.Ext(cleanPath))
+		langMap := map[string]string{
+			".ts": "typescript", ".tsx": "typescript",
+			".js": "javascript", ".jsx": "javascript",
+			".go": "go", ".py": "python", ".rs": "rust",
+			".java": "java", ".json": "json",
+			".yaml": "yaml", ".yml": "yaml",
+			".md": "markdown", ".sql": "sql",
+			".html": "html", ".css": "css", ".scss": "scss",
+		}
+		language := langMap[ext]
+		if language == "" {
+			language = "plaintext"
+		}
+
+		writeJSON(w, 200, map[string]any{
+			"content":  string(content),
+			"language": language,
+			"path":     cleanPath,
+			"size":     info.Size(),
+		})
+	}
+}
+
 func handleStatic() http.HandlerFunc {
 	distDir := "frontend/dist"
 	if info, err := os.Stat(distDir); err != nil || !info.IsDir() {
@@ -984,5 +1162,116 @@ func handleOIDCCallback(provider *authadapter.OIDCProvider, jwtSvc *service.JWTS
 			return
 		}
 		writeJSON(w, 200, token)
+	}
+}
+
+func handleDeleteProject(of *profile.OpenForge) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		userID := UserIDFromContext(r.Context())
+		userRole := UserRoleFromContext(r.Context())
+
+		// 1. Verify project exists and is not already deleted
+		var projectName string
+		err := of.DB.QueryRowContext(r.Context(),
+			`SELECT name FROM project WHERE id = $1 AND deleted_at IS NULL`, id,
+		).Scan(&projectName)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "project not found")
+			return
+		}
+
+		// 2. Permission check: admin (global) or pm+ within this project
+		if userRole != "admin" {
+			var projectRole string
+			err := of.DB.QueryRowContext(r.Context(),
+				`SELECT role FROM user_role WHERE user_id = $1 AND project_id = $2`,
+				userID, id,
+			).Scan(&projectRole)
+			if err != nil || (projectRole != "admin" && projectRole != "pm") {
+				writeError(w, http.StatusForbidden, "forbidden: deletion requires admin or pm role on this project")
+				return
+			}
+		}
+
+		// 3. Execute cascading soft delete in a transaction
+		tx, err := of.DB.BeginTx(r.Context(), nil)
+		if err != nil {
+			writeError(w, 500, sanitizeError(err))
+			return
+		}
+		defer tx.Rollback()
+
+		// Soft-delete all pipelines in this project
+		_, err = tx.ExecContext(r.Context(),
+			`UPDATE pipeline SET deleted_at = NOW(), updated_at = NOW()
+			 WHERE project_id = $1 AND deleted_at IS NULL`, id)
+		if err != nil {
+			writeError(w, 500, sanitizeError(err))
+			return
+		}
+
+		// Soft-delete the project itself
+		res, err := tx.ExecContext(r.Context(),
+			`UPDATE project SET deleted_at = NOW()
+			 WHERE id = $1 AND deleted_at IS NULL`, id)
+		if err != nil {
+			writeError(w, 500, sanitizeError(err))
+			return
+		}
+
+		rowsAffected, _ := res.RowsAffected()
+		if rowsAffected == 0 {
+			writeError(w, http.StatusNotFound, "project not found")
+			return
+		}
+
+		if err := tx.Commit(); err != nil {
+			writeError(w, 500, sanitizeError(err))
+			return
+		}
+
+		slog.Info("project soft-deleted",
+			"project_id", id,
+			"project_name", projectName,
+			"deleted_by", userID,
+		)
+
+		writeJSON(w, 200, map[string]string{
+			"status":  "deleted",
+			"message": "Project soft-deleted. Data recoverable for 30 days.",
+		})
+	}
+}
+
+func handleGetDiff(of *profile.OpenForge) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		pipelineID := r.PathValue("id")
+		filePath := r.URL.Query().Get("file")
+
+		// 1. 获取 Pipeline 详情
+		p, err := of.PipelineRepo.GetByID(r.Context(), pipelineID)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "pipeline not found")
+			return
+		}
+
+		// 2. 如果指定了文件，查找对应的 ChangedFile
+		if filePath != "" {
+			for _, cf := range p.ChangedFiles {
+				if cf.Path == filePath {
+					writeJSON(w, 200, cf)
+					return
+				}
+			}
+			writeError(w, http.StatusNotFound, "file not found in pipeline changes")
+			return
+		}
+
+		// 3. 如果没有指定文件，返回所有变更文件
+		if p.ChangedFiles == nil {
+			p.ChangedFiles = []domain.ChangedFile{}
+		}
+		writeJSON(w, 200, p.ChangedFiles)
 	}
 }

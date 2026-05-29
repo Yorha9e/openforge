@@ -1,6 +1,5 @@
 import { useState, type FormEvent, type KeyboardEvent, useRef, useEffect } from 'react';
 import { useChat } from './ChatProvider';
-import { useSearchParams } from 'react-router-dom';
 import { tokens } from '../../shared/design-tokens';
 
 interface SkillOption {
@@ -16,9 +15,7 @@ const availableSkills: SkillOption[] = [
 
 export function MessageInput() {
   const [input, setInput] = useState('');
-  const { send, cancel, connected, thinking, streaming } = useChat();
-  const [params] = useSearchParams();
-  const pipelineId = params.get('pipeline') || 'default';
+  const { pipelineId, send, cancel, connected, thinking, streaming } = useChat();
   const [inputFocused, setInputFocused] = useState(false);
   const [btnHovered, setBtnHovered] = useState(false);
   const [showSkills, setShowSkills] = useState(false);

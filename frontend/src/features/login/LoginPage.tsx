@@ -40,9 +40,9 @@ export function LoginPage() {
     }
   };
 
-  const inputStyle = (focused: boolean) => ({
-    width: '100%', padding: '10px 12px', background: tokens.bg, border: `1px solid ${tokens.border}`, borderRadius: 4, color: tokens.text, boxSizing: 'border-box' as const,
-    outlineWidth: focused ? 2 : 0, outlineStyle: focused ? 'solid' : ('none' as const), outlineColor: tokens.cta, outlineOffset: 2,
+  const inputStyle = (focused: boolean): React.CSSProperties => ({
+    width: '100%', padding: '10px 12px', background: tokens.bg, border: `1px solid ${tokens.border}`, borderRadius: 4, color: tokens.text, boxSizing: 'border-box',
+    outlineWidth: focused ? 2 : 0, outlineStyle: focused ? 'solid' : 'none', outlineColor: tokens.cta, outlineOffset: 2,
     transition: tokens.transition, fontSize: 14,
   });
 

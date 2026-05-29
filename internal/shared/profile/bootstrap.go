@@ -185,6 +185,13 @@ func Bootstrap(cfg *Config) (*OpenForge, error) {
 	if err != nil {
 		return nil, fmt.Errorf("db: %w", err)
 	}
+	
+	// Configure connection pool to prevent connection exhaustion
+	db.SetMaxOpenConns(25)                 // Maximum number of open connections
+	db.SetMaxIdleConns(10)                 // Maximum number of idle connections
+	db.SetConnMaxLifetime(5 * time.Minute) // Maximum lifetime of a connection
+	db.SetConnMaxIdleTime(1 * time.Minute) // Maximum idle time of a connection
+	
 	of.DB = db
 
 	// G13: Initialize disaster recovery with DB connection

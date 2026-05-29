@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	agentport "openforge/internal/agent/port"
 )
@@ -144,7 +145,7 @@ func buildTextTruncationSummary(messages []agentport.Message) string {
 func EstimateTokens(messages []agentport.Message) int64 {
 	total := 0
 	for _, m := range messages {
-		total += len(m.Content) / 4
+		total += utf8.RuneCountInString(m.Content) / 4
 	}
 	return int64(total)
 }

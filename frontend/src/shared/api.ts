@@ -14,23 +14,36 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   if (authToken) {
     headers['Authorization'] = `Bearer ${authToken}`;
   }
-  const res = await fetch(`${BASE}${path}`, { ...options, headers });
-  if (res.status === 401) {
-    authToken = null;
-    localStorage.removeItem('of_token');
-    localStorage.removeItem('of_refresh');
-    localStorage.removeItem('of_user');
-    // Not on login page already — redirect silently
-    if (!window.location.pathname.startsWith('/login')) {
-      window.location.href = '/login';
+
+  // Add timeout via AbortController
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000); // 30s timeout
+
+  try {
+    const res = await fetch(`${BASE}${path}`, { ...options, headers, signal: controller.signal });
+    if (res.status === 401) {
+      authToken = null;
+      localStorage.removeItem('of_token');
+      localStorage.removeItem('of_refresh');
+      localStorage.removeItem('of_user');
+      if (!window.location.pathname.startsWith('/login')) {
+        window.location.href = '/login';
+      }
+      throw new Error('Unauthorized');
     }
-    throw new Error('Unauthorized');
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      throw new Error(err.error || 'Request failed');
+    }
+    return res.json();
+  } catch (err: any) {
+    if (err.name === 'AbortError') {
+      throw new Error('Request timeout (30s)');
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeout);
   }
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(err.error || 'Request failed');
-  }
-  return res.json();
 }
 
 export type InfraStatus = 'connected' | 'degraded' | 'unavailable' | 'unused';
@@ -130,6 +143,8 @@ export const api = {
       body: JSON.stringify({ name, git_url: gitUrl }),
     }),
 
+  deleteProject: (id: string) => request<any>(`/projects/${id}`, { method: 'DELETE' }),
+
   createPipeline: (projectId: string, title: string) =>
     request<any>(`/projects/${projectId}/pipelines`, {
       method: 'POST',
@@ -137,12 +152,16 @@ export const api = {
     }),
 
   getPipeline: (id: string) => request<any>(`/pipelines/${id}`),
+  getPipelineDiff: (pipelineId: string, filePath?: string) =>
+    request<any>(`/pipelines/${pipelineId}/diff${filePath ? `?file=${encodeURIComponent(filePath)}` : ''}`),
 
   listPipelines: (projectId: string) => request<any[]>(`/projects/${projectId}/pipelines`),
 
   activePipelines: () => request<any[]>('/pipelines/active'),
 
   getMessages: (pipelineId: string) => request<any>(`/pipelines/${pipelineId}/messages`),
+
+  listBranches: (pipelineId: string) => request<{ branches: any[] }>(`/pipelines/${pipelineId}/branches`),
 
   deletePipeline: (id: string) => request<any>(`/pipelines/${id}`, { method: 'DELETE' }),
 
@@ -203,6 +222,17 @@ export const api = {
 
   // Health (public, but use request helper for consistency)
   getHealth: () => request<any>('/health'),
+
+  // File system browsing
+  listFiles: (path: string) =>
+    request<{ files: Array<{ name: string; is_dir: boolean; size: number; path: string }>; count: number; path: string }>(
+      `/files?path=${encodeURIComponent(path)}`
+    ),
+
+  getFileContent: (path: string) =>
+    request<{ content: string; language: string; path: string; size: number }>(
+      `/files/content?path=${encodeURIComponent(path)}`
+    ),
 };
 
 export function wsURL(): string {

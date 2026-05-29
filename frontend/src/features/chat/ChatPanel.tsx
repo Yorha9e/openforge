@@ -6,6 +6,8 @@ import { MessageInput } from './MessageInput';
 import { ModelSelector } from './ModelSelector';
 import { AgentPanel, AgentInfo } from './AgentPanel';
 import { SkillBadge } from './SkillBadge';
+import { TokenGauge } from './TokenGauge';
+import { PipelineStageBadge } from './PipelineStageBadge';
 import { api } from '../../shared/api';
 import { tokens } from '../../shared/design-tokens';
 
@@ -29,10 +31,10 @@ function useActiveSkills() {
   return skills;
 }
 
-export function ChatPanel({ embedded }: { embedded?: boolean }) {
+export function ChatPanel({ embedded, pipelineId: explicitPipelineId }: { embedded?: boolean; pipelineId?: string }) {
   const { id } = useParams<{ id: string }>();
   const [params] = useSearchParams();
-  const pipelineId = params.get('pipeline') || 'default';
+  const pipelineId = explicitPipelineId || params.get('pipeline') || 'default';
   const [model, setModel] = useState('deepseek');
   const agents = useAgents(pipelineId);
   const activeSkills = useActiveSkills();
@@ -57,7 +59,11 @@ export function ChatPanel({ embedded }: { embedded?: boolean }) {
               </span>
             )}
           </div>
-          <ModelSelector current={model} onSelect={setModel} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+            <PipelineStageBadge />
+            <TokenGauge />
+            <ModelSelector current={model} onSelect={setModel} />
+          </div>
         </header>
         <AgentPanel agents={agents} />
         <MessageList />

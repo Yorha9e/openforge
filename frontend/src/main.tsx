@@ -7,6 +7,7 @@ import { ThemeProvider } from './shared/theme-provider';
 import { App } from './App';
 import { initRUM } from './rum';
 import './global.css';
+import 'dockview/dist/styles/dockview.css';
 
 initRUM();
 

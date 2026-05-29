@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strings"
 	"sync"
@@ -234,17 +235,44 @@ func (qe *QueryEngine) flushMessages() {
 	// Batch save to database
 	if err := qe.convRepo.BatchSaveMessages(context.Background(), messages); err != nil {
 		// Log error but don't crash - messages are best-effort
-		// In production, you might want to retry or use a persistent queue
-		fmt.Printf("Warning: failed to batch save messages: %v\n", err)
+		slog.Error("failed to batch save messages",
+			"error", err,
+			"count", len(messages),
+			"pipeline_id", qe.pipelineCtx.PipelineID,
+		)
 	}
 }
 
-// StopFlushLoop stops the background flush goroutine.
+// StopFlushLoop stops the background flush goroutine and flushes remaining messages.
+// Safe to call multiple times.
 func (qe *QueryEngine) StopFlushLoop() {
+	qe.mu.Lock()
+	defer qe.mu.Unlock()
+	
+	// Prevent double-close panic
+	if qe.done == nil {
+		return
+	}
+	
 	if qe.flushTicker != nil {
 		qe.flushTicker.Stop()
 	}
 	close(qe.done)
+	qe.done = nil // Mark as stopped
+	
+	// Final flush of remaining messages
+	if qe.convRepo != nil {
+		messages := qe.messageBuffer.Flush()
+		if len(messages) > 0 {
+			if err := qe.convRepo.BatchSaveMessages(context.Background(), messages); err != nil {
+				slog.Error("failed to flush remaining messages on shutdown",
+					"error", err,
+					"count", len(messages),
+					"pipeline_id", qe.pipelineCtx.PipelineID,
+				)
+			}
+		}
+	}
 }
 
 // SetConversationRepo sets the conversation repository for chat persistence.

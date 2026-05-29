@@ -48,12 +48,36 @@ function LoadingFallback() {
 
 export function App() {
   const [featureFlags, setFeatureFlags] = useState<FeatureFlags | null>(null);
+  const [isElectron, setIsElectron] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState<string>('disconnected');
 
   useEffect(() => {
     // Load feature flags for conditional routing
     api.getFeatureFlags()
       .then(flags => setFeatureFlags(flags))
       .catch(() => {}); // Silently fail - flags default to false
+    
+    // Detect Electron environment
+    if (window.electronAPI) {
+      setIsElectron(true);
+      
+      // Get initial connection status
+      window.electronAPI.getConnectionStatus()
+        .then(status => setConnectionStatus(status))
+        .catch(() => {});
+      
+      // Listen for connection status changes
+      const unsubscribe = window.electronAPI.onConnectionChange((status: string) => {
+        setConnectionStatus(status);
+      });
+      
+      return () => {
+        if (typeof unsubscribe === 'function') {
+          unsubscribe();
+        }
+      };
+    }
+    return undefined;
   }, []);
 
   return (

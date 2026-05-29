@@ -85,6 +85,7 @@ type ConversationRepository interface {
 	CreateBranch(ctx context.Context, branch *DBBranch) error
 	GetBranch(ctx context.Context, branchID string) (*DBBranch, error)
 	GetActiveBranch(ctx context.Context, pipelineID string) (*DBBranch, error)
+	ListBranches(ctx context.Context, pipelineID string) ([]*DBBranch, error)
 }
 
 // DBGateRequest mirrors the gate_request table for pending approval tracking.

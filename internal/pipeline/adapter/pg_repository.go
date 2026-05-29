@@ -28,23 +28,25 @@ var _ port.GateRepository = (*PGRepository)(nil)
 
 func (r *PGRepository) Create(ctx context.Context, p *domain.Pipeline) error {
 	stagesJSON, _ := json.Marshal(p.Stages)
+	changedFilesJSON, _ := json.Marshal(p.ChangedFiles)
 	_, err := r.db.ExecContext(ctx, `
-		INSERT INTO pipeline (id, project_id, title, level, status, current_stage, created_by, config)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-	`, p.ID, p.ProjectID, p.Title, p.Level, p.Status, p.CurrentStage, p.CreatedBy, stagesJSON)
+		INSERT INTO pipeline (id, project_id, title, level, status, current_stage, created_by, config, changed_files)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+	`, p.ID, p.ProjectID, p.Title, p.Level, p.Status, p.CurrentStage, p.CreatedBy, stagesJSON, changedFilesJSON)
 	return err
 }
 
 func (r *PGRepository) GetByID(ctx context.Context, id string) (*domain.Pipeline, error) {
 	var p domain.Pipeline
 	var config []byte
+	var changedFiles []byte
 	err := r.db.QueryRowContext(ctx, `
 		SELECT id, project_id, title, level, status, current_stage, created_by,
-		       backtrack_count, version, created_at, updated_at, config
+		       backtrack_count, version, created_at, updated_at, config, changed_files
 		FROM pipeline WHERE id = $1 AND deleted_at IS NULL
 	`, id).Scan(&p.ID, &p.ProjectID, &p.Title, &p.Level, &p.Status,
 		&p.CurrentStage, &p.CreatedBy, &p.BacktrackCount, &p.Version,
-		&p.CreatedAt, &p.UpdatedAt, &config)
+		&p.CreatedAt, &p.UpdatedAt, &config, &changedFiles)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("pipeline %q not found", id)
 	}
@@ -52,6 +54,9 @@ func (r *PGRepository) GetByID(ctx context.Context, id string) (*domain.Pipeline
 		return nil, err
 	}
 	json.Unmarshal(config, &p.Stages)
+	if changedFiles != nil {
+		json.Unmarshal(changedFiles, &p.ChangedFiles)
+	}
 	return &p, nil
 }
 
@@ -75,6 +80,9 @@ func (r *PGRepository) ListByProject(ctx context.Context, projectID string) ([]*
 			return nil, err
 		}
 		result = append(result, &p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return result, nil
 }
@@ -357,4 +365,30 @@ func (r *PGRepository) GetActiveBranch(ctx context.Context, pipelineID string) (
 		return nil, nil
 	}
 	return &b, err
+}
+
+func (r *PGRepository) ListBranches(ctx context.Context, pipelineID string) ([]*port.DBBranch, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, pipeline_id, parent_branch, fork_msg_seq, status, created_by, created_at
+		FROM conversation_branch
+		WHERE pipeline_id = $1
+		ORDER BY created_at ASC
+	`, pipelineID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var branches []*port.DBBranch
+	for rows.Next() {
+		var b port.DBBranch
+		if err := rows.Scan(&b.ID, &b.PipelineID, &b.ParentBranch, &b.ForkMsgSeq, &b.Status, &b.CreatedBy, &b.CreatedAt); err != nil {
+			return nil, err
+		}
+		branches = append(branches, &b)
+	}
+	if branches == nil {
+		branches = []*port.DBBranch{}
+	}
+	return branches, nil
 }
