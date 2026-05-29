@@ -1,190 +1,162 @@
-<p align="center">
-  <img alt="OpenForge" src="https://img.shields.io/badge/OpenForge-1a1a2e?style=for-the-badge" width="180" height="40">
-</p>
+# OpenForge
 
-<p align="center">
-  <strong>AI-driven end-to-end full-stack development workbench</strong><br>
-  <sub>From requirement clarification to deployment verification — all through conversation</sub>
-</p>
-
-<p align="center">
-  <a href="https://github.com/Yorha9e/openforge"><img src="https://img.shields.io/badge/status-active-success?style=flat-square" alt="Status"></a>
-  <a href="https://go.dev/doc/install"><img src="https://img.shields.io/badge/go-1.22+-00ADD8?style=flat-square&logo=go" alt="Go"></a>
-  <a href="https://nodejs.org"><img src="https://img.shields.io/badge/node-20+-339933?style=flat-square&logo=node.js" alt="Node.js"></a>
-  <a href="https://react.dev"><img src="https://img.shields.io/badge/react-18+-61DAFB?style=flat-square&logo=react" alt="React"></a>
-  <a href="https://www.postgresql.org"><img src="https://img.shields.io/badge/postgres-15+-4169E1?style=flat-square&logo=postgresql" alt="PostgreSQL"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-TBD-lightgrey?style=flat-square" alt="License"></a>
-</p>
-
----
-
-<p align="center">
-  <a href="README_CN.md">中文文档</a>
-</p>
-
----
-
-## What is OpenForge?
-
-OpenForge is an AI-powered workbench that turns conversation into production code. Describe what you want to build, and OpenForge handles the entire pipeline — requirements analysis, architecture design, implementation, testing, deployment, and verification.
-
-Built with **Conduit (RealWorld monorepo)** as the experimental field.
-
-```
-You describe   →   PM Agent   →   Pipeline Engine   →   Deployed Code
-    "I want a              clarifies,        builds, tests,        running on
-     blog app"             decomposes,       reviews,              your infra
-                           designs           deploys
-```
-
-## Architecture
-
-```
-┌──────────────────────────────────────────────────────────┐
-│                    C-Layer · Workbench                     │
-│              React + Dockview + WebSocket                 │
-├──────────────────────────────────────────────────────────┤
-│                   A-Layer · Pipeline Engine               │
-│           Go · State Machine · Gate · Deploy              │
-├──────────────────────────────────────────────────────────┤
-│                  B-Layer · Agent Swarm                    │
-│        Go + Node.js · CSP Channels · Multi-Agent         │
-├──────────────────────────────────────────────────────────┤
-│                     Infrastructure                        │
-│          PostgreSQL · Redis Streams · Docker              │
-└──────────────────────────────────────────────────────────┘
-```
-
-## Key Features
-
-| Module | Capability |
-|--------|-----------|
-| **Conversational PM** | Natural language → structured requirements → task decomposition |
-| **Pipeline Engine** | 9-state transition machine with approval gates and backtracking |
-| **Agent Swarm** | Multi-agent coordinator with Spawn / Delegate / Broadcast patterns |
-| **Tool Registry** | 7 core tools — File I/O, Code Search, Shell Exec, DB Query, Git, Web Fetch |
-| **Pro Mode** | Full IDE: Chat + Diff + File Tree + Terminal + Topology in Dockview panels |
-| **LLM Router** | Multi-provider: Anthropic / OpenAI / DeepSeek, with token metering |
-| **Sandbox** | Docker container isolation with LRU warm pool and 5-layer defense |
-| **Compliance** | WORM audit logs, data lifecycle, monthly partitioning |
+AI-driven end-to-end full-stack development workbench.
 
 ## Quick Start
 
 ### Prerequisites
 
-- **Go** 1.22+ · **Node.js** 20+ · **PostgreSQL** 15+ · **Docker** (optional)
+- Go 1.22+
+- Node.js 20+
+- PostgreSQL 15+
+- Docker (optional)
 
-### Setup
+### Configuration
 
+1. **Copy example configuration files:**
+   ```bash
+   # For development (local machine)
+   cp config/profiles/minimal.yaml.example config/profiles/minimal.yaml
+   
+   # For Docker Compose development
+   cp config/profiles/docker-dev.yaml.example config/profiles/docker-dev.yaml
+   ```
+
+2. **Set environment variables:**
+   ```bash
+   # Database
+   export DB_PASSWORD=your_database_password
+   
+   # JWT
+   export JWT_SECRET=your_jwt_secret_at_least_32_chars
+   
+   # User passwords (generate with: htpasswd -nbBC 10 "" your_password | cut -d: -f2)
+   export ADMIN_PASSWORD_HASH=your_admin_password_hash
+   export PM_PASSWORD_HASH=your_pm_password_hash
+   
+   # LLM API Keys
+   export ANTHROPIC_AUTH_TOKEN=your_anthropic_api_key
+   ```
+
+3. **Edit configuration file:**
+   Update `config/profiles/minimal.yaml` (or `docker-dev.yaml`) with your specific values.
+
+### Running
+
+**Local development:**
 ```bash
-# 1. Clone
-git clone https://github.com/Yorha9e/openforge.git && cd openforge
-
-# 2. Configure
-cp config/profiles/minimal.yaml.example config/profiles/minimal.yaml
-cp config/profiles/docker-dev.yaml.example config/profiles/docker-dev.yaml
-
-# 3. Environment
-export DB_PASSWORD=your_db_password
-export JWT_SECRET=your_jwt_secret_at_least_32_chars
-export ANTHROPIC_AUTH_TOKEN=your_anthropic_api_key
-
-# 4. Start database
+# Start database
 docker compose up postgres -d
 
-# 5. Run migrations
+# Run migrations
 go run cmd/openforge/main.go migrate up
 
-# 6. Start server
-go run cmd/server/main.go --addr :8030
+# Start server
+go run cmd/server/main.go
 
-# 7. Start frontend
+# Start frontend (in another terminal)
 cd frontend && npm install && npm run dev
 ```
 
-Open **http://localhost:5173** — start building through conversation.
+**Docker Compose:**
+```bash
+# Start all services
+docker compose up -d
+
+# View logs
+docker compose logs -f
+```
 
 ## Project Structure
 
 ```
 openforge/
-├── cmd/
-│   ├── server/               REST + WebSocket API server
-│   └── openforge/            CLI entry point
-├── proto/                     Protocol Buffers (6 services)
-│
-├── internal/
-│   ├── agent/                AI agent: coordinator, query engine, tools
-│   ├── pipeline/             Pipeline: state machine, gate, deploy
-│   ├── auth/                 Authentication: JWT, RBAC, OIDC
-│   ├── llm/                  LLM: provider router, translator, token meter
-│   ├── observability/        Monitoring: Prometheus, circuit breaker
-│   └── shared/               Shared kernel, profiles, feature flags
-│
-├── frontend/                 React 18 + TypeScript + Vite
-│   └── src/features/         chat / code-review / admin / monitoring
-│
-├── nodejs-io/                Node.js I/O service (gRPC)
-├── migrations/               Database migrations (PostgreSQL)
-├── config/profiles/          Capability profiles (YAML)
-├── deployments/              Docker, Nginx, TLS configs
-└── scripts/                  Diagnostic & utility scripts
+├── cmd/                       # Main applications
+│   ├── server/               # API server
+│   └── openforge/            # CLI tool
+├── config/                   # Configuration files
+│   ├── profiles/            # Capability profiles (minimal/standard/enterprise)
+│   ├── prompts/             # LLM prompts
+│   └── skills/              # Skill definitions
+├── deployments/              # Deployment configurations
+├── frontend/                # React frontend
+├── internal/                # Go backend code
+│   ├── adapter/            # External service adapters
+│   ├── agent/              # AI agent implementation
+│   ├── auth/               # Authentication
+│   ├── llm/                # LLM integration
+│   ├── observability/      # Monitoring and logging
+│   ├── pipeline/           # Pipeline execution
+│   ├── server/             # HTTP handlers
+│   └── shared/             # Shared utilities
+├── migrations/              # Database migrations
+├── nodejs-io/              # Node.js I/O service
+└── proto/                  # Protocol buffer definitions
 ```
 
 ## Configuration Profiles
 
-Three tiers, one codebase:
+OpenForge supports three configuration profiles:
 
-| Profile | Target | Key Traits |
-|---------|--------|------------|
-| `minimal` | <10 people, single machine | SQLite / local FS / in-memory |
-| `standard` | 50-200 people, single-AZ K8s | PG / Redis / MinIO / Vault |
-| `enterprise` | Regulated, multi-AZ | HA + DR + WORM + Feishu + OIDC |
+- **minimal**: Single-machine development, small teams (<10 people)
+- **standard**: Single-AZ K8s, mid-size teams (50-200 people)
+- **enterprise**: Multi-AZ, regulated industries
+
+See `config/profiles/` for example configurations.
+
+## Security
+
+### Sensitive Information
+
+**Never commit these files to version control:**
+- `.env` files
+- Configuration files with hardcoded passwords
+- API keys or tokens
+- Private keys or certificates
+
+**Use environment variables for:**
+- Database passwords
+- JWT secrets
+- API keys
+- User password hashes
+
+### Generating Password Hashes
 
 ```bash
-# Switch profile
-export OPENFORGE_PROFILE=standard
-go run cmd/server/main.go
+# Install htpasswd (if not available)
+# macOS: brew install httpd
+# Ubuntu: sudo apt-get install apache2-utils
+
+# Generate hash
+htpasswd -nbBC 10 "" your_password | cut -d: -f2
 ```
-
-## Tech Stack
-
-| Layer | Technology |
-|-------|-----------|
-| **Backend** | Go · gRPC · gorilla/websocket · bcrypt · golang-jwt |
-| **Frontend** | React 18 · TypeScript · Vite · Dockview · Monaco Editor |
-| **Database** | PostgreSQL 15+ · UUID v7 · WORM partitioning · 22 tables |
-| **Infrastructure** | Docker Compose · Nginx · TLS · Redis Streams (Phase 5+) |
-| **Protocol** | gRPC · WebSocket (14 upstream + 14 downstream events) |
-| **AI/LLM** | Anthropic Claude · OpenAI · DeepSeek · Multi-provider router |
 
 ## Development
 
+### Running Tests
+
 ```bash
-# Run all tests
+# Go tests
 go test ./...
 
 # Frontend tests
 cd frontend && npm test
 
-# Build
-go build -o bin/server cmd/server/main.go
-cd frontend && npm run build
-
-# Lint
-golangci-lint run
-cd frontend && npm run lint
+# Integration tests
+go test -tags=integration ./...
 ```
 
-## Security
+### Building
 
-**Never commit:**
-- `.env` files · API keys · Private keys · Certificates
-- Configuration files with hardcoded credentials
-- Password hashes (use `htpasswd -nbBC 10 "" <password>`)
+```bash
+# Build Go binaries
+go build -o bin/server cmd/server/main.go
+go build -o bin/openforge cmd/openforge/main.go
 
-**Use environment variables for all secrets.** See `.env` → `.env.example` pattern.
+# Build frontend
+cd frontend && npm run build
+```
 
 ## License
 
-*To be determined*
+[Add your license here]
