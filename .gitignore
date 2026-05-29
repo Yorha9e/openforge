@@ -124,6 +124,15 @@ test-promode.md
 ts-errors.txt
 ts-out.txt
 
+# Prompt design docs (not for public repo)
+OpenForgePrompt/
+
+# Playwright test artifacts
+.playwright-cli/
+
+# Screen captures
+*.png
+
 # External / unrelated
 openforgefinal/
 *.lnk
