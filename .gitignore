@@ -106,7 +106,10 @@ config/profiles/docker-dev.yaml
 .codebuddy/
 .superpowers/
 
-# Docs (plans/specs — not for public repo)
+# Design docs (not for public repo)
+DESIGN.md
+STYLE_GUIDE.md
+api-contract.yaml
 docs/
 
 # Brain artifacts

@@ -16,10 +16,7 @@
 ---
 
 <p align="center">
-  <a href="README.md">English</a> ·
-  <a href="DESIGN.md">设计文档</a> ·
-  <a href="STYLE_GUIDE.md">编码规范</a> ·
-  <a href="api-contract.yaml">API 契约</a>
+  <a href="README.md">English</a>
 </p>
 
 ---
@@ -108,14 +105,10 @@ cd frontend && npm install && npm run dev
 
 ```
 openforge/
-├── api-contract.yaml          OpenAPI 3.1 接口规范（30 端点）
-├── DESIGN.md                  完整设计文档
-├── STYLE_GUIDE.md             编码规范与架构指南
-├── proto/                     Protocol Buffers 定义（6 服务）
-│
 ├── cmd/
 │   ├── server/               REST + WebSocket API 服务
 │   └── openforge/            CLI 入口
+├── proto/                     Protocol Buffers 定义（6 服务）
 │
 ├── internal/
 │   ├── agent/                AI Agent：协调器、查询引擎、工具
@@ -188,14 +181,6 @@ cd frontend && npm run lint
 - 密码哈希（使用 `htpasswd -nbBC 10 "" <密码>` 生成）
 
 **所有敏感信息通过环境变量注入。** 参考 `.env` → `.env.example` 模式。
-
-## 文档
-
-| 文档 | 内容 |
-|------|------|
-| [`DESIGN.md`](DESIGN.md) | 完整设计文档 — 架构、决策、数据库（~2600 行） |
-| [`STYLE_GUIDE.md`](STYLE_GUIDE.md) | Go / TS / React 编码规范与六边形垂直切片架构 |
-| [`api-contract.yaml`](api-contract.yaml) | OpenAPI 3.1 — 30 端点，完整请求/响应 |
 
 ## 许可证
 

@@ -23,10 +23,7 @@
 ---
 
 <p align="center">
-  <a href="README_CN.md">中文文档</a> ·
-  <a href="DESIGN.md">Design Doc</a> ·
-  <a href="STYLE_GUIDE.md">Style Guide</a> ·
-  <a href="api-contract.yaml">API Contract</a>
+  <a href="README_CN.md">中文文档</a>
 </p>
 
 ---
@@ -115,14 +112,10 @@ Open **http://localhost:5173** — start building through conversation.
 
 ```
 openforge/
-├── api-contract.yaml          OpenAPI 3.1 (30 endpoints)
-├── DESIGN.md                  Complete design document
-├── STYLE_GUIDE.md             Coding standards & architecture
-├── proto/                     Protocol Buffers (6 services)
-│
 ├── cmd/
 │   ├── server/               REST + WebSocket API server
 │   └── openforge/            CLI entry point
+├── proto/                     Protocol Buffers (6 services)
 │
 ├── internal/
 │   ├── agent/                AI agent: coordinator, query engine, tools
@@ -195,14 +188,6 @@ cd frontend && npm run lint
 - Password hashes (use `htpasswd -nbBC 10 "" <password>`)
 
 **Use environment variables for all secrets.** See `.env` → `.env.example` pattern.
-
-## Documentation
-
-| Document | Content |
-|----------|---------|
-| [`DESIGN.md`](DESIGN.md) | Full design — architecture, decisions, DB schema (~2600 lines) |
-| [`STYLE_GUIDE.md`](STYLE_GUIDE.md) | Go / TS / React conventions & hexagonal vertical-slice architecture |
-| [`api-contract.yaml`](api-contract.yaml) | OpenAPI 3.1 — 30 endpoints with full request/response |
 
 ## License
 
