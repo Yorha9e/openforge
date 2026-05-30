@@ -16,5 +16,7 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     sourcemap: true,
+    // Use relative paths so Electron can load assets via file:// protocol
+    base: './',
   },
 });

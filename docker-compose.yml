@@ -4,7 +4,7 @@ services:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: openforge
-      POSTGRES_PASSWORD: openforge_dev
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-openforge_dev}
       POSTGRES_DB: openforge
     ports:
       - "5432:5432"

@@ -140,3 +140,5 @@ OpenForgePrompt/
 openforgefinal/
 *.lnk
 CLAUDE.md
+gen.tar.gz
+gen.zip

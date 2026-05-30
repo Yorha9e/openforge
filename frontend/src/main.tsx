@@ -1,6 +1,6 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { BrowserRouter } from 'react-router-dom';
+import { HashRouter } from 'react-router-dom';
 import { AuthProvider } from './shared/auth';
 import { ToastProvider } from './shared/toast';
 import { ThemeProvider } from './shared/theme-provider';
@@ -13,7 +13,7 @@ initRUM();
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <BrowserRouter>
+    <HashRouter>
       <ThemeProvider>
         <ToastProvider>
           <AuthProvider>
@@ -21,6 +21,6 @@ createRoot(document.getElementById('root')!).render(
           </AuthProvider>
         </ToastProvider>
       </ThemeProvider>
-    </BrowserRouter>
+    </HashRouter>
   </StrictMode>
 );

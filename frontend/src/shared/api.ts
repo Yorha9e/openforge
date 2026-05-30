@@ -1,5 +1,23 @@
 const BASE = '/api';
 
+// Detect Electron environment and cache API base URL
+let electronApiBase: string | null = null;
+let electronApiBasePromise: Promise<string> | null = null;
+
+function getApiBase(): string | Promise<string> {
+  if (electronApiBase) return electronApiBase;
+  if (!window.electronAPI?.isElectron) return BASE;
+  
+  // Electron: fetch the full API base URL from main process
+  if (!electronApiBasePromise) {
+    electronApiBasePromise = window.electronAPI.getApiBaseUrl().then((base: string) => {
+      electronApiBase = `${base}/api`;
+      return electronApiBase;
+    });
+  }
+  return electronApiBasePromise;
+}
+
 let authToken: string | null = null;
 
 export function setToken(token: string | null) {
@@ -15,18 +33,24 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     headers['Authorization'] = `Bearer ${authToken}`;
   }
 
+  // Resolve API base (may be async in Electron)
+  const base = await getApiBase();
+
   // Add timeout via AbortController
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30000); // 30s timeout
 
   try {
-    const res = await fetch(`${BASE}${path}`, { ...options, headers, signal: controller.signal });
+    const res = await fetch(`${base}${path}`, { ...options, headers, signal: controller.signal });
     if (res.status === 401) {
       authToken = null;
       localStorage.removeItem('of_token');
       localStorage.removeItem('of_refresh');
       localStorage.removeItem('of_user');
-      if (!window.location.pathname.startsWith('/login')) {
+      // Use hash-compatible navigation for Electron
+      if (window.electronAPI?.isElectron) {
+        window.location.hash = '#/login';
+      } else if (!window.location.pathname.startsWith('/login')) {
         window.location.href = '/login';
       }
       throw new Error('Unauthorized');
@@ -235,7 +259,11 @@ export const api = {
     ),
 };
 
-export function wsURL(): string {
+export function wsURL(): string | Promise<string> {
+  // In Electron, use the server URL from main process
+  if (window.electronAPI?.isElectron) {
+    return window.electronAPI.getServerUrl();
+  }
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${proto}//${location.host}/ws/chat`;
 }

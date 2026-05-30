@@ -89,7 +89,19 @@ func (s *Store) SaveAll(ctx context.Context, f *FeatureFlags) error {
 
 // SeedDefaults writes the YAML-default flags to the DB (idempotent —
 // uses ON CONFLICT DO NOTHING so existing user overrides are preserved).
+// If the feature_flags table does not exist yet (migrations not run), skip silently.
 func (s *Store) SeedDefaults(ctx context.Context, defaults *FeatureFlags) error {
+	// Check if table exists — skip seeding if migrations haven't been run yet
+	var exists bool
+	err := s.db.QueryRowContext(ctx,
+		`SELECT EXISTS (
+			SELECT FROM information_schema.tables
+			WHERE table_name = 'feature_flags'
+		)`).Scan(&exists)
+	if err != nil || !exists {
+		return nil // table doesn't exist yet, migrations haven't run
+	}
+
 	entries := map[string]bool{
 		"enterprise_platform":    defaults.EnterprisePlatform,
 		"compliance_suite":        defaults.ComplianceSuite,
