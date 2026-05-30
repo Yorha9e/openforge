@@ -2,6 +2,7 @@ package port
 
 import (
 	"context"
+	"time"
 )
 
 type Project struct {
@@ -24,6 +25,18 @@ type UserRole struct {
 	Modules   []string `json:"modules"`
 }
 
+type Invitation struct {
+	ID        string     `json:"id"`
+	Token     string     `json:"token"`
+	Role      string     `json:"role"`
+	ProjectID string     `json:"project_id,omitempty"`
+	CreatedBy string     `json:"created_by"`
+	ExpiresAt time.Time  `json:"expires_at"`
+	UsedAt    *time.Time `json:"used_at,omitempty"`
+	UsedBy    string     `json:"used_by,omitempty"`
+	CreatedAt time.Time  `json:"created_at"`
+}
+
 type AuthRepository interface {
 	CreateProject(ctx context.Context, p *Project) error
 	GetProject(ctx context.Context, id string) (*Project, error)
@@ -35,4 +48,11 @@ type AuthRepository interface {
 	GetUserPasswordHash(ctx context.Context, id string) (string, error)
 	ListUserProjects(ctx context.Context, userID string) ([]*Project, error)
 	UserHasProjectAccess(ctx context.Context, userID, projectID string) (bool, error)
+	
+	// Invitation methods
+	CreateInvitation(ctx context.Context, inv *Invitation) error
+	GetInvitationByToken(ctx context.Context, token string) (*Invitation, error)
+	UseInvitation(ctx context.Context, token, userID string) error
+	ListInvitations(ctx context.Context, userID string) ([]*Invitation, error)
+	DeleteInvitation(ctx context.Context, token string) error
 }
