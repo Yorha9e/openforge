@@ -3,6 +3,7 @@ package adapter
 import (
 	"context"
 	"database/sql"
+	"time"
 
 	"github.com/lib/pq"
 
@@ -124,4 +125,77 @@ func (r *PGAuthRepository) GetUserRole(ctx context.Context, userID, projectID st
 		return nil, nil
 	}
 	return &ur, err
+}
+
+// CreateInvitation creates a new invitation in the database
+func (r *PGAuthRepository) CreateInvitation(ctx context.Context, inv *port.Invitation) error {
+	_, err := r.db.ExecContext(ctx, `
+		INSERT INTO invitation (token, role, project_id, created_by, expires_at, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6)
+	`, inv.Token, inv.Role, inv.ProjectID, inv.CreatedBy, inv.ExpiresAt, inv.CreatedAt)
+	return err
+}
+
+// GetInvitationByToken retrieves an invitation by its token
+func (r *PGAuthRepository) GetInvitationByToken(ctx context.Context, token string) (*port.Invitation, error) {
+	var inv port.Invitation
+	err := r.db.QueryRowContext(ctx, `
+		SELECT id, token, role, project_id, created_by, expires_at, used_at, used_by, created_at
+		FROM invitation 
+		WHERE token = $1
+	`, token).Scan(
+		&inv.ID, &inv.Token, &inv.Role, &inv.ProjectID, &inv.CreatedBy,
+		&inv.ExpiresAt, &inv.UsedAt, &inv.UsedBy, &inv.CreatedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &inv, nil
+}
+
+// UseInvitation marks an invitation as used
+func (r *PGAuthRepository) UseInvitation(ctx context.Context, token, userID string) error {
+	now := time.Now()
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE invitation 
+		SET used_at = $1, used_by = $2 
+		WHERE token = $3 AND used_at IS NULL
+	`, now, userID, token)
+	return err
+}
+
+// ListInvitations lists all invitations created by a user
+func (r *PGAuthRepository) ListInvitations(ctx context.Context, userID string) ([]*port.Invitation, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, token, role, project_id, created_by, expires_at, used_at, used_by, created_at
+		FROM invitation 
+		WHERE created_by = $1 
+		ORDER BY created_at DESC
+	`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var invitations []*port.Invitation
+	for rows.Next() {
+		var inv port.Invitation
+		if err := rows.Scan(
+			&inv.ID, &inv.Token, &inv.Role, &inv.ProjectID, &inv.CreatedBy,
+			&inv.ExpiresAt, &inv.UsedAt, &inv.UsedBy, &inv.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		invitations = append(invitations, &inv)
+	}
+	return invitations, nil
+}
+
+// DeleteInvitation deletes an invitation by its token
+func (r *PGAuthRepository) DeleteInvitation(ctx context.Context, token string) error {
+	_, err := r.db.ExecContext(ctx, `DELETE FROM invitation WHERE token = $1`, token)
+	return err
 }

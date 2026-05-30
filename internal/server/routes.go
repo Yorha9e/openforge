@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -12,10 +13,10 @@ import (
 	"time"
 
 	authadapter "openforge/internal/auth/adapter"
+	authdomain "openforge/internal/auth/domain"
 	rbacmw "openforge/internal/auth/middleware"
 	authport "openforge/internal/auth/port"
 	"openforge/internal/auth/service"
-	authdomain "openforge/internal/auth/domain"
 	"openforge/internal/pipeline/domain"
 	observabilitydomain "openforge/internal/observability/domain"
 	port2 "openforge/internal/pipeline/port"
@@ -70,8 +71,16 @@ func RegisterRoutes(of *profile.OpenForge, jwtSvc *service.JWTService, cfg *prof
 	// Auth
 	authMw := AuthMiddleware(jwtSvc)
 	mux.HandleFunc("POST /api/auth/login", handleLogin(jwtSvc, cfg, authRepo))
-	mux.HandleFunc("POST /api/auth/register", handleRegister(jwtSvc, authRepo))
+	mux.HandleFunc("POST /api/auth/register", handleRegisterPersonalMode(jwtSvc, authRepo))
 	mux.HandleFunc("POST /api/auth/refresh", handleRefresh(jwtSvc))
+
+	// Initialize invitation service
+	invitationSvc := service.NewInvitationService()
+
+	// Invitation management endpoints (require authentication)
+	mux.HandleFunc("POST /api/invitations", requireAuth(handleCreateInvitation(authRepo, invitationSvc), jwtSvc))
+	mux.HandleFunc("GET /api/invitations/verify", handleVerifyInvitation(authRepo, invitationSvc))
+	mux.HandleFunc("POST /api/auth/register/invitation", handleRegisterWithInvitation(jwtSvc, authRepo, invitationSvc))
 
 	// RBAC helpers
 	withRole := func(role string, next http.HandlerFunc) http.HandlerFunc {
@@ -294,24 +303,37 @@ func handleRefresh(jwtSvc *service.JWTService) http.HandlerFunc {
 	}
 }
 
-func handleRegister(jwtSvc *service.JWTService, authRepo authport.AuthRepository) http.HandlerFunc {
+func handleRegisterPersonalMode(jwtSvc *service.JWTService, authRepo authport.AuthRepository) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Username    string `json:"username"`
+			Email       string `json:"email"`
 			Password    string `json:"password"`
 			DisplayName string `json:"display_name"`
-			AvatarURL   string `json:"avatar_url"`
+			Role        string `json:"role"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, 400, "invalid request body")
 			return
 		}
-		if req.Username == "" || req.Password == "" {
-			writeError(w, 400, "username and password required")
+
+		// Validate required fields
+		if req.Username == "" || req.Password == "" || req.Email == "" {
+			writeError(w, 400, "username, email, and password required")
 			return
 		}
-		if req.DisplayName == "" {
-			req.DisplayName = req.Username
+
+		// Validate role
+		validRoles := map[string]bool{
+			"admin":    true,
+			"pm":       true,
+			"dev_lead": true,
+			"dev":      true,
+			"observer": true,
+		}
+		if !validRoles[req.Role] {
+			writeError(w, 400, "invalid role")
+			return
 		}
 
 		// Check if user already exists
@@ -339,17 +361,24 @@ func handleRegister(jwtSvc *service.JWTService, authRepo authport.AuthRepository
 		}
 
 		// Auto-login: issue JWT
-		token, err := jwtSvc.Issue(req.Username, "pm", "")
+		token, err := jwtSvc.Issue(req.Username, req.Role, "")
 		if err != nil {
 			writeError(w, 500, "registration succeeded but failed to issue token")
 			return
 		}
+
 		writeJSON(w, 201, map[string]any{
-			"access_token":  token.AccessToken,
-			"refresh_token": token.RefreshToken,
-			"expires_in":    token.ExpiresIn,
-			"display_name":  req.DisplayName,
-			"role":          "pm",
+			"success": true,
+			"data": map[string]any{
+				"user_id":       req.Username,
+				"username":      req.Username,
+				"email":         req.Email,
+				"role":          req.Role,
+				"created_at":    time.Now(),
+				"access_token":  token.AccessToken,
+				"refresh_token": token.RefreshToken,
+				"expires_in":    token.ExpiresIn,
+			},
 		})
 	}
 }
@@ -1273,5 +1302,256 @@ func handleGetDiff(of *profile.OpenForge) http.HandlerFunc {
 			p.ChangedFiles = []domain.ChangedFile{}
 		}
 		writeJSON(w, 200, p.ChangedFiles)
+	}
+}
+
+// handleCreateInvitation handles invitation creation
+func handleCreateInvitation(authRepo authport.AuthRepository, invitationSvc *service.InvitationService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Get user from context
+		userID := UserIDFromContext(r.Context())
+		if userID == "" {
+			writeError(w, 401, "unauthorized")
+			return
+		}
+
+		var req struct {
+			Role          string `json:"role"`
+			ProjectID     string `json:"project_id"`
+			ExpiresInDays int    `json:"expires_in_days"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, 400, "invalid request body")
+			return
+		}
+
+		// Validate required fields
+		if req.Role == "" {
+			writeError(w, 400, "role is required")
+			return
+		}
+		if req.ExpiresInDays <= 0 {
+			req.ExpiresInDays = 7 // Default 7 days
+		}
+
+		// Create invitation
+		inv, err := invitationSvc.CreateInvitation(req.Role, req.ProjectID, userID, req.ExpiresInDays)
+		if err != nil {
+			writeError(w, 400, err.Error())
+			return
+		}
+
+		// Save to database
+		if err := authRepo.CreateInvitation(r.Context(), inv); err != nil {
+			writeError(w, 500, "failed to create invitation")
+			return
+		}
+
+		// Generate invitation URL
+		invitationURL := fmt.Sprintf("/invite?token=%s", inv.Token)
+
+		writeJSON(w, 201, map[string]any{
+			"success": true,
+			"data": map[string]any{
+				"invitation_id":  inv.ID,
+				"token":          inv.Token,
+				"role":           inv.Role,
+				"project_id":     inv.ProjectID,
+				"expires_at":     inv.ExpiresAt,
+				"invitation_url": invitationURL,
+			},
+		})
+	}
+}
+
+// handleVerifyInvitation handles invitation verification
+func handleVerifyInvitation(authRepo authport.AuthRepository, invitationSvc *service.InvitationService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		token := r.URL.Query().Get("token")
+		if token == "" {
+			writeError(w, 400, "token is required")
+			return
+		}
+
+		// Get invitation from database
+		inv, err := authRepo.GetInvitationByToken(r.Context(), token)
+		if err != nil {
+			writeError(w, 500, "failed to verify invitation")
+			return
+		}
+		if inv == nil {
+			writeError(w, 404, "invitation not found")
+			return
+		}
+
+		// Validate invitation
+		if err := invitationSvc.ValidateInvitation(inv); err != nil {
+			writeError(w, 400, err.Error())
+			return
+		}
+
+		// Get project name if project_id exists
+		var projectName string
+		if inv.ProjectID != "" {
+			project, _ := authRepo.GetProject(r.Context(), inv.ProjectID)
+			if project != nil {
+				projectName = project.Name
+			}
+		}
+
+		writeJSON(w, 200, map[string]any{
+			"success": true,
+			"data": map[string]any{
+				"valid":        true,
+				"role":         inv.Role,
+				"project_id":   inv.ProjectID,
+				"project_name": projectName,
+				"expires_at":   inv.ExpiresAt,
+			},
+		})
+	}
+}
+
+// handleRegisterWithInvitation handles invitation-based registration
+func handleRegisterWithInvitation(jwtSvc *service.JWTService, authRepo authport.AuthRepository, invitationSvc *service.InvitationService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Token       string `json:"token"`
+			Username    string `json:"username"`
+			Email       string `json:"email"`
+			Password    string `json:"password"`
+			DisplayName string `json:"display_name"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, 400, "invalid request body")
+			return
+		}
+
+		// Validate required fields
+		if req.Token == "" || req.Username == "" || req.Password == "" || req.Email == "" {
+			writeError(w, 400, "token, username, email, and password required")
+			return
+		}
+
+		// Get and validate invitation
+		inv, err := authRepo.GetInvitationByToken(r.Context(), req.Token)
+		if err != nil {
+			writeError(w, 500, "failed to verify invitation")
+			return
+		}
+		if inv == nil {
+			writeError(w, 404, "invitation not found")
+			return
+		}
+		if err := invitationSvc.ValidateInvitation(inv); err != nil {
+			writeError(w, 400, err.Error())
+			return
+		}
+
+		// Check if user already exists
+		existing, _ := authRepo.GetUser(r.Context(), req.Username)
+		if existing != nil {
+			writeError(w, 409, "username already exists")
+			return
+		}
+
+		// Hash password
+		hash, err := profile.HashPassword(req.Password)
+		if err != nil {
+			writeError(w, 500, "failed to process password")
+			return
+		}
+
+		// Create user with password hash
+		if err := authRepo.RegisterUser(r.Context(), req.Username, req.DisplayName, hash); err != nil {
+			if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique") {
+				writeError(w, 409, "username already exists")
+				return
+			}
+			writeError(w, 500, sanitizeError(err))
+			return
+		}
+
+		// Mark invitation as used
+		if err := authRepo.UseInvitation(r.Context(), req.Token, req.Username); err != nil {
+			writeError(w, 500, "failed to use invitation")
+			return
+		}
+
+		// If invitation has project_id, assign user to project
+		if inv.ProjectID != "" {
+			userRole := &authport.UserRole{
+				UserID:    req.Username,
+				ProjectID: inv.ProjectID,
+				Role:      inv.Role,
+				Modules:   []string{},
+			}
+			if err := authRepo.AssignRole(r.Context(), userRole); err != nil {
+				writeError(w, 500, "failed to assign project role")
+				return
+			}
+		}
+
+		// Auto-login: issue JWT
+		token, err := jwtSvc.Issue(req.Username, inv.Role, inv.ProjectID)
+		if err != nil {
+			writeError(w, 500, "registration succeeded but failed to issue token")
+			return
+		}
+
+		// Get project name if project_id exists
+		var projectName string
+		if inv.ProjectID != "" {
+			project, _ := authRepo.GetProject(r.Context(), inv.ProjectID)
+			if project != nil {
+				projectName = project.Name
+			}
+		}
+
+		writeJSON(w, 201, map[string]any{
+			"success": true,
+			"data": map[string]any{
+				"user_id":       req.Username,
+				"username":      req.Username,
+				"email":         req.Email,
+				"role":          inv.Role,
+				"project_id":    inv.ProjectID,
+				"project_name":  projectName,
+				"created_at":    time.Now(),
+				"access_token":  token.AccessToken,
+				"refresh_token": token.RefreshToken,
+				"expires_in":    token.ExpiresIn,
+			},
+		})
+	}
+}
+
+// requireAuth is a middleware that requires authentication
+func requireAuth(next http.HandlerFunc, jwtSvc *service.JWTService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		authHeader := r.Header.Get("Authorization")
+		if authHeader == "" {
+			writeError(w, 401, "authorization header required")
+			return
+		}
+
+		// Extract token from "Bearer <token>"
+		parts := strings.Split(authHeader, " ")
+		if len(parts) != 2 || parts[0] != "Bearer" {
+			writeError(w, 401, "invalid authorization header format")
+			return
+		}
+
+		token := parts[1]
+		claims, err := jwtSvc.Verify(token)
+		if err != nil {
+			writeError(w, 401, "invalid token")
+			return
+		}
+
+		// Add user info to context
+		ctx := context.WithValue(r.Context(), authdomain.UserIDContextKey, claims.UserID)
+		ctx = context.WithValue(ctx, authdomain.UserRoleContextKey, claims.Role)
+		next.ServeHTTP(w, r.WithContext(ctx))
 	}
 }
