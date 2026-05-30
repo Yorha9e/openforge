@@ -43,13 +43,18 @@ func (r *PGAuthRepository) CreateUser(ctx context.Context, u *port.User) error {
 	return err
 }
 
-// RegisterUser creates a new user with a bcrypt password hash.
-func (r *PGAuthRepository) RegisterUser(ctx context.Context, id, displayName, passwordHash string) error {
+// RegisterUser creates a new user with a bcrypt password hash and global role.
+// Uses UPSERT so that if the row already exists (e.g. created earlier by CreateUser
+// without a password_hash), the password hash and role are still written.
+func (r *PGAuthRepository) RegisterUser(ctx context.Context, id, displayName, passwordHash, role string) error {
 	_, err := r.db.ExecContext(ctx, `
-		INSERT INTO "user" (id, display_name, password_hash, created_at)
-		VALUES ($1, $2, $3, NOW())
-		ON CONFLICT (id) DO NOTHING
-	`, id, displayName, passwordHash)
+		INSERT INTO "user" (id, display_name, password_hash, role, created_at)
+		VALUES ($1, $2, $3, $4, NOW())
+		ON CONFLICT (id) DO UPDATE SET
+			display_name = EXCLUDED.display_name,
+			password_hash = EXCLUDED.password_hash,
+			role = EXCLUDED.role
+	`, id, displayName, passwordHash, role)
 	return err
 }
 
@@ -101,12 +106,23 @@ func (r *PGAuthRepository) UserHasProjectAccess(ctx context.Context, userID, pro
 
 func (r *PGAuthRepository) GetUser(ctx context.Context, id string) (*port.User, error) {
 	var u port.User
-	err := r.db.QueryRowContext(ctx, `SELECT id, display_name, avatar_url FROM "user" WHERE id = $1 AND disabled_at IS NULL`, id).
-		Scan(&u.ID, &u.DisplayName, &u.AvatarURL)
+	var avatarURL sql.NullString
+	var role sql.NullString
+	err := r.db.QueryRowContext(ctx, `SELECT id, display_name, avatar_url, role FROM "user" WHERE id = $1 AND disabled_at IS NULL`, id).
+		Scan(&u.ID, &u.DisplayName, &avatarURL, &role)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
-	return &u, err
+	if err != nil {
+		return nil, err
+	}
+	if avatarURL.Valid {
+		u.AvatarURL = avatarURL.String
+	}
+	if role.Valid {
+		u.Role = role.String
+	}
+	return &u, nil
 }
 
 func (r *PGAuthRepository) AssignRole(ctx context.Context, ur *port.UserRole) error {
@@ -129,29 +145,41 @@ func (r *PGAuthRepository) GetUserRole(ctx context.Context, userID, projectID st
 
 // CreateInvitation creates a new invitation in the database
 func (r *PGAuthRepository) CreateInvitation(ctx context.Context, inv *port.Invitation) error {
-	_, err := r.db.ExecContext(ctx, `
+	// Use nil for empty project_id to satisfy foreign key constraint
+	var projectID interface{}
+	if inv.ProjectID != "" {
+		projectID = inv.ProjectID
+	}
+	return r.db.QueryRowContext(ctx, `
 		INSERT INTO invitation (token, role, project_id, created_by, expires_at, created_at)
 		VALUES ($1, $2, $3, $4, $5, $6)
-	`, inv.Token, inv.Role, inv.ProjectID, inv.CreatedBy, inv.ExpiresAt, inv.CreatedAt)
-	return err
+		RETURNING id
+	`, inv.Token, inv.Role, projectID, inv.CreatedBy, inv.ExpiresAt, inv.CreatedAt).Scan(&inv.ID)
 }
 
 // GetInvitationByToken retrieves an invitation by its token
 func (r *PGAuthRepository) GetInvitationByToken(ctx context.Context, token string) (*port.Invitation, error) {
 	var inv port.Invitation
+	var projectID, usedBy sql.NullString
 	err := r.db.QueryRowContext(ctx, `
 		SELECT id, token, role, project_id, created_by, expires_at, used_at, used_by, created_at
 		FROM invitation 
 		WHERE token = $1
 	`, token).Scan(
-		&inv.ID, &inv.Token, &inv.Role, &inv.ProjectID, &inv.CreatedBy,
-		&inv.ExpiresAt, &inv.UsedAt, &inv.UsedBy, &inv.CreatedAt,
+		&inv.ID, &inv.Token, &inv.Role, &projectID, &inv.CreatedBy,
+		&inv.ExpiresAt, &inv.UsedAt, &usedBy, &inv.CreatedAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
+	}
+	if projectID.Valid {
+		inv.ProjectID = projectID.String
+	}
+	if usedBy.Valid {
+		inv.UsedBy = usedBy.String
 	}
 	return &inv, nil
 }
@@ -183,11 +211,18 @@ func (r *PGAuthRepository) ListInvitations(ctx context.Context, userID string) (
 	var invitations []*port.Invitation
 	for rows.Next() {
 		var inv port.Invitation
+		var projectID, usedBy sql.NullString
 		if err := rows.Scan(
-			&inv.ID, &inv.Token, &inv.Role, &inv.ProjectID, &inv.CreatedBy,
-			&inv.ExpiresAt, &inv.UsedAt, &inv.UsedBy, &inv.CreatedAt,
+			&inv.ID, &inv.Token, &inv.Role, &projectID, &inv.CreatedBy,
+			&inv.ExpiresAt, &inv.UsedAt, &usedBy, &inv.CreatedAt,
 		); err != nil {
 			return nil, err
+		}
+		if projectID.Valid {
+			inv.ProjectID = projectID.String
+		}
+		if usedBy.Valid {
+			inv.UsedBy = usedBy.String
 		}
 		invitations = append(invitations, &inv)
 	}

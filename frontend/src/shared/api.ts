@@ -7,7 +7,7 @@ let electronApiBasePromise: Promise<string> | null = null;
 function getApiBase(): string | Promise<string> {
   if (electronApiBase) return electronApiBase;
   if (!window.electronAPI?.isElectron) return BASE;
-  
+
   // Electron: fetch the full API base URL from main process
   if (!electronApiBasePromise) {
     electronApiBasePromise = window.electronAPI.getApiBaseUrl().then((base: string) => {
@@ -24,10 +24,16 @@ export function setToken(token: string | null) {
   authToken = token;
 }
 
-async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+interface RequestOptions extends RequestInit {
+  /** If true, don't redirect to login on 401 */
+  noAuthRedirect?: boolean;
+}
+
+async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  const { noAuthRedirect, ...fetchOptions } = options;
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    ...((options.headers as Record<string, string>) || {}),
+    ...((fetchOptions.headers as Record<string, string>) || {}),
   };
   if (authToken) {
     headers['Authorization'] = `Bearer ${authToken}`;
@@ -41,8 +47,9 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const timeout = setTimeout(() => controller.abort(), 30000); // 30s timeout
 
   try {
-    const res = await fetch(`${base}${path}`, { ...options, headers, signal: controller.signal });
-    if (res.status === 401) {
+    const res = await fetch(`${base}${path}`, { ...fetchOptions, headers, signal: controller.signal });
+    
+    if (res.status === 401 && !noAuthRedirect) {
       authToken = null;
       localStorage.removeItem('of_token');
       localStorage.removeItem('of_refresh');
@@ -59,7 +66,8 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
       const err = await res.json().catch(() => ({ error: res.statusText }));
       throw new Error(err.error || 'Request failed');
     }
-    return res.json();
+    const data = await res.json();
+    return data;
   } catch (err: any) {
     if (err.name === 'AbortError') {
       throw new Error('Request timeout (30s)');
@@ -143,12 +151,14 @@ export const api = {
     request<{ access_token: string; refresh_token: string; expires_in: number; display_name?: string; role?: string }>('/auth/login', {
       method: 'POST',
       body: JSON.stringify({ username, password }),
+      noAuthRedirect: true,
     }),
 
-  register: (username: string, password: string, displayName: string, avatarUrl?: string) =>
+  register: (username: string, password: string, displayName: string, role?: string, email?: string) =>
     request<{ access_token: string; refresh_token: string; expires_in: number; display_name: string; role: string }>('/auth/register', {
       method: 'POST',
-      body: JSON.stringify({ username, password, display_name: displayName, avatar_url: avatarUrl || '' }),
+      body: JSON.stringify({ username, password, display_name: displayName, role, email }),
+      noAuthRedirect: true,
     }),
 
   refreshToken: (refreshToken: string) =>
@@ -236,8 +246,8 @@ export const api = {
   getAdminStatus: () => request<AdminStatus>('/admin/status'),
   listExperiments: () => request<any[]>('/admin/experiments'),
 
-  // Feature Flags
-  getFeatureFlags: () => request<FeatureFlags>('/admin/feature-flags'),
+  // Feature Flags (called globally in App.tsx, don't redirect on 401)
+  getFeatureFlags: () => request<FeatureFlags>('/admin/feature-flags', { noAuthRedirect: true }),
   updateFeatureFlags: (flags: FeatureFlags) =>
     request<FeatureFlags>('/admin/feature-flags', {
       method: 'PUT',
@@ -256,6 +266,51 @@ export const api = {
   getFileContent: (path: string) =>
     request<{ content: string; language: string; path: string; size: number }>(
       `/files/content?path=${encodeURIComponent(path)}`
+    ),
+
+  // Invitation methods
+  createInvitation: (role: string, projectId: string, expiresInDays: number) =>
+    request<{ success: boolean; data: { invitation_id: string; token: string; role: string; project_id: string; expires_at: string; invitation_url: string } }>(
+      '/invitations',
+      {
+        method: 'POST',
+        body: JSON.stringify({ role, project_id: projectId, expires_in_days: expiresInDays }),
+      }
+    ),
+
+  listInvitations: () =>
+    request<{ success: boolean; data: Array<{ id: string; token: string; role: string; project_id: string; created_by: string; expires_at: string; used_at: string | null; used_by: string; created_at: string }> }>(
+      '/invitations'
+    ),
+
+  deleteInvitation: (token: string) =>
+    request<{ success: boolean; message: string }>(
+      `/invitations/${encodeURIComponent(token)}`,
+      { method: 'DELETE' }
+    ),
+
+  verifyInvitation: (token: string) =>
+    request<{ valid: boolean; role: string; project_id: string; project_name: string; expires_at: string; error?: string }>(
+      `/invitations/verify?token=${encodeURIComponent(token)}`
+    ),
+
+  registerWithInvitation: (token: string, username: string, password: string, displayName: string, email: string) =>
+    request<{ access_token: string; refresh_token: string; expires_in: number; display_name: string; role: string; project_id: string; project_name: string }>(
+      '/auth/register/invitation',
+      {
+        method: 'POST',
+        body: JSON.stringify({ token, username, password, display_name: displayName, email }),
+        noAuthRedirect: true,
+      }
+    ),
+
+  joinProjectWithInvitation: (token: string) =>
+    request<{ success: boolean; project_id: string; project_name: string; role: string }>(
+      '/invitations/join',
+      {
+        method: 'POST',
+        body: JSON.stringify({ token }),
+      }
     ),
 };
 

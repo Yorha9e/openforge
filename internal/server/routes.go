@@ -79,8 +79,11 @@ func RegisterRoutes(of *profile.OpenForge, jwtSvc *service.JWTService, cfg *prof
 
 	// Invitation management endpoints (require authentication)
 	mux.HandleFunc("POST /api/invitations", requireAuth(handleCreateInvitation(authRepo, invitationSvc), jwtSvc))
+	mux.HandleFunc("GET /api/invitations", requireAuth(handleListInvitations(authRepo), jwtSvc))
+	mux.HandleFunc("DELETE /api/invitations/{token}", requireAuth(handleDeleteInvitation(authRepo), jwtSvc))
 	mux.HandleFunc("GET /api/invitations/verify", handleVerifyInvitation(authRepo, invitationSvc))
 	mux.HandleFunc("POST /api/auth/register/invitation", handleRegisterWithInvitation(jwtSvc, authRepo, invitationSvc))
+	mux.HandleFunc("POST /api/invitations/join", requireAuth(handleJoinProjectWithInvitation(authRepo, invitationSvc), jwtSvc))
 
 	// RBAC helpers
 	withRole := func(role string, next http.HandlerFunc) http.HandlerFunc {
@@ -253,7 +256,7 @@ func handleLogin(jwtSvc *service.JWTService, cfg *profile.Config, authRepo authp
 				writeError(w, 401, "invalid credentials")
 				return
 			}
-			// Resolve user details from DB
+			// Resolve user details from DB (including stored role)
 			u, err := authRepo.GetUser(r.Context(), req.Username)
 			if err != nil || u == nil {
 				writeError(w, 401, "invalid credentials")
@@ -261,8 +264,11 @@ func handleLogin(jwtSvc *service.JWTService, cfg *profile.Config, authRepo authp
 			}
 			userID = u.ID
 			displayName = u.DisplayName
-			// Registered users default to 'pm' role if no explicit global role is set
-			role = "pm"
+			if u.Role != "" {
+				role = u.Role
+			} else {
+				role = "dev" // default for legacy users without role
+			}
 		}
 
 		token, err := jwtSvc.Issue(userID, role, "")
@@ -350,12 +356,13 @@ func handleRegisterPersonalMode(jwtSvc *service.JWTService, authRepo authport.Au
 			return
 		}
 
-		// Create user with password hash
-		if err := authRepo.RegisterUser(r.Context(), req.Username, req.DisplayName, hash); err != nil {
+		// Create user with password hash and role
+		if err := authRepo.RegisterUser(r.Context(), req.Username, req.DisplayName, hash, req.Role); err != nil {
 			if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique") {
 				writeError(w, 409, "username already exists")
 				return
 			}
+			slog.Error("Failed to register user", "error", err, "username", req.Username)
 			writeError(w, 500, sanitizeError(err))
 			return
 		}
@@ -366,19 +373,12 @@ func handleRegisterPersonalMode(jwtSvc *service.JWTService, authRepo authport.Au
 			writeError(w, 500, "registration succeeded but failed to issue token")
 			return
 		}
-
 		writeJSON(w, 201, map[string]any{
-			"success": true,
-			"data": map[string]any{
-				"user_id":       req.Username,
-				"username":      req.Username,
-				"email":         req.Email,
-				"role":          req.Role,
-				"created_at":    time.Now(),
-				"access_token":  token.AccessToken,
-				"refresh_token": token.RefreshToken,
-				"expires_in":    token.ExpiresIn,
-			},
+			"access_token":  token.AccessToken,
+			"refresh_token": token.RefreshToken,
+			"expires_in":    token.ExpiresIn,
+			"display_name":  req.DisplayName,
+			"role":          req.Role,
 		})
 	}
 }
@@ -1315,6 +1315,13 @@ func handleCreateInvitation(authRepo authport.AuthRepository, invitationSvc *ser
 			return
 		}
 
+		// Check if user can create invitations (admin, pm, dev_lead)
+		userRole := UserRoleFromContext(r.Context())
+		if !rbacmw.CanCreateInvitation(r.Context()) {
+			writeError(w, 403, "insufficient permissions to create invitations")
+			return
+		}
+
 		var req struct {
 			Role          string `json:"role"`
 			ProjectID     string `json:"project_id"`
@@ -1330,6 +1337,17 @@ func handleCreateInvitation(authRepo authport.AuthRepository, invitationSvc *ser
 			writeError(w, 400, "role is required")
 			return
 		}
+
+		// Role hierarchy: admin > pm > dev_lead > dev > observer
+		// Users can only create invitations for roles equal or lower than their own
+		roleLevel := map[string]int{"admin": 5, "pm": 4, "dev_lead": 3, "dev": 2, "observer": 1}
+		creatorLevel := roleLevel[userRole]
+		targetLevel := roleLevel[req.Role]
+		if creatorLevel == 0 || targetLevel == 0 || targetLevel > creatorLevel {
+			writeError(w, 403, "cannot create invitation for a role higher than your own")
+			return
+		}
+
 		if req.ExpiresInDays <= 0 {
 			req.ExpiresInDays = 7 // Default 7 days
 		}
@@ -1343,12 +1361,13 @@ func handleCreateInvitation(authRepo authport.AuthRepository, invitationSvc *ser
 
 		// Save to database
 		if err := authRepo.CreateInvitation(r.Context(), inv); err != nil {
+			slog.Error("failed to create invitation in database", "error", err, "token", inv.Token, "user", userID)
 			writeError(w, 500, "failed to create invitation")
 			return
 		}
 
 		// Generate invitation URL
-		invitationURL := fmt.Sprintf("/invite?token=%s", inv.Token)
+		invitationURL := fmt.Sprintf("/#/invite?token=%s", inv.Token)
 
 		writeJSON(w, 201, map[string]any{
 			"success": true,
@@ -1400,14 +1419,11 @@ func handleVerifyInvitation(authRepo authport.AuthRepository, invitationSvc *ser
 		}
 
 		writeJSON(w, 200, map[string]any{
-			"success": true,
-			"data": map[string]any{
-				"valid":        true,
-				"role":         inv.Role,
-				"project_id":   inv.ProjectID,
-				"project_name": projectName,
-				"expires_at":   inv.ExpiresAt,
-			},
+			"valid":        true,
+			"role":         inv.Role,
+			"project_id":   inv.ProjectID,
+			"project_name": projectName,
+			"expires_at":   inv.ExpiresAt,
 		})
 	}
 }
@@ -1462,8 +1478,8 @@ func handleRegisterWithInvitation(jwtSvc *service.JWTService, authRepo authport.
 			return
 		}
 
-		// Create user with password hash
-		if err := authRepo.RegisterUser(r.Context(), req.Username, req.DisplayName, hash); err != nil {
+		// Create user with password hash and role from invitation
+		if err := authRepo.RegisterUser(r.Context(), req.Username, req.DisplayName, hash, inv.Role); err != nil {
 			if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique") {
 				writeError(w, 409, "username already exists")
 				return
@@ -1509,19 +1525,165 @@ func handleRegisterWithInvitation(jwtSvc *service.JWTService, authRepo authport.
 		}
 
 		writeJSON(w, 201, map[string]any{
+			"access_token":  token.AccessToken,
+			"refresh_token": token.RefreshToken,
+			"expires_in":    token.ExpiresIn,
+			"display_name":  req.DisplayName,
+			"role":          inv.Role,
+			"project_id":    inv.ProjectID,
+			"project_name":  projectName,
+		})
+	}
+}
+
+// handleJoinProjectWithInvitation handles logged-in users joining a project via invitation
+func handleJoinProjectWithInvitation(authRepo authport.AuthRepository, invitationSvc *service.InvitationService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID := UserIDFromContext(r.Context())
+		if userID == "" {
+			writeError(w, 401, "unauthorized")
+			return
+		}
+
+		var req struct {
+			Token string `json:"token"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, 400, "invalid request body")
+			return
+		}
+
+		if req.Token == "" {
+			writeError(w, 400, "token is required")
+			return
+		}
+
+		// Get and validate invitation
+		inv, err := authRepo.GetInvitationByToken(r.Context(), req.Token)
+		if err != nil {
+			writeError(w, 500, "failed to verify invitation")
+			return
+		}
+		if inv == nil {
+			writeError(w, 404, "invitation not found")
+			return
+		}
+		if err := invitationSvc.ValidateInvitation(inv); err != nil {
+			writeError(w, 400, err.Error())
+			return
+		}
+
+		// Check if invitation has a project
+		if inv.ProjectID == "" {
+			writeError(w, 400, "this invitation is not associated with a project")
+			return
+		}
+
+		// Check if user already has access to this project
+		hasAccess, err := authRepo.UserHasProjectAccess(r.Context(), userID, inv.ProjectID)
+		if err != nil {
+			writeError(w, 500, "failed to check project access")
+			return
+		}
+		if hasAccess {
+			writeError(w, 409, "you already have access to this project")
+			return
+		}
+
+		// Assign user to project
+		userRole := &authport.UserRole{
+			UserID:    userID,
+			ProjectID: inv.ProjectID,
+			Role:      inv.Role,
+			Modules:   []string{},
+		}
+		if err := authRepo.AssignRole(r.Context(), userRole); err != nil {
+			writeError(w, 500, "failed to assign project role")
+			return
+		}
+
+		// Mark invitation as used
+		if err := authRepo.UseInvitation(r.Context(), req.Token, userID); err != nil {
+			writeError(w, 500, "failed to use invitation")
+			return
+		}
+
+		// Get project name
+		var projectName string
+		project, _ := authRepo.GetProject(r.Context(), inv.ProjectID)
+		if project != nil {
+			projectName = project.Name
+		}
+
+		writeJSON(w, 200, map[string]any{
+			"success":      true,
+			"project_id":   inv.ProjectID,
+			"project_name": projectName,
+			"role":         inv.Role,
+		})
+	}
+}
+
+// handleListInvitation handles listing invitations for the current user
+func handleListInvitations(authRepo authport.AuthRepository) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID := UserIDFromContext(r.Context())
+		if userID == "" {
+			writeError(w, 401, "unauthorized")
+			return
+		}
+
+		invitations, err := authRepo.ListInvitations(r.Context(), userID)
+		if err != nil {
+			writeError(w, 500, "failed to list invitations")
+			return
+		}
+
+		writeJSON(w, 200, map[string]any{
 			"success": true,
-			"data": map[string]any{
-				"user_id":       req.Username,
-				"username":      req.Username,
-				"email":         req.Email,
-				"role":          inv.Role,
-				"project_id":    inv.ProjectID,
-				"project_name":  projectName,
-				"created_at":    time.Now(),
-				"access_token":  token.AccessToken,
-				"refresh_token": token.RefreshToken,
-				"expires_in":    token.ExpiresIn,
-			},
+			"data":    invitations,
+		})
+	}
+}
+
+// handleDeleteInvitation handles deleting an invitation
+func handleDeleteInvitation(authRepo authport.AuthRepository) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID := UserIDFromContext(r.Context())
+		if userID == "" {
+			writeError(w, 401, "unauthorized")
+			return
+		}
+
+		token := r.PathValue("token")
+		if token == "" {
+			writeError(w, 400, "token is required")
+			return
+		}
+
+		// Verify the invitation belongs to the user before deleting
+		inv, err := authRepo.GetInvitationByToken(r.Context(), token)
+		if err != nil {
+			writeError(w, 500, "failed to get invitation")
+			return
+		}
+		if inv == nil {
+			writeError(w, 404, "invitation not found")
+			return
+		}
+		if inv.CreatedBy != userID {
+			writeError(w, 403, "forbidden: you can only delete your own invitations")
+			return
+		}
+
+		if err := authRepo.DeleteInvitation(r.Context(), token); err != nil {
+			writeError(w, 500, "failed to delete invitation")
+			return
+		}
+
+		writeJSON(w, 200, map[string]any{
+			"success": true,
+			"message": "invitation deleted",
 		})
 	}
 }

@@ -16,6 +16,7 @@ type User struct {
 	ID          string `json:"id"`
 	DisplayName string `json:"display_name"`
 	AvatarURL   string `json:"avatar_url"`
+	Role        string `json:"role"`
 }
 
 type UserRole struct {
@@ -44,7 +45,7 @@ type AuthRepository interface {
 	GetUser(ctx context.Context, id string) (*User, error)
 	AssignRole(ctx context.Context, r *UserRole) error
 	GetUserRole(ctx context.Context, userID, projectID string) (*UserRole, error)
-	RegisterUser(ctx context.Context, id, displayName, passwordHash string) error
+	RegisterUser(ctx context.Context, id, displayName, passwordHash, role string) error
 	GetUserPasswordHash(ctx context.Context, id string) (string, error)
 	ListUserProjects(ctx context.Context, userID string) ([]*Project, error)
 	UserHasProjectAccess(ctx context.Context, userID, projectID string) (bool, error)
