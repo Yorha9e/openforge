@@ -1,8 +1,10 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
-import { useAuth, useCanAccess } from './shared/auth';
+import { useAuth, useCanAccess, useRole } from './shared/auth';
 import { api, FeatureFlags } from './shared/api';
 import { LoginPage } from './features/login/LoginPage';
+import { RegisterPage } from './features/register/RegisterPage';
+import { InviteRoute } from './features/invite/InviteRoute';
 import { DashboardPage } from './features/dashboard/DashboardPage';
 import { ProjectPage } from './features/project/ProjectPage';
 import { ChatPanel } from './features/chat/ChatPanel';
@@ -16,6 +18,7 @@ const ErrorPage = lazy(() => import('./features/errors/ErrorPage'));
 const CircuitBreakerPage = lazy(() => import('./features/errors/CircuitBreakerPage'));
 const AdminPage = lazy(() => import('./features/admin/AdminPage'));
 const SkillPanel = lazy(() => import('./features/admin/SkillPanel'));
+const InvitationManagement = lazy(() => import('./features/admin/invitations/InvitationManagement'));
 const ComplianceReportPage = lazy(() => import('./features/compliance/ComplianceReportPage'));
 const GrafanaPage = lazy(() => import('./features/monitoring/GrafanaPage'));
 const ADRPage = lazy(() => import('./features/adr/ADRPage'));
@@ -31,6 +34,15 @@ function AdminRoute({ children }: { children: React.ReactNode }) {
   const canAccess = useCanAccess('admin');
   if (!token) return <Navigate to="/login" replace />;
   if (!canAccess) return <Navigate to="/" replace />;
+  return <div className="page-enter">{children}</div>;
+}
+
+// Route guard for admin, pm, and dev_lead roles
+function ManagerRoute({ children }: { children: React.ReactNode }) {
+  const { token } = useAuth();
+  const role = useRole();
+  if (!token) return <Navigate to="/login" replace />;
+  if (!['admin', 'superadmin', 'pm', 'dev_lead'].includes(role || '')) return <Navigate to="/" replace />;
   return <div className="page-enter">{children}</div>;
 }
 
@@ -83,6 +95,8 @@ export function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/register" element={<RegisterPage />} />
+      <Route path="/invite" element={<InviteRoute />} />
       <Route path="/" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
       <Route path="/project/:id" element={<ProtectedRoute><ProjectPage /></ProtectedRoute>} />
       <Route path="/project/:id/chat" element={<ProtectedRoute><ChatPanel /></ProtectedRoute>} />
@@ -110,6 +124,9 @@ export function App() {
       } />
       <Route path="/admin/skills" element={
         <AdminRoute><Suspense fallback={<LoadingFallback />}><SkillPanel /></Suspense></AdminRoute>
+      } />
+      <Route path="/admin/invitations" element={
+        <ManagerRoute><Suspense fallback={<LoadingFallback />}><InvitationManagement /></Suspense></ManagerRoute>
       } />
       
       {/* Compliance suite: conditionally registered when compliance_suite flag is ON */}

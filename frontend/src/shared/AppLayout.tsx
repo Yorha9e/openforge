@@ -8,6 +8,7 @@ interface NavItem {
   label: string;
   icon: ReactNode;
   adminOnly?: boolean;
+  managerOnly?: boolean; // admin, pm, dev_lead
 }
 
 const NAV_ITEMS: NavItem[] = [
@@ -45,6 +46,16 @@ const NAV_ITEMS: NavItem[] = [
     icon: (
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
         <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+      </svg>
+    ),
+  },
+  {
+    path: '/admin/invitations',
+    label: 'Invitations',
+    managerOnly: true,
+    icon: (
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M16 21v-2a4 4 0 00-4-4H5a4 4 0 00-4-4v2"/><circle cx="8.5" cy="7" r="4"/><path d="M20 8v6"/><path d="M23 11h-6"/>
       </svg>
     ),
   },
@@ -91,7 +102,11 @@ export function AppLayout({ children, title, breadcrumbs }: { children: ReactNod
 
         {/* Nav items */}
         <nav style={{ flex: 1, padding: '8px 0', minWidth: 220 }}>
-          {NAV_ITEMS.filter(item => !item.adminOnly || user?.role === 'admin' || user?.role === 'superadmin').map(item => {
+          {NAV_ITEMS.filter(item => {
+            if (item.adminOnly) return user?.role === 'admin' || user?.role === 'superadmin';
+            if (item.managerOnly) return ['admin', 'superadmin', 'pm', 'dev_lead'].includes(user?.role || '');
+            return true;
+          }).map(item => {
             const isActive = location.pathname === item.path ||
               (item.path !== '/' && location.pathname.startsWith(item.path));
             return (

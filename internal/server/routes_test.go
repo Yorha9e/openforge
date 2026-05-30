@@ -76,10 +76,11 @@ func (m *mockAuthRepository) GetUserRole(ctx context.Context, userID, projectID 
 	return r, nil
 }
 
-func (m *mockAuthRepository) RegisterUser(ctx context.Context, id, displayName, passwordHash string) error {
+func (m *mockAuthRepository) RegisterUser(ctx context.Context, id, displayName, passwordHash, role string) error {
 	m.users[id] = &authport.User{
 		ID:          id,
 		DisplayName: displayName,
+		Role:        role,
 	}
 	m.passwords[id] = passwordHash
 	return nil

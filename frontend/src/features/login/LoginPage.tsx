@@ -5,18 +5,15 @@ import { useToast } from '../../shared/toast';
 import { tokens } from '../../shared/design-tokens';
 
 export function LoginPage() {
-  const { login, register, token } = useAuth();
+  const { login, token } = useAuth();
   const navigate = useNavigate();
   const { toast } = useToast();
-  const [isRegister, setIsRegister] = useState(false);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [displayName, setDisplayName] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [usernameFocused, setUsernameFocused] = useState(false);
   const [passwordFocused, setPasswordFocused] = useState(false);
-  const [displayNameFocused, setDisplayNameFocused] = useState(false);
   const [btnHovered, setBtnHovered] = useState(false);
 
   if (token) return <Navigate to="/" replace />;
@@ -25,14 +22,10 @@ export function LoginPage() {
     e.preventDefault();
     setError(''); setLoading(true);
     try {
-      if (isRegister) {
-        await register(username, password, displayName || username);
-      } else {
-        await login(username, password);
-      }
+      await login(username, password);
       navigate('/', { replace: true });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : (isRegister ? 'Registration failed' : 'Login failed');
+      const msg = err instanceof Error ? err.message : 'Login failed';
       setError(msg);
       toast(msg);
     } finally {
@@ -51,21 +44,6 @@ export function LoginPage() {
       <form onSubmit={handleSubmit} style={{ background: tokens.surface, padding: 32, borderRadius: 8, width: '100%', maxWidth: 360 }}>
         <h1 style={{ fontSize: 24, fontWeight: 700, color: tokens.text, textAlign: 'center', marginBottom: 24, fontFamily: tokens.fontHeading }}>OpenForge</h1>
         {error && <p role="alert" style={{ color: tokens.error, fontSize: 14, marginBottom: 12 }}>{error}</p>}
-        {isRegister && (
-          <div style={{ marginBottom: 12 }}>
-            <label htmlFor="login-displayname" style={{ display: 'block', fontSize: 13, color: tokens.muted, marginBottom: 4, fontWeight: 500 }}>Display Name</label>
-            <input
-              id="login-displayname"
-              type="text"
-              value={displayName}
-              onChange={e => setDisplayName(e.target.value)}
-              onFocus={() => setDisplayNameFocused(true)}
-              onBlur={() => setDisplayNameFocused(false)}
-              style={inputStyle(displayNameFocused)}
-              autoFocus
-            />
-          </div>
-        )}
         <div style={{ marginBottom: 12 }}>
           <label htmlFor="login-username" style={{ display: 'block', fontSize: 13, color: tokens.muted, marginBottom: 4, fontWeight: 500 }}>Username</label>
           <input
@@ -77,7 +55,8 @@ export function LoginPage() {
             onFocus={() => { setUsernameFocused(true); }}
             onBlur={() => { setUsernameFocused(false); }}
             style={inputStyle(usernameFocused)}
-            autoFocus={!isRegister} />
+            autoFocus
+          />
         </div>
         <div style={{ marginBottom: 16 }}>
           <label htmlFor="login-password" style={{ display: 'block', fontSize: 13, color: tokens.muted, marginBottom: 4, fontWeight: 500 }}>Password</label>
@@ -94,7 +73,7 @@ export function LoginPage() {
         <button
           type="submit"
           disabled={loading}
-          aria-label={isRegister ? 'Sign Up' : 'Sign In'}
+          aria-label="Sign In"
           onMouseEnter={() => setBtnHovered(true)}
           onMouseLeave={() => setBtnHovered(false)}
           style={{
@@ -102,13 +81,13 @@ export function LoginPage() {
             cursor: loading ? 'default' : 'pointer', opacity: loading ? 0.5 : 1,
             transition: tokens.transition,
           }}>
-          {loading ? (isRegister ? 'Signing up...' : 'Signing in...') : (isRegister ? 'Sign Up' : 'Sign In')}
+          {loading ? 'Signing in...' : 'Sign In'}
         </button>
         <div style={{ textAlign: 'center', marginTop: 16, fontSize: 13, color: tokens.muted }}>
           <span
-            onClick={() => { setIsRegister(!isRegister); setError(''); }}
+            onClick={() => navigate('/register')}
             style={{ cursor: 'pointer', color: tokens.cta, textDecoration: 'underline' }}>
-            {isRegister ? 'Already have an account? Sign In' : "Don't have an account? Sign Up"}
+            Don't have an account? Sign Up
           </span>
         </div>
       </form>

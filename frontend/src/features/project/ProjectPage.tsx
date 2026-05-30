@@ -3,6 +3,7 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import { api } from '../../shared/api';
 import { AppLayout } from '../../shared/AppLayout';
 import { useToast } from '../../shared/toast';
+import { useRole } from '../../shared/auth';
 import { tokens } from '../../shared/design-tokens';
 import { PageSkeleton } from '../../shared/skeleton';
 
@@ -39,6 +40,7 @@ export function ProjectPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { toast } = useToast();
+  const role = useRole();
   const [project, setProject] = useState<any>(null);
   const [pipelines, setPipelines] = useState<PipelineSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -47,6 +49,8 @@ export function ProjectPage() {
   const [error, setError] = useState<string | null>(null);
   const [pipeLineFilter, setPipelineFilter] = useState<'all' | 'active' | 'completed'>('all');
   const [showContent, setShowContent] = useState(false);
+  const [generatingInvite, setGeneratingInvite] = useState(false);
+  const [inviteLink, setInviteLink] = useState<string | null>(null);
 
   useEffect(() => {
     if (!id) return;
@@ -128,6 +132,25 @@ export function ProjectPage() {
     }
   }, [id, project, toast, navigate]);
 
+  const handleGenerateInvite = useCallback(async () => {
+    if (!id) return;
+    setGeneratingInvite(true);
+    setInviteLink(null);
+    try {
+      const result = await api.createInvitation('dev', id, 7);
+      const fullUrl = `${window.location.origin}${result.data.invitation_url}`;
+      setInviteLink(fullUrl);
+      toast('Invitation link generated!', 'success');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to generate invitation';
+      toast(msg, 'error');
+    } finally {
+      setGeneratingInvite(false);
+    }
+  }, [id, toast]);
+
+  const canManageInvitations = ['admin', 'pm'].includes(role);
+
   const filteredPipelines = pipelines.filter(p => {
     if (pipeLineFilter === 'active') return ['running', 'pending', 'paused'].includes(p.status);
     if (pipeLineFilter === 'completed') return ['completed', 'rejected', 'cancelled'].includes(p.status);
@@ -158,7 +181,38 @@ export function ProjectPage() {
                   {project.git_url}
                 </span>
               </div>
-              <div style={{ display: 'flex', gap: 8 }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                {canManageInvitations && (
+                  <button
+                    onClick={handleGenerateInvite}
+                    disabled={generatingInvite}
+                    style={{
+                      padding: '8px 14px',
+                      background: generatingInvite ? tokens.muted : tokens.surface,
+                      color: generatingInvite ? tokens.ctaText : tokens.muted,
+                      borderRadius: 6,
+                      fontSize: 13,
+                      border: `1px solid ${tokens.border}`,
+                      cursor: generatingInvite ? 'default' : 'pointer',
+                      transition: tokens.transition,
+                      opacity: generatingInvite ? 0.7 : 1,
+                    }}
+                    onMouseEnter={e => {
+                      if (!generatingInvite) {
+                        e.currentTarget.style.color = tokens.text;
+                        e.currentTarget.style.borderColor = tokens.cta;
+                      }
+                    }}
+                    onMouseLeave={e => {
+                      if (!generatingInvite) {
+                        e.currentTarget.style.color = tokens.muted;
+                        e.currentTarget.style.borderColor = tokens.border;
+                      }
+                    }}
+                  >
+                    {generatingInvite ? 'Generating...' : 'Invite Member'}
+                  </button>
+                )}
                 <Link to={`/project/${id}/costs`}
                   style={{ padding: '8px 14px', background: tokens.surface, color: tokens.muted, borderRadius: 6, textDecoration: 'none', fontSize: 13, border: `1px solid ${tokens.border}`, transition: tokens.transition }}
                   onMouseEnter={e => { e.currentTarget.style.color = tokens.text; e.currentTarget.style.borderColor = tokens.cta; }}
@@ -175,6 +229,40 @@ export function ProjectPage() {
               background: `${tokens.error}18`, border: `1px solid ${tokens.error}40`,
               color: tokens.error, fontSize: 14,
             }}>{error}</div>
+          )}
+
+          {inviteLink && (
+            <div style={{
+              padding: '12px 16px', marginBottom: 24, borderRadius: 8,
+              background: `${tokens.cta}18`, border: `1px solid ${tokens.cta}40`,
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
+            }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: tokens.text, marginBottom: 4 }}>
+                  Invitation Link
+                </div>
+                <div style={{
+                  fontSize: 13, color: tokens.muted,
+                  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                  fontFamily: 'monospace',
+                }}>
+                  {inviteLink}
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(inviteLink);
+                  toast('Link copied to clipboard!', 'success');
+                }}
+                style={{
+                  padding: '6px 12px', background: tokens.cta, color: tokens.ctaText,
+                  border: 'none', borderRadius: 4, cursor: 'pointer', fontSize: 12,
+                  fontWeight: 500, whiteSpace: 'nowrap',
+                }}
+              >
+                Copy
+              </button>
+            </div>
           )}
 
           {/* New Pipeline form */}
