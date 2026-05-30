@@ -1,5 +1,4 @@
 // llm/providers/anthropic.ts — Anthropic Messages API adapter
-
 import Anthropic from "@anthropic-ai/sdk";
 import type { LLMProvider, ChatRequest, ChatResponse } from "../../kernel/interfaces.js";
 
