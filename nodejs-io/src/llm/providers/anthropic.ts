@@ -26,7 +26,10 @@ export class AnthropicProvider implements LLMProvider {
     const tools = req.tools?.map((t) => ({
       name: t.name,
       description: t.description,
-      input_schema: t.inputSchema,
+      input_schema: {
+        type: "object" as const,
+        ...t.inputSchema
+      }
     }));
 
     const resp = await this.client.messages.create({

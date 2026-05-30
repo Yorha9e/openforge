@@ -21,7 +21,7 @@ interface ProModeState {
   isDirty: boolean;
   fileContent: FileContentData | null;
   fileContentLoading: boolean;
-  selectedFileStatus: string | undefined;
+  selectedFileStatus: 'added' | 'modified' | 'deleted' | undefined;
   selectFile: (path: string | null) => void;
   updateFiles: (files: ChangedFile[]) => void;
   addLog: (entry: LogEntry) => void;
