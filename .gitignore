@@ -101,6 +101,7 @@ config/profiles/docker-dev.yaml
 
 # Superpowers worktrees
 .claude/worktrees/
+.worktrees/
 
 # IDE plugins
 .codebuddy/
