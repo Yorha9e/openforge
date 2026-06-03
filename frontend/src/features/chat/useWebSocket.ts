@@ -14,7 +14,7 @@ export function useWebSocket(token: string | null) {
   const connect = useCallback(async () => {
     if (!token) return;
     reconnectAttempts.current += 1;
-    const ws = new WebSocket(await wsURL());
+    const ws = new WebSocket(await wsURL(), ['openforge.auth', `bearer.${token}`]);
     wsRef.current = ws;
     setStatus('connecting');
 
@@ -22,7 +22,6 @@ export function useWebSocket(token: string | null) {
       setStatus('open');
       reconnectDelay.current = 1000;
       reconnectAttempts.current = 0;
-      ws.send(JSON.stringify({ type: 'auth', payload: { token } }));
     };
 
     ws.onclose = () => {

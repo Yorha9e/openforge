@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	observabilitydomain "openforge/internal/observability/domain"
@@ -109,5 +110,42 @@ func TestLoadShedMiddleware_SetsRetryAfter(t *testing.T) {
 	}
 	if retryAfter != "30" { // CRITICAL corresponds to 30 seconds
 		t.Fatalf("expected Retry-After to be 30, got %s", retryAfter)
+	}
+}
+
+func TestSecurityHeadersMiddleware(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/health", nil)
+	rec := httptest.NewRecorder()
+
+	SecurityHeaders(next).ServeHTTP(rec, req)
+
+	if got := rec.Header().Get("Content-Security-Policy"); got == "" {
+		t.Fatal("Content-Security-Policy header is required")
+	} else {
+		requiredDirectives := []string{
+			"default-src 'self'",
+			"script-src 'self'",
+			"object-src 'none'",
+			"base-uri 'self'",
+			"frame-ancestors 'none'",
+		}
+		for _, directive := range requiredDirectives {
+			if !strings.Contains(got, directive) {
+				t.Fatalf("Content-Security-Policy = %q, missing %q", got, directive)
+			}
+		}
+		if strings.Contains(got, "'unsafe-eval'") {
+			t.Fatalf("Content-Security-Policy must not allow unsafe-eval: %q", got)
+		}
+	}
+	if got := rec.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Fatalf("X-Content-Type-Options = %q, want nosniff", got)
+	}
+	if got := rec.Header().Get("Referrer-Policy"); got == "" {
+		t.Fatal("Referrer-Policy header is required")
 	}
 }

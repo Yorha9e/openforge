@@ -1,10 +1,12 @@
-﻿package server
+package server
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,6 +22,7 @@ import (
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
+	Subprotocols:    []string{"openforge.auth"},
 	CheckOrigin: func(r *http.Request) bool {
 		origin := r.Header.Get("Origin")
 		// Allow localhost dev servers (5173, 5174) and empty origin
@@ -42,8 +45,10 @@ const (
 	wsAuthTimeout  = 5 * time.Second
 )
 
+var errMissingWebSocketToken = errors.New("missing websocket token")
+
 type wsMessage struct {
-	Type    string `json:"type"`
+	Type    string          `json:"type"`
 	Payload json.RawMessage `json:"payload,omitempty"`
 }
 
@@ -58,22 +63,28 @@ type authPayload struct {
 }
 
 type wsConn struct {
-	conn              *websocket.Conn
-	jwtSvc            *service.JWTService
-	authRepo          *authadapter.PGAuthRepository
-	userID            string
-	userRole          string
-	mu                sync.Mutex
-	engines           map[string]*domain.QueryEngine
-	of                *profile.OpenForge
-	pongFail          int
-	lastPipelineStage string
+	conn               *websocket.Conn
+	jwtSvc             *service.JWTService
+	authRepo           *authadapter.PGAuthRepository
+	userID             string
+	userRole           string
+	mu                 sync.Mutex
+	engines            map[string]*domain.QueryEngine
+	of                 *profile.OpenForge
+	pongFail           int
+	lastPipelineStage  string
 	lastPipelineStatus string
-	wsRPC             *domain.WSRPC
+	wsRPC              *domain.WSRPC
 }
 
 func handleChatWS(of *profile.OpenForge, jwtSvc *service.JWTService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		claims, err := verifyWebSocketRequest(r, jwtSvc)
+		if err != nil {
+			writeError(w, http.StatusUnauthorized, err.Error())
+			return
+		}
+
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
 			slog.Error("ws upgrade failed", "error", err)
@@ -84,6 +95,8 @@ func handleChatWS(of *profile.OpenForge, jwtSvc *service.JWTService) http.Handle
 			conn:     conn,
 			jwtSvc:   jwtSvc,
 			authRepo: authadapter.NewPGAuthRepository(of.DB),
+			userID:   claims.UserID,
+			userRole: claims.Role,
 			engines:  make(map[string]*domain.QueryEngine),
 			of:       of,
 			pongFail: 0,
@@ -93,14 +106,35 @@ func handleChatWS(of *profile.OpenForge, jwtSvc *service.JWTService) http.Handle
 	}
 }
 
+func verifyWebSocketRequest(r *http.Request, jwtSvc *service.JWTService) (*service.Claims, error) {
+	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if token == r.Header.Get("Authorization") {
+		token = ""
+	}
+	if token == "" {
+		token = bearerTokenFromSubprotocols(r.Header.Values("Sec-WebSocket-Protocol"))
+	}
+	if token == "" {
+		return nil, errMissingWebSocketToken
+	}
+	return jwtSvc.Verify(token)
+}
+
+func bearerTokenFromSubprotocols(values []string) string {
+	for _, value := range values {
+		for _, protocol := range strings.Split(value, ",") {
+			protocol = strings.TrimSpace(protocol)
+			if strings.HasPrefix(protocol, "bearer.") {
+				return strings.TrimPrefix(protocol, "bearer.")
+			}
+		}
+	}
+	return ""
+}
+
 func (c *wsConn) run() {
 	defer c.conn.Close()
 	defer c.cleanupEngines() // Flush all message buffers on disconnect
-
-	// First-frame auth with timeout
-	if !c.authenticate() {
-		return
-	}
 
 	c.conn.SetReadDeadline(time.Now().Add(wsPingInterval + wsPongTimeout))
 	c.conn.SetPongHandler(func(string) error {
@@ -415,7 +449,7 @@ func (c *wsConn) getOrCreateEngine(pipelineID, workDir string) *domain.QueryEngi
 		MaxTokens: 4096,
 	}
 	qe := domain.NewQueryEngine(c.of.LLMRouter, cfg, c.of.PromptBuilder, ctx)
-	
+
 	// Create tool registry with proxy executor for local file operations
 	toolRegistry := domain.DefaultToolRegistryWithWorkDir(workDir)
 	if c.wsRPC != nil {
@@ -452,7 +486,7 @@ func (c *wsConn) cleanupEngines() {
 	}
 	c.engines = make(map[string]*domain.QueryEngine) // Clear map
 	c.mu.Unlock()
-	
+
 	for _, qe := range engines {
 		qe.StopFlushLoop()
 	}
