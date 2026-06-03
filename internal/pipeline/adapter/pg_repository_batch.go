@@ -13,6 +13,9 @@ func (r *PGRepository) BatchSaveMessages(ctx context.Context, msgs []*port.DBMes
 	if len(msgs) == 0 {
 		return nil
 	}
+	if r == nil || r.db == nil {
+		return fmt.Errorf("pipeline repository database is not configured")
+	}
 
 	// Build batch INSERT query
 	query := `INSERT INTO conversation_message (pipeline_id, branch_id, msg_seq, role, msg_type, content, token_count)

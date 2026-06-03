@@ -169,7 +169,7 @@ export default function AdminPage() {
                   <div style={{ marginBottom: 16 }}>
                     <h3 style={{ fontSize: 11, fontWeight: 600, color: tokens.muted, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>SLO Performance</h3>
                     <SloBar label="Total" value={String(status.slo.total)} max={100000} current={status.slo.total} target="max 100K" color="#2563EB" />
-                    <SloBar label="Success" value={`${(status.slo.success_rate * 100).toFixed(1)}%`} max={100} current={status.slo.success_rate * 100} target="SLO ≥99.5%" />
+                    <SloBar label="Success" value={`${status.slo.success_rate.toFixed(1)}%`} max={100} current={status.slo.success_rate} target="SLO ≥99.5%" />
                     {status.slo.p95_ms !== undefined && (
                       <SloBar label="P95 Lat." value={`${status.slo.p95_ms}ms`} max={200} current={status.slo.p95_ms} target="SLO ≤200ms" color="#0891B2" />
                     )}

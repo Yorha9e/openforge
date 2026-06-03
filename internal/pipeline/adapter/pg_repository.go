@@ -220,8 +220,15 @@ func (r *PGRepository) ReleaseClaim(ctx context.Context, pipelineID, stage, acto
 // --- TokenCostRepository ---
 
 func (r *PGRepository) AggregateByDay(ctx context.Context, projectID string, days int) ([]port.TokenCostRow, error) {
-	query := fmt.Sprintf("SELECT DATE(timestamp) as day, project_id, provider, model, SUM(prompt_tokens), SUM(completion_tokens), SUM(estimated_cost) FROM token_usage WHERE project_id = $1 AND timestamp >= NOW() - INTERVAL '%d days' GROUP BY day, project_id, provider, model ORDER BY day DESC", days)
-	rows, err := r.db.QueryContext(ctx, query, projectID)
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT TO_CHAR(created_at::date, 'YYYY-MM-DD') AS day, project_id, provider, model,
+		       COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(completion_tokens), 0),
+		       COALESCE(SUM(estimated_cost), 0)
+		FROM token_usage
+		WHERE project_id = $1 AND created_at >= NOW() - ($2::int * INTERVAL '1 day')
+		GROUP BY day, project_id, provider, model
+		ORDER BY day DESC
+	`, projectID, days)
 	if err != nil {
 		return nil, err
 	}
@@ -240,8 +247,15 @@ func (r *PGRepository) AggregateByDay(ctx context.Context, projectID string, day
 }
 
 func (r *PGRepository) AggregateByModel(ctx context.Context, projectID string, days int) ([]port.TokenCostRow, error) {
-	query := fmt.Sprintf("SELECT '' as day, project_id, provider, model, SUM(prompt_tokens), SUM(completion_tokens), SUM(estimated_cost) FROM token_usage WHERE project_id = $1 AND timestamp >= NOW() - INTERVAL '%d days' GROUP BY project_id, provider, model ORDER BY SUM(estimated_cost) DESC", days)
-	rows, err := r.db.QueryContext(ctx, query, projectID)
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT '' AS day, project_id, provider, model,
+		       COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(completion_tokens), 0),
+		       COALESCE(SUM(estimated_cost), 0)
+		FROM token_usage
+		WHERE project_id = $1 AND created_at >= NOW() - ($2::int * INTERVAL '1 day')
+		GROUP BY project_id, provider, model
+		ORDER BY COALESCE(SUM(estimated_cost), 0) DESC
+	`, projectID, days)
 	if err != nil {
 		return nil, err
 	}
@@ -262,11 +276,10 @@ func (r *PGRepository) AggregateByModel(ctx context.Context, projectID string, d
 func (r *PGRepository) GetProjectBudget(ctx context.Context, projectID string) (*port.ProjectBudget, error) {
 	var b port.ProjectBudget
 	err := r.db.QueryRowContext(ctx, `
-		SELECT project_id, COALESCE(token_limit, 50000000), COALESCE(cost_limit_dollars, 500.0),
-			COALESCE(current_tokens, 0), COALESCE(current_cost, 0), COALESCE(period_end, NOW())
-		FROM cost_quota WHERE project_id = $1
-	`, projectID).Scan(&b.ProjectID, &b.MonthlyLimit, &b.CostLimit,
-		&b.CurrentUsage, &b.CurrentCost, &b.ResetAt)
+		SELECT project_id, token_limit, token_used
+		FROM cost_quota
+		WHERE project_id = $1 AND month = TO_CHAR(NOW(), 'YYYY-MM')
+	`, projectID).Scan(&b.ProjectID, &b.MonthlyLimit, &b.CurrentUsage)
 	if err == sql.ErrNoRows {
 		return &port.ProjectBudget{
 			ProjectID:    projectID,
@@ -275,6 +288,13 @@ func (r *PGRepository) GetProjectBudget(ctx context.Context, projectID string) (
 			ResetAt:      nextMonthReset(),
 		}, nil
 	}
+	b.CostLimit = 500.0
+	b.ResetAt = nextMonthReset()
+	_, currentCost, usageErr := r.GetCurrentMonthUsage(ctx, projectID)
+	if usageErr != nil {
+		return nil, usageErr
+	}
+	b.CurrentCost = currentCost
 	return &b, err
 }
 
@@ -285,7 +305,7 @@ func (r *PGRepository) GetCurrentMonthUsage(ctx context.Context, projectID strin
 		SELECT COALESCE(SUM(prompt_tokens + completion_tokens), 0),
 		       COALESCE(SUM(estimated_cost), 0)
 		FROM token_usage
-		WHERE project_id = $1 AND timestamp >= date_trunc('month', NOW())
+		WHERE project_id = $1 AND created_at >= date_trunc('month', NOW())
 	`, projectID).Scan(&tokens, &cost)
 	return tokens, cost, err
 }
