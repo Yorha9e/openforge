@@ -4,7 +4,7 @@ const BASE = '/api';
 let electronApiBase: string | null = null;
 let electronApiBasePromise: Promise<string> | null = null;
 
-function getApiBase(): string | Promise<string> {
+async function getApiBase(): Promise<string> {
   if (electronApiBase) return electronApiBase;
   if (!window.electronAPI?.isElectron) return BASE;
 
@@ -39,7 +39,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     headers['Authorization'] = `Bearer ${authToken}`;
   }
 
-  // Resolve API base (may be async in Electron)
+  // Resolve API base (async in Electron)
   const base = await getApiBase();
 
   // Add timeout via AbortController
@@ -314,7 +314,7 @@ export const api = {
     ),
 };
 
-export function wsURL(): string | Promise<string> {
+export async function wsURL(): Promise<string> {
   // In Electron, use the server URL from main process
   if (window.electronAPI?.isElectron) {
     return window.electronAPI.getServerUrl();

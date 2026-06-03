@@ -17,13 +17,13 @@ interface AuthState {
   user: { id: string; role: string; project_id?: string; project_name?: string } | null;
   login: (username: string, password: string) => Promise<void>;
   register: (username: string, password: string, displayName: string, role?: string, email?: string) => Promise<void>;
-  registerWithInvitation: (token: string, username: string, password: string, displayName: string, email: string) => Promise<void>;
+  registerWithInvitation: (token: string, username: string, password: string, displayName: string, email: string) => Promise<string | undefined>;
   logout: () => void;
 }
 
 const AuthContext = createContext<AuthState>({
   token: null, refreshToken: null, user: null,
-  login: async () => {}, register: async () => {}, registerWithInvitation: async () => {}, logout: () => {},
+  login: async () => {}, register: async () => {}, registerWithInvitation: async () => undefined, logout: () => {},
 });
 
 export function AuthProvider({ children }: { children: ReactNode }) {

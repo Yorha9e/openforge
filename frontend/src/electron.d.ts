@@ -2,7 +2,11 @@ export {};
 
 declare global {
   interface ElectronAPI {
+    isElectron: true;
+    platform: string;
     getServerUrl(): Promise<string>;
+    getApiBaseUrl(): Promise<string>;
+    getProjectDir(): Promise<string | null>;
     setServerUrl(url: string): Promise<boolean>;
     selectProjectDir(): Promise<string | null>;
     getConnectionStatus(): Promise<string>;

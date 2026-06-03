@@ -11,10 +11,10 @@ export function useWebSocket(token: string | null) {
   const reconnectDelay = useRef(1000);
   const reconnectAttempts = useRef(0);
 
-  const connect = useCallback(() => {
+  const connect = useCallback(async () => {
     if (!token) return;
     reconnectAttempts.current += 1;
-    const ws = new WebSocket(wsURL());
+    const ws = new WebSocket(await wsURL());
     wsRef.current = ws;
     setStatus('connecting');
 
@@ -34,7 +34,7 @@ export function useWebSocket(token: string | null) {
       }
       reconnectTimer.current = window.setTimeout(() => {
         reconnectDelay.current = Math.min(reconnectDelay.current * 2, 30000);
-        connect();
+        void connect();
       }, reconnectDelay.current);
     };
 
@@ -49,7 +49,7 @@ export function useWebSocket(token: string | null) {
   }, [token]);
 
   useEffect(() => {
-    connect();
+    void connect();
     return () => {
       clearTimeout(reconnectTimer.current);
       wsRef.current?.close();
