@@ -12,10 +12,10 @@ import (
 
 // MockConversationRepository for testing
 type MockConversationRepository struct {
-	mu               sync.Mutex
-	savedMessages    []*pipelineport.DBMessage
-	batchSaveCalls   int
-	batchSaveFunc    func(ctx context.Context, msgs []*pipelineport.DBMessage) error
+	mu             sync.Mutex
+	savedMessages  []*pipelineport.DBMessage
+	batchSaveCalls int
+	batchSaveFunc  func(ctx context.Context, msgs []*pipelineport.DBMessage) error
 }
 
 func (m *MockConversationRepository) SaveMessage(ctx context.Context, msg *pipelineport.DBMessage) error {
@@ -58,7 +58,7 @@ func (m *MockConversationRepository) ListBranches(ctx context.Context, pipelineI
 
 func TestQueryEngine_MessageBuffer(t *testing.T) {
 	mockRepo := &MockConversationRepository{}
-	
+
 	qe := NewQueryEngine(nil, agentport.LLMConfig{}, nil, PipelineContext{
 		PipelineID: "test-pipeline",
 	})
@@ -86,7 +86,7 @@ func TestQueryEngine_MessageBuffer(t *testing.T) {
 
 func TestQueryEngine_BufferFlushOnFull(t *testing.T) {
 	mockRepo := &MockConversationRepository{}
-	
+
 	qe := NewQueryEngine(nil, agentport.LLMConfig{}, nil, PipelineContext{
 		PipelineID: "test-pipeline",
 	})
@@ -102,6 +102,7 @@ func TestQueryEngine_BufferFlushOnFull(t *testing.T) {
 
 	// Wait a bit for async operations
 	time.Sleep(100 * time.Millisecond)
+	qe.flushMessages()
 
 	// Verify all messages were saved
 	mockRepo.mu.Lock()
