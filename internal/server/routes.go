@@ -17,8 +17,8 @@ import (
 	rbacmw "openforge/internal/auth/middleware"
 	authport "openforge/internal/auth/port"
 	"openforge/internal/auth/service"
-	"openforge/internal/pipeline/domain"
 	observabilitydomain "openforge/internal/observability/domain"
+	"openforge/internal/pipeline/domain"
 	port2 "openforge/internal/pipeline/port"
 	"openforge/internal/shared/featureflags"
 	"openforge/internal/shared/profile"
@@ -50,15 +50,15 @@ func RegisterRoutes(of *profile.OpenForge, jwtSvc *service.JWTService, cfg *prof
 	mux.HandleFunc("GET /api/health/db", func(w http.ResponseWriter, r *http.Request) {
 		dbStats := of.DB.Stats()
 		json.NewEncoder(w).Encode(map[string]any{
-			"status":              "ok",
+			"status":               "ok",
 			"max_open_connections": dbStats.MaxOpenConnections,
-			"open_connections":    dbStats.OpenConnections,
-			"in_use":              dbStats.InUse,
-			"idle":                dbStats.Idle,
-			"wait_count":          dbStats.WaitCount,
-			"wait_duration":       dbStats.WaitDuration.String(),
-			"max_idle_closed":     dbStats.MaxIdleClosed,
-			"max_lifetime_closed": dbStats.MaxLifetimeClosed,
+			"open_connections":     dbStats.OpenConnections,
+			"in_use":               dbStats.InUse,
+			"idle":                 dbStats.Idle,
+			"wait_count":           dbStats.WaitCount,
+			"wait_duration":        dbStats.WaitDuration.String(),
+			"max_idle_closed":      dbStats.MaxIdleClosed,
+			"max_lifetime_closed":  dbStats.MaxLifetimeClosed,
 		})
 	})
 
@@ -112,7 +112,7 @@ func RegisterRoutes(of *profile.OpenForge, jwtSvc *service.JWTService, cfg *prof
 	mux.HandleFunc("GET /api/pipelines/{id}/diff", withRole("observer", handleGetDiff(of)))
 	mux.HandleFunc("GET /api/projects/{id}/pipelines", withRole("observer", handleListPipelines(of)))
 	mux.HandleFunc("POST /api/projects/{id}/pipelines", withRole("pm", handleCreatePipeline(of)))
-	
+
 	// Active pipelines (observer) — cross-project active workboard
 	mux.HandleFunc("GET /api/pipelines/active", withRole("observer", handleActivePipelines(of, authRepo)))
 
@@ -691,9 +691,9 @@ func handleReviewInbox(of *profile.OpenForge) http.HandlerFunc {
 			return
 		}
 		if events == nil {
-				events = []*domain.GateEvent{}
-			}
-			writeJSON(w, 200, events)
+			events = []*domain.GateEvent{}
+		}
+		writeJSON(w, 200, events)
 	}
 }
 
@@ -766,7 +766,9 @@ func handleDeletePipeline(of *profile.OpenForge) http.HandlerFunc {
 
 func handleForkPipeline(of *profile.OpenForge) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var req struct{ Title string `json:"title"` }
+		var req struct {
+			Title string `json:"title"`
+		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, 400, "invalid body")
 			return
@@ -789,8 +791,8 @@ type userNotificationSettings struct {
 }
 
 type userLayoutSettings struct {
-	EditorFontSize int    `json:"editorFontSize"`
-	Theme          string `json:"theme"`
+	EditorFontSize  int    `json:"editorFontSize"`
+	Theme           string `json:"theme"`
 	DefaultViewMode string `json:"defaultViewMode"`
 }
 
@@ -817,8 +819,8 @@ var defaultSettings = userSettings{
 		Channels:     []string{"email"},
 	},
 	Layout: userLayoutSettings{
-		EditorFontSize: 14,
-		Theme:          "dark",
+		EditorFontSize:  14,
+		Theme:           "dark",
 		DefaultViewMode: "pro",
 	},
 	Language: userLanguageSettings{
@@ -859,12 +861,12 @@ func handleUpdateSettings() http.HandlerFunc {
 			return
 		}
 		s := getSettingsStore(UserIDFromContext(r.Context()))
-		
+
 		// Update notifications if provided
 		if req.Notifications.EmailEnabled || req.Notifications.WebhookURL != "" || len(req.Notifications.Channels) > 0 {
 			s.Notifications = req.Notifications
 		}
-		
+
 		// Update layout if provided
 		if req.Layout.EditorFontSize > 0 {
 			s.Layout.EditorFontSize = req.Layout.EditorFontSize
@@ -875,7 +877,7 @@ func handleUpdateSettings() http.HandlerFunc {
 		if req.Layout.DefaultViewMode != "" {
 			s.Layout.DefaultViewMode = req.Layout.DefaultViewMode
 		}
-		
+
 		// Update language if provided
 		if req.Language.Locale != "" {
 			s.Language.Locale = req.Language.Locale
@@ -883,12 +885,12 @@ func handleUpdateSettings() http.HandlerFunc {
 		if req.Language.Timezone != "" {
 			s.Language.Timezone = req.Language.Timezone
 		}
-		
+
 		// Update project settings if provided
 		if req.Project.WorkDir != "" {
 			s.Project.WorkDir = req.Project.WorkDir
 		}
-		
+
 		writeJSON(w, 200, s)
 	}
 }
@@ -901,7 +903,7 @@ func handleAdminStatus(of *profile.OpenForge, cfg *profile.Config) http.HandlerF
 		if of.SkillLoader != nil {
 			skillCount = len(of.SkillLoader.GetAllSkills())
 		}
-		
+
 		breakers := make(map[string]string)
 		if of.BreakerPool != nil {
 			for name, state := range of.BreakerPool.All() {
@@ -931,9 +933,9 @@ func handleAdminStatus(of *profile.OpenForge, cfg *profile.Config) http.HandlerF
 			"circuit_breakers": breakers,
 			"slo":              sloObj,
 			"ha": map[string]any{
-				"task_queue":       cfg.TaskQueue,
-				"hash_ring_nodes":  128,
-				"load_shedding":    "active",
+				"task_queue":      cfg.TaskQueue,
+				"hash_ring_nodes": 128,
+				"load_shedding":   "active",
 			},
 		})
 	}
@@ -1343,7 +1345,11 @@ func handleCreateInvitation(authRepo authport.AuthRepository, invitationSvc *ser
 		roleLevel := map[string]int{"admin": 5, "pm": 4, "dev_lead": 3, "dev": 2, "observer": 1}
 		creatorLevel := roleLevel[userRole]
 		targetLevel := roleLevel[req.Role]
-		if creatorLevel == 0 || targetLevel == 0 || targetLevel > creatorLevel {
+		if targetLevel == 0 {
+			writeError(w, 400, "invalid role")
+			return
+		}
+		if creatorLevel == 0 || targetLevel > creatorLevel {
 			writeError(w, 403, "cannot create invitation for a role higher than your own")
 			return
 		}

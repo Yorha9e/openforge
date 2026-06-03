@@ -200,12 +200,10 @@ func TestHandleRegisterPersonalMode(t *testing.T) {
 		var response map[string]interface{}
 		err := json.Unmarshal(w.Body.Bytes(), &response)
 		require.NoError(t, err)
-		assert.True(t, response["success"].(bool))
-
-		data := response["data"].(map[string]interface{})
-		assert.Equal(t, "testuser", data["user_id"])
-		assert.Equal(t, "dev", data["role"])
-		assert.NotEmpty(t, data["access_token"])
+		assert.Equal(t, "dev", response["role"])
+		assert.Equal(t, "Test User", response["display_name"])
+		assert.NotEmpty(t, response["access_token"])
+		assert.NotEmpty(t, response["refresh_token"])
 
 		// Verify user was created in mock repo
 		user, _ := authRepo.GetUser(context.Background(), "testuser")
@@ -378,13 +376,10 @@ func TestHandleVerifyInvitation(t *testing.T) {
 		var response map[string]interface{}
 		err := json.Unmarshal(w.Body.Bytes(), &response)
 		require.NoError(t, err)
-		assert.True(t, response["success"].(bool))
-
-		data := response["data"].(map[string]interface{})
-		assert.True(t, data["valid"].(bool))
-		assert.Equal(t, "dev", data["role"])
-		assert.Equal(t, "project-1", data["project_id"])
-		assert.Equal(t, "Test Project", data["project_name"])
+		assert.True(t, response["valid"].(bool))
+		assert.Equal(t, "dev", response["role"])
+		assert.Equal(t, "project-1", response["project_id"])
+		assert.Equal(t, "Test Project", response["project_name"])
 	})
 
 	t.Run("missing token", func(t *testing.T) {
@@ -484,14 +479,12 @@ func TestHandleRegisterWithInvitation(t *testing.T) {
 		var response map[string]interface{}
 		err := json.Unmarshal(w.Body.Bytes(), &response)
 		require.NoError(t, err)
-		assert.True(t, response["success"].(bool))
-
-		data := response["data"].(map[string]interface{})
-		assert.Equal(t, "inviteduser", data["user_id"])
-		assert.Equal(t, "dev", data["role"])
-		assert.Equal(t, "project-1", data["project_id"])
-		assert.Equal(t, "Test Project", data["project_name"])
-		assert.NotEmpty(t, data["access_token"])
+		assert.Equal(t, "dev", response["role"])
+		assert.Equal(t, "Invited User", response["display_name"])
+		assert.Equal(t, "project-1", response["project_id"])
+		assert.Equal(t, "Test Project", response["project_name"])
+		assert.NotEmpty(t, response["access_token"])
+		assert.NotEmpty(t, response["refresh_token"])
 
 		// Verify user was created
 		user, _ := authRepo.GetUser(context.Background(), "inviteduser")

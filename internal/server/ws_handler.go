@@ -194,10 +194,15 @@ func (c *wsConn) handleMessage(raw []byte) {
 		}
 
 		ctx := context.Background()
+		startTime := time.Now()
+		success := true
 
 		stream, err := qe.SubmitMessage(ctx, p.Message)
 		if err != nil {
 			c.write(map[string]any{"type": "error", "payload": map[string]string{"message": err.Error()}})
+			if c.of.SLO != nil {
+				c.of.SLO.RecordPipeline(time.Since(startTime), false)
+			}
 			return
 		}
 
@@ -246,12 +251,18 @@ func (c *wsConn) handleMessage(raw []byte) {
 			case "done":
 				c.write(map[string]any{"type": "chat.stream_done", "payload": map[string]string{"content": ev.Content}})
 			case "error":
+				success = false
 				errMsg := ""
 				if ev.Error != nil {
 					errMsg = ev.Error.Error()
 				}
 				c.write(map[string]any{"type": "error", "payload": map[string]string{"message": errMsg}})
 			}
+		}
+
+		// Record SLO
+		if c.of.SLO != nil {
+			c.of.SLO.RecordPipeline(time.Since(startTime), success)
 		}
 
 		pipeline, err := c.of.PipelineRepo.GetByID(ctx, p.PipelineID)
