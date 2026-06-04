@@ -49,3 +49,10 @@ func TestChatWSRejectsInvalidToken(t *testing.T) {
 		t.Fatalf("expected 401 for invalid token, got %d", rec.Code)
 	}
 }
+
+func TestBearerTokenFromSubprotocols(t *testing.T) {
+	got := bearerTokenFromSubprotocols([]string{"openforge.auth, bearer.abc.def.ghi"})
+	if got != "abc.def.ghi" {
+		t.Fatalf("token = %q, want abc.def.ghi", got)
+	}
+}

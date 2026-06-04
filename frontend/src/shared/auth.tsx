@@ -16,7 +16,7 @@ interface AuthState {
   refreshToken: string | null;
   user: { id: string; role: string; project_id?: string; project_name?: string } | null;
   login: (username: string, password: string) => Promise<void>;
-  register: (username: string, password: string, displayName: string, role?: string, email?: string) => Promise<void>;
+  register: (username: string, password: string, displayName: string, role: string, email: string) => Promise<void>;
   registerWithInvitation: (token: string, username: string, password: string, displayName: string, email: string) => Promise<string | undefined>;
   logout: () => void;
 }
@@ -59,7 +59,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     applyAuthResult(result, username);
   }, [applyAuthResult]);
 
-  const register = useCallback(async (username: string, password: string, displayName: string, role?: string, email?: string) => {
+  const register = useCallback(async (username: string, password: string, displayName: string, role: string, email: string) => {
     const result = await api.register(username, password, displayName, role, email);
     applyAuthResult(result, username);
   }, [applyAuthResult]);

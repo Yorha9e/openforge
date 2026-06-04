@@ -154,7 +154,7 @@ export const api = {
       noAuthRedirect: true,
     }),
 
-  register: (username: string, password: string, displayName: string, role?: string, email?: string) =>
+  register: (username: string, password: string, displayName: string, role: string, email: string) =>
     request<{ access_token: string; refresh_token: string; expires_in: number; display_name: string; role: string }>('/auth/register', {
       method: 'POST',
       body: JSON.stringify({ username, password, display_name: displayName, role, email }),

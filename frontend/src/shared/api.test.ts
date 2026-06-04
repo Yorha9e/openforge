@@ -13,4 +13,13 @@ describe('API Client', () => {
   it('should export setToken function', () => {
     expect(typeof setToken).toBe('function');
   });
+
+  it('requires ordinary registrations to include role and email', () => {
+    if (false) {
+      // @ts-expect-error register contract requires role and email.
+      api.register('alice', 'password123', 'Alice');
+    }
+
+    expect(typeof api.register).toBe('function');
+  });
 });

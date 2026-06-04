@@ -5,8 +5,20 @@ import { AppLayout } from '../../shared/AppLayout';
 import { tokens } from '../../shared/design-tokens';
 import { PageSkeleton } from '../../shared/skeleton';
 
+type ReviewInboxItem = {
+  pipeline_id: string;
+  project_id: string;
+  stage: string;
+  created_at?: string;
+  awaiting_since?: string;
+};
+
+export function reviewLinkForItem(item: Pick<ReviewInboxItem, 'project_id' | 'pipeline_id'>): string {
+  return `/project/${encodeURIComponent(item.project_id)}/pipeline/${encodeURIComponent(item.pipeline_id)}`;
+}
+
 export default function ReviewInboxPage() {
-  const [items, setItems] = useState<any[]>([]);
+  const [items, setItems] = useState<ReviewInboxItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showContent, setShowContent] = useState(false);
@@ -45,9 +57,9 @@ export default function ReviewInboxPage() {
             }}>
               <div>
                 <p style={{ fontWeight: 600, margin: '0 0 4px 0', fontSize: 14 }}>Pipeline {item.pipeline_id} &mdash; {item.stage}</p>
-                <p style={{ color: tokens.muted, fontSize: 13, margin: 0 }}>Awaiting since {new Date(item.created_at).toLocaleString()}</p>
+                <p style={{ color: tokens.muted, fontSize: 13, margin: 0 }}>Awaiting since {new Date(item.awaiting_since || item.created_at || '').toLocaleString()}</p>
               </div>
-              <Link to={`/project/${item.pipeline_id}/pipeline/${item.pipeline_id}`}
+              <Link to={reviewLinkForItem(item)}
                 style={{
                   padding: '6px 14px', background: tokens.cta, color: tokens.ctaText,
                   borderRadius: 4, textDecoration: 'none', fontSize: 13, fontWeight: 500,
