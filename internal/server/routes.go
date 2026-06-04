@@ -683,18 +683,101 @@ func handleRejectGate(of *profile.OpenForge) http.HandlerFunc {
 	}
 }
 
+type reviewInboxItem struct {
+	PipelineID    string    `json:"pipeline_id"`
+	ProjectID     string    `json:"project_id"`
+	ProjectName   string    `json:"project_name"`
+	PipelineTitle string    `json:"pipeline_title"`
+	Stage         string    `json:"stage"`
+	Event         string    `json:"event"`
+	Actor         string    `json:"actor"`
+	Decision      string    `json:"decision"`
+	ArtifactHash  string    `json:"artifact_hash"`
+	CreatedAt     time.Time `json:"created_at"`
+	AwaitingSince time.Time `json:"awaiting_since"`
+	ClaimedBy     string    `json:"claimed_by,omitempty"`
+}
+
+type pendingReviewLister func(context.Context) ([]*domain.GateEvent, error)
+type projectNameLookup func(context.Context, string) (string, error)
+
 func handleReviewInbox(of *profile.OpenForge) http.HandlerFunc {
+	return handleReviewInboxWithDeps(
+		of.GateSvc.ListPending,
+		of.PipelineRepo,
+		func(ctx context.Context, projectID string) (string, error) {
+			return projectNameByID(ctx, of.DB, projectID)
+		},
+	)
+}
+
+func handleReviewInboxWithDeps(listPending pendingReviewLister, pipelineRepo port2.PipelineRepository, projectName projectNameLookup) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		events, err := of.GateSvc.ListPending(r.Context())
+		events, err := listPending(r.Context())
 		if err != nil {
 			writeError(w, 500, sanitizeError(err))
 			return
 		}
-		if events == nil {
-			events = []*domain.GateEvent{}
+		items, err := buildReviewInboxItems(r.Context(), events, pipelineRepo, projectName)
+		if err != nil {
+			writeError(w, 500, sanitizeError(err))
+			return
 		}
-		writeJSON(w, 200, events)
+		if items == nil {
+			items = []reviewInboxItem{}
+		}
+		writeJSON(w, 200, items)
 	}
+}
+
+func buildReviewInboxItems(ctx context.Context, events []*domain.GateEvent, pipelineRepo port2.PipelineRepository, projectName projectNameLookup) ([]reviewInboxItem, error) {
+	items := make([]reviewInboxItem, 0, len(events))
+	for _, ev := range events {
+		if ev == nil {
+			continue
+		}
+		item := reviewInboxItem{
+			PipelineID:    ev.PipelineID,
+			Stage:         ev.Stage,
+			Event:         ev.Event,
+			Actor:         ev.Actor,
+			Decision:      ev.Decision,
+			ArtifactHash:  ev.ArtifactHash,
+			CreatedAt:     ev.CreatedAt,
+			AwaitingSince: ev.CreatedAt,
+		}
+		if pipelineRepo != nil && ev.PipelineID != "" {
+			p, err := pipelineRepo.GetByID(ctx, ev.PipelineID)
+			if err != nil {
+				return nil, err
+			}
+			if p != nil {
+				item.ProjectID = p.ProjectID
+				item.PipelineTitle = p.Title
+			}
+		}
+		if projectName != nil && item.ProjectID != "" {
+			name, err := projectName(ctx, item.ProjectID)
+			if err != nil {
+				return nil, err
+			}
+			item.ProjectName = name
+		}
+		items = append(items, item)
+	}
+	return items, nil
+}
+
+func projectNameByID(ctx context.Context, db *sql.DB, projectID string) (string, error) {
+	if db == nil || projectID == "" {
+		return "", nil
+	}
+	var name string
+	err := db.QueryRowContext(ctx, `SELECT name FROM project WHERE id = $1 AND deleted_at IS NULL`, projectID).Scan(&name)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return name, err
 }
 
 // --- Token/Cost endpoints ---

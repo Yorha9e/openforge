@@ -14,6 +14,7 @@ import (
 
 	authport "openforge/internal/auth/port"
 	"openforge/internal/auth/service"
+	"openforge/internal/pipeline/domain"
 )
 
 // mockAuthRepository is a mock implementation of authport.AuthRepository
@@ -267,6 +268,53 @@ func TestHandleRegisterPersonalMode(t *testing.T) {
 
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 	})
+}
+
+func TestHandleReviewInboxEnrichesPendingEvents(t *testing.T) {
+	createdAt := time.Date(2026, 6, 4, 0, 0, 0, 0, time.UTC)
+	repo := &stubPipelineRepo{
+		pipelines: map[string]*domain.Pipeline{
+			"pipe-1": domain.NewPipeline("pipe-1", "proj-1", "Add tag filters", "alice", 1, 1),
+		},
+	}
+
+	handler := handleReviewInboxWithDeps(
+		func(ctx context.Context) ([]*domain.GateEvent, error) {
+			return []*domain.GateEvent{{
+				PipelineID:   "pipe-1",
+				Stage:        "impl",
+				Event:        "awaiting",
+				Actor:        "alice",
+				ArtifactHash: "hash-1",
+				CreatedAt:    createdAt,
+			}}, nil
+		},
+		repo,
+		func(ctx context.Context, projectID string) (string, error) {
+			assert.Equal(t, "proj-1", projectID)
+			return "Conduit", nil
+		},
+	)
+
+	req := httptest.NewRequest("GET", "/api/review-inbox", nil)
+	w := httptest.NewRecorder()
+
+	handler(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var response []map[string]any
+	err := json.Unmarshal(w.Body.Bytes(), &response)
+	require.NoError(t, err)
+	require.Len(t, response, 1)
+	item := response[0]
+	assert.Equal(t, "pipe-1", item["pipeline_id"])
+	assert.Equal(t, "proj-1", item["project_id"])
+	assert.Equal(t, "Conduit", item["project_name"])
+	assert.Equal(t, "Add tag filters", item["pipeline_title"])
+	assert.Equal(t, "impl", item["stage"])
+	assert.Equal(t, "awaiting", item["event"])
+	assert.NotEmpty(t, item["created_at"])
+	assert.Equal(t, item["created_at"], item["awaiting_since"])
 }
 
 func TestHandleCreateInvitation(t *testing.T) {

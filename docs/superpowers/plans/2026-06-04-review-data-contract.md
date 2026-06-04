@@ -55,7 +55,7 @@ type ReviewInboxItem = {
 - Modify: `internal/server/routes.go`
 - Test: `internal/server/routes_test.go`
 
-- [ ] **Step 1: Write a failing backend test for enriched review items**
+- [x] **Step 1: Write a failing backend test for enriched review items**
 
 Add a test named `TestHandleReviewInboxEnrichesPendingEvents` to `internal/server/routes_test.go`.
 
@@ -75,7 +75,7 @@ assert.NotEmpty(t, item["created_at"])
 assert.Equal(t, item["created_at"], item["awaiting_since"])
 ```
 
-- [ ] **Step 2: Run the backend test and verify RED**
+- [x] **Step 2: Run the backend test and verify RED**
 
 Run:
 
@@ -87,7 +87,7 @@ go test ./internal/server -run TestHandleReviewInboxEnrichesPendingEvents
 
 Expected: FAIL because raw pending gate events do not include `project_id`, `project_name`, `pipeline_title`, or `awaiting_since`.
 
-- [ ] **Step 3: Implement the enriched BFF shape**
+- [x] **Step 3: Implement the enriched BFF shape**
 
 In `internal/server/routes.go`, add a small response struct near `handleReviewInbox`:
 
@@ -124,7 +124,7 @@ SELECT name FROM project WHERE id = $1 AND deleted_at IS NULL
 
 Keep the implementation narrow. Do not change `GateService` or `PGRepository.ListPending` in A1 unless the handler cannot be tested otherwise.
 
-- [ ] **Step 4: Run the backend test and verify GREEN**
+- [x] **Step 4: Run the backend test and verify GREEN**
 
 Run:
 
@@ -136,7 +136,7 @@ go test ./internal/server -run TestHandleReviewInboxEnrichesPendingEvents
 
 Expected: PASS.
 
-- [ ] **Step 5: Run server package tests**
+- [x] **Step 5: Run server package tests**
 
 Run:
 
@@ -155,7 +155,7 @@ Expected: PASS.
 - Modify: `frontend/src/features/review-inbox/ReviewInboxPage.tsx`
 - Test: `frontend/src/features/review-inbox/ReviewInboxPage.test.ts`
 
-- [ ] **Step 1: Write failing frontend helper tests**
+- [x] **Step 1: Write failing frontend helper tests**
 
 Extend `frontend/src/features/review-inbox/ReviewInboxPage.test.ts` with helper expectations:
 
@@ -180,7 +180,7 @@ it('prefers awaiting_since for waiting time source', () => {
 
 These helper names do not exist yet, so this test must fail first.
 
-- [ ] **Step 2: Run the frontend test and verify RED**
+- [x] **Step 2: Run the frontend test and verify RED**
 
 Run:
 
@@ -192,7 +192,7 @@ cd ..
 
 Expected: FAIL because `reviewTitleForItem` and `reviewWaitingSinceForItem` are not exported.
 
-- [ ] **Step 3: Export the frontend contract type**
+- [x] **Step 3: Export the frontend contract type**
 
 In `frontend/src/shared/api.ts`, add:
 
@@ -225,7 +225,7 @@ to:
 getReviewInbox: () => request<ReviewInboxItem[]>('/review-inbox'),
 ```
 
-- [ ] **Step 4: Implement Review Inbox helpers and labels**
+- [x] **Step 4: Implement Review Inbox helpers and labels**
 
 In `frontend/src/features/review-inbox/ReviewInboxPage.tsx`:
 
@@ -251,7 +251,7 @@ export function reviewWaitingSinceForItem(item: Pick<ReviewInboxItem, 'awaiting_
 Awaiting since {new Date(reviewWaitingSinceForItem(item)).toLocaleString()}
 ```
 
-- [ ] **Step 5: Run the frontend tests and typecheck**
+- [x] **Step 5: Run the frontend tests and typecheck**
 
 Run:
 
@@ -269,7 +269,7 @@ Expected: both commands exit 0.
 **Files:**
 - Verify only.
 
-- [ ] **Step 1: Run focused backend and frontend verification**
+- [x] **Step 1: Run focused backend and frontend verification**
 
 Run:
 
@@ -285,7 +285,7 @@ cd ..
 
 Expected: all commands exit 0.
 
-- [ ] **Step 2: Run full project verification**
+- [x] **Step 2: Run full project verification**
 
 Run:
 
@@ -303,7 +303,7 @@ cd ..
 
 Expected: all commands exit 0.
 
-- [ ] **Step 3: Clean temporary Go cache**
+- [x] **Step 3: Clean temporary Go cache**
 
 Run:
 
@@ -319,7 +319,7 @@ if ($target.Path.StartsWith($root.Path + [IO.Path]::DirectorySeparatorChar)) {
 
 Expected: `.cache` no longer appears in `git status`.
 
-- [ ] **Step 4: Commit A1**
+- [x] **Step 4: Commit A1**
 
 Run:
 

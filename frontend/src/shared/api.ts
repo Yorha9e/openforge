@@ -146,6 +146,21 @@ export type FeatureFlags = {
   distribution_artifacts: boolean;
 };
 
+export type ReviewInboxItem = {
+  pipeline_id: string;
+  project_id: string;
+  project_name: string;
+  pipeline_title: string;
+  stage: string;
+  event: 'awaiting';
+  actor: string;
+  decision: string;
+  artifact_hash: string;
+  created_at: string;
+  awaiting_since: string;
+  claimed_by?: string;
+};
+
 export const api = {
   login: (username: string, password: string) =>
     request<{ access_token: string; refresh_token: string; expires_in: number; display_name?: string; role?: string }>('/auth/login', {
@@ -200,7 +215,7 @@ export const api = {
   deletePipeline: (id: string) => request<any>(`/pipelines/${id}`, { method: 'DELETE' }),
 
   // Gate
-  getReviewInbox: () => request<any[]>('/review-inbox'),
+  getReviewInbox: () => request<ReviewInboxItem[]>('/review-inbox'),
 
   approveGate: (pipelineId: string, stage: string, checklist: any, summary: string) =>
     request<any>(`/pipelines/${pipelineId}/gate/${stage}`, {

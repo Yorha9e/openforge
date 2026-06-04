@@ -1,20 +1,22 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../../shared/api';
+import type { ReviewInboxItem } from '../../shared/api';
 import { AppLayout } from '../../shared/AppLayout';
 import { tokens } from '../../shared/design-tokens';
 import { PageSkeleton } from '../../shared/skeleton';
 
-type ReviewInboxItem = {
-  pipeline_id: string;
-  project_id: string;
-  stage: string;
-  created_at?: string;
-  awaiting_since?: string;
-};
-
 export function reviewLinkForItem(item: Pick<ReviewInboxItem, 'project_id' | 'pipeline_id'>): string {
   return `/project/${encodeURIComponent(item.project_id)}/pipeline/${encodeURIComponent(item.pipeline_id)}`;
+}
+
+export function reviewTitleForItem(item: Pick<ReviewInboxItem, 'project_name' | 'pipeline_title' | 'pipeline_id'>): string {
+  const title = item.pipeline_title || item.pipeline_id;
+  return item.project_name ? `${item.project_name} / ${title}` : title;
+}
+
+export function reviewWaitingSinceForItem(item: Pick<ReviewInboxItem, 'awaiting_since' | 'created_at'>): string {
+  return item.awaiting_since || item.created_at;
 }
 
 export default function ReviewInboxPage() {
@@ -56,8 +58,8 @@ export default function ReviewInboxPage() {
               transition: tokens.transition,
             }}>
               <div>
-                <p style={{ fontWeight: 600, margin: '0 0 4px 0', fontSize: 14 }}>Pipeline {item.pipeline_id} &mdash; {item.stage}</p>
-                <p style={{ color: tokens.muted, fontSize: 13, margin: 0 }}>Awaiting since {new Date(item.awaiting_since || item.created_at || '').toLocaleString()}</p>
+                <p style={{ fontWeight: 600, margin: '0 0 4px 0', fontSize: 14 }}>{reviewTitleForItem(item)} &mdash; {item.stage}</p>
+                <p style={{ color: tokens.muted, fontSize: 13, margin: 0 }}>Awaiting since {new Date(reviewWaitingSinceForItem(item)).toLocaleString()}</p>
               </div>
               <Link to={reviewLinkForItem(item)}
                 style={{
