@@ -78,7 +78,18 @@ func handlePendingDeprecations(of *profile.OpenForge) http.HandlerFunc {
 
 func handlePipelineSkills(of *profile.OpenForge) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, []any{})
+		if of.SkillLoader == nil {
+			writeJSON(w, http.StatusOK, []any{})
+			return
+		}
+		skills := of.SkillLoader.GetAllSkills()
+		result := make([]map[string]any, 0, len(skills))
+		for _, s := range skills {
+			if s.Enabled && !s.Deprecated {
+				result = append(result, skillToMap(s))
+			}
+		}
+		writeJSON(w, http.StatusOK, result)
 	}
 }
 

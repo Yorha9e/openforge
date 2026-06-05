@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"openforge/internal/adapter"
+	agentdomain "openforge/internal/agent/domain"
 	authadapter "openforge/internal/auth/adapter"
 	authdomain "openforge/internal/auth/domain"
 	rbacmw "openforge/internal/auth/middleware"
@@ -148,7 +149,7 @@ func RegisterRoutes(of *profile.OpenForge, jwtSvc *service.JWTService, cfg *prof
 	mux.HandleFunc("PUT /api/admin/feature-flags", withAdmin(handleUpdateFeatureFlags(of, ffStore)))
 
 	// Admin: Experiments (admin-only)
-	mux.HandleFunc("GET /api/admin/experiments", withAdmin(handleListExperiments()))
+	mux.HandleFunc("GET /api/admin/experiments", withAdmin(handleListExperiments(of)))
 
 	// Compliance suite: Audit log export (admin-only)
 	mux.HandleFunc("GET /api/admin/audit/export", withAdmin(handleAuditExport(of)))
@@ -1160,11 +1161,35 @@ func handleListBranches(of *profile.OpenForge) http.HandlerFunc {
 	}
 }
 
-func handleListExperiments() http.HandlerFunc {
+func handleListExperiments(of *profile.OpenForge) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// TODO: Implement experiments feature
-		// For now, return empty array
-		writeJSON(w, 200, []any{})
+		if of.ExperimentStore == nil {
+			writeJSON(w, 200, []any{})
+			return
+		}
+		experiments, err := of.ExperimentStore.ListActive(r.Context())
+		if err != nil {
+			writeError(w, 500, sanitizeError(err))
+			return
+		}
+		if experiments == nil {
+			experiments = []*agentdomain.ABExperiment{}
+		}
+		result := make([]map[string]any, 0, len(experiments))
+		for _, exp := range experiments {
+			result = append(result, map[string]any{
+				"id":            exp.ID,
+				"knowledge_id":  exp.KnowledgeID,
+				"cohort_a_ratio": exp.CohortARatio,
+				"status":        exp.Status,
+				"verdict":       exp.Verdict,
+				"p_value":       exp.PValue,
+				"effect_size":   exp.EffectSize,
+				"started_at":    exp.StartedAt,
+				"completed_at":  exp.CompletedAt,
+			})
+		}
+		writeJSON(w, 200, result)
 	}
 }
 
