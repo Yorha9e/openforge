@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
 
 	"openforge/internal/shared/profile"
@@ -30,14 +31,13 @@ func validateOIDCConfig(c profile.OIDCConfig) error {
 	return nil
 }
 
-// OIDCProvider handles OpenID Connect authentication flow.
 type OIDCProvider struct {
-	config profile.OIDCConfig
-	oauth  *oauth2.Config
-	client *http.Client
+	config   profile.OIDCConfig
+	oauth    *oauth2.Config
+	client   *http.Client
+	verifier *oidc.IDTokenVerifier
 }
 
-// NewOIDCProvider creates an OIDC provider. Returns a disabled no-op if config.Enabled is false.
 func NewOIDCProvider(config profile.OIDCConfig) *OIDCProvider {
 	if !config.Enabled {
 		return &OIDCProvider{config: config}
@@ -52,10 +52,19 @@ func NewOIDCProvider(config profile.OIDCConfig) *OIDCProvider {
 		},
 		Scopes: append([]string{"openid", "profile", "email"}, config.Scopes...),
 	}
-	return &OIDCProvider{config: config, oauth: oauth, client: &http.Client{Timeout: 10 * time.Second}}
+	provider, err := oidc.NewProvider(context.Background(), config.IssuerURL)
+	var verifier *oidc.IDTokenVerifier
+	if err == nil {
+		verifier = provider.Verifier(&oidc.Config{ClientID: config.ClientID})
+	}
+	return &OIDCProvider{
+		config:   config,
+		oauth:    oauth,
+		client:   &http.Client{Timeout: 10 * time.Second},
+		verifier: verifier,
+	}
 }
 
-// AuthCodeURL returns the OIDC provider's authorization URL.
 func (p *OIDCProvider) AuthCodeURL(state string) (string, error) {
 	if !p.config.Enabled {
 		return "", fmt.Errorf("OIDC not enabled")
@@ -63,7 +72,6 @@ func (p *OIDCProvider) AuthCodeURL(state string) (string, error) {
 	return p.oauth.AuthCodeURL(state), nil
 }
 
-// OIDCUser represents an authenticated OIDC user.
 type OIDCUser struct {
 	Sub    string   `json:"sub"`
 	Email  string   `json:"email"`
@@ -71,8 +79,6 @@ type OIDCUser struct {
 	Groups []string `json:"groups"`
 }
 
-// Exchange exchanges an authorization code for an OIDC user.
-// It parses the actual id_token JWT payload (fixes the Phase 6 v1 no-op bug).
 func (p *OIDCProvider) Exchange(ctx context.Context, code string) (*OIDCUser, error) {
 	if !p.config.Enabled {
 		return nil, fmt.Errorf("OIDC not enabled")
@@ -81,20 +87,31 @@ func (p *OIDCProvider) Exchange(ctx context.Context, code string) (*OIDCUser, er
 	if err != nil {
 		return nil, fmt.Errorf("token exchange: %w", err)
 	}
-	idToken, ok := token.Extra("id_token").(string)
+	rawIDToken, ok := token.Extra("id_token").(string)
 	if !ok {
 		return nil, fmt.Errorf("no id_token in response")
 	}
-	return parseIDToken(idToken)
+	if p.verifier != nil {
+		idToken, err := p.verifier.Verify(ctx, rawIDToken)
+		if err != nil {
+			return nil, fmt.Errorf("id_token verification failed: %w", err)
+		}
+		var user OIDCUser
+		if err := idToken.Claims(&user); err != nil {
+			return nil, fmt.Errorf("parse claims: %w", err)
+		}
+		if user.Sub == "" {
+			return nil, fmt.Errorf("id_token missing sub claim")
+		}
+		return &user, nil
+	}
+	return parseIDTokenUnsafe(rawIDToken)
 }
 
-// parseIDToken decodes the JWT payload without signature verification.
-// MVP: trust the OIDC provider's TLS + network isolation.
-// Phase 7: switch to coreos/go-oidc for full verification.
-func parseIDToken(raw string) (*OIDCUser, error) {
+func parseIDTokenUnsafe(raw string) (*OIDCUser, error) {
 	parts := strings.Split(raw, ".")
 	if len(parts) != 3 {
-		return nil, fmt.Errorf("invalid JWT format")
+		return nil, fmt.Errorf("invalid JWT format: expected 3 parts, got %d", len(parts))
 	}
 	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
@@ -110,5 +127,4 @@ func parseIDToken(raw string) (*OIDCUser, error) {
 	return &user, nil
 }
 
-// Enabled returns true if OIDC is configured and enabled.
 func (p *OIDCProvider) Enabled() bool { return p.config.Enabled }

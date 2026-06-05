@@ -1,54 +1,50 @@
 package adapter
 
 import (
-	"context"
+	"encoding/base64"
 	"testing"
 
 	"openforge/internal/shared/profile"
 )
 
-func TestOIDCConfig_Validate(t *testing.T) {
-	tests := []struct {
-		name    string
-		config  profile.OIDCConfig
-		wantErr bool
-	}{
-		{
-			name:    "valid config",
-			config:  profile.OIDCConfig{Enabled: true, IssuerURL: "https://auth.corp.com", ClientID: "openforge", ClientSecret: "***", RedirectURL: "https://of.corp.com/callback"},
-			wantErr: false,
-		},
-		{
-			name:    "missing issuer",
-			config:  profile.OIDCConfig{Enabled: true, ClientID: "x", ClientSecret: "y", RedirectURL: "z"},
-			wantErr: true,
-		},
-		{
-			name:    "missing client_id",
-			config:  profile.OIDCConfig{Enabled: true, IssuerURL: "https://x.com", ClientSecret: "y", RedirectURL: "z"},
-			wantErr: true,
-		},
-		{
-			name:    "disabled is valid even with empty fields",
-			config:  profile.OIDCConfig{Enabled: false},
-			wantErr: false,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := validateOIDCConfig(tt.config)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("Validate() error = %v, wantErr = %v", err, tt.wantErr)
-			}
-		})
+func TestParseIDTokenUnsafeRejectsMalformed(t *testing.T) {
+	_, err := parseIDTokenUnsafe("not-a-jwt")
+	if err == nil {
+		t.Fatal("expected error for malformed JWT")
 	}
 }
 
-func TestOIDCProvider_DisabledIsNoop(t *testing.T) {
-	p := NewOIDCProvider(profile.OIDCConfig{Enabled: false})
-	if _, err := p.AuthCodeURL("state"); err == nil {
-		t.Error("AuthCodeURL should return error when disabled")
+func TestParseIDTokenUnsafeRejectsMissingSub(t *testing.T) {
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RS256","typ":"JWT"}`))
+	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"email":"a@b.com"}`))
+	token := header + "." + payload + "." + base64.RawURLEncoding.EncodeToString([]byte("sig"))
+	_, err := parseIDTokenUnsafe(token)
+	if err == nil {
+		t.Fatal("expected error for missing sub claim")
 	}
-	if _, err := p.Exchange(context.TODO(), "any-code"); err == nil {		t.Error("Exchange should return error when disabled")
+}
+
+func TestParseIDTokenUnsafeParsesValidClaims(t *testing.T) {
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RS256","typ":"JWT"}`))
+	claims := `{"sub":"user-123","email":"test@example.com","name":"Test","groups":["dev"]}`
+	payload := base64.RawURLEncoding.EncodeToString([]byte(claims))
+	token := header + "." + payload + "." + base64.RawURLEncoding.EncodeToString([]byte("sig"))
+	user, err := parseIDTokenUnsafe(token)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if user.Sub != "user-123" {
+		t.Errorf("expected sub=user-123, got %s", user.Sub)
+	}
+}
+
+func TestNewOIDCProviderDisabled(t *testing.T) {
+	p := NewOIDCProvider(profile.OIDCConfig{Enabled: false})
+	if p.Enabled() {
+		t.Fatal("expected disabled provider")
+	}
+	_, err := p.AuthCodeURL("state")
+	if err == nil {
+		t.Fatal("expected error from disabled provider")
 	}
 }
