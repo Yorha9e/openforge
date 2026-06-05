@@ -13,6 +13,7 @@ import { DeepSeekProvider } from "./llm/providers/deepseek.js";
 import { OpenAIProvider } from "./llm/providers/openai.js";
 import { TokenMeter } from "./llm/token_meter.js";
 import { ModelSelector } from "./llm/domain/model_selector.js";
+import type { LLMProvider } from "./kernel/interfaces.js";
 
 /** Strip "[Nm]" / "[Nk]" suffix from a model name before sending to the API. */
 function stripSuffix(model: string): string {
@@ -59,6 +60,20 @@ const openai = new OpenAIProvider(
 const tokenMeter = new TokenMeter();
 tokenMeter.start();
 
+const providers: Record<string, LLMProvider> = {
+  anthropic,
+  deepseek,
+  openai,
+};
+
+function resolveProvider(name: string): LLMProvider {
+  const p = providers[name];
+  if (!p) {
+    throw new Error(`Unknown LLM provider: ${name}. Available: ${Object.keys(providers).join(", ")}`);
+  }
+  return p;
+}
+
 // Model selection from env vars (see model_selector.ts for suffix parsing).
 // Env vars follow the Anthropic-compatible template:
 //   ANTHROPIC_MODEL                — default model
@@ -102,11 +117,13 @@ const handler = connectNodeAdapter({
 
         const model = stripSuffix(req.config?.model || defaultModel);
 
-        const result = await anthropic.chat({
+        const providerName = req.config?.provider ?? "anthropic";
+        const provider = resolveProvider(providerName);
+        const result = await provider.chat({
           messages,
           tools,
           config: {
-            provider: req.config?.provider ?? "anthropic",
+            provider: providerName,
             model,
             apiKey,
             maxTokens: req.config?.maxTokens ?? 4096,
@@ -117,7 +134,7 @@ const handler = connectNodeAdapter({
         tokenMeter.record({
           pipelineId: req.pipelineId,
           projectId: "",
-          provider: "anthropic",
+          provider: providerName,
           model,
           inputTokens: result.usage.inputTokens,
           outputTokens: result.usage.outputTokens,
@@ -149,7 +166,9 @@ const handler = connectNodeAdapter({
 
         const model = stripSuffix(req.config?.model || defaultModel);
 
-        for await (const delta of anthropic.chatStream({
+        const providerName = req.config?.provider ?? "anthropic";
+        const provider = resolveProvider(providerName);
+        for await (const delta of provider.chatStream({
           messages,
           config: {
             provider: req.config?.provider ?? "anthropic",
