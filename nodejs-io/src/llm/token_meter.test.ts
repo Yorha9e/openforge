@@ -23,4 +23,31 @@ describe("TokenMeter", () => {
     const a = s.byProvider.find((p) => p.provider === "anthropic");
     expect(a?.inputTokens).toBe(400n);
   });
+
+  it("should cap allRecords at maxRecords and maintain cumulative totals", () => {
+    const totalRecords = 15_000;
+    const inputPerRecord = 10;
+    const outputPerRecord = 5;
+    for (let i = 0; i < totalRecords; i++) {
+      meter.record({
+        pipelineId: "p1",
+        projectId: "",
+        provider: i % 2 === 0 ? "anthropic" : "openai",
+        model: "test",
+        inputTokens: inputPerRecord,
+        outputTokens: outputPerRecord,
+        timestamp: new Date(),
+      });
+    }
+    const s = meter.getSummary();
+    // Cumulative counters must reflect ALL 15000 records
+    expect(s.recordCount).toBe(totalRecords);
+    expect(s.totalInputTokens).toBe(BigInt(totalRecords * inputPerRecord));
+    expect(s.totalOutputTokens).toBe(BigInt(totalRecords * outputPerRecord));
+    // allRecords is capped at 10000 — access via cast for testing
+    const internal = meter as unknown as { allRecords: unknown[] };
+    expect(internal.allRecords.length).toBeLessThanOrEqual(10_000);
+    // byProvider should still work on the retained window
+    expect(s.byProvider.length).toBe(2);
+  });
 });

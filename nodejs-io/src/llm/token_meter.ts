@@ -27,11 +27,22 @@ export class TokenMeter {
   private buffer: TokenRecord[] = [];
   private allRecords: TokenRecord[] = [];
   private readonly maxBufferSize = 500;
+  private readonly maxRecords = 10_000;
   private flushIntervalMs = 5000;
+
+  private cumulativeInput = 0n;
+  private cumulativeOutput = 0n;
+  private cumulativeCount = 0;
 
   record(record: TokenRecord): void {
     this.buffer.push(record);
     this.allRecords.push(record);
+    this.cumulativeInput += BigInt(record.inputTokens);
+    this.cumulativeOutput += BigInt(record.outputTokens);
+    this.cumulativeCount += 1;
+    if (this.allRecords.length > this.maxRecords) {
+      this.allRecords.splice(0, this.allRecords.length - this.maxRecords);
+    }
     if (this.buffer.length >= this.maxBufferSize) {
       this.flush();
     }
@@ -39,11 +50,7 @@ export class TokenMeter {
 
   getSummary(): UsageSummary {
     const providerMap = new Map<string, { input: bigint; output: bigint; count: number }>();
-    let totalInput = 0n;
-    let totalOutput = 0n;
     for (const r of this.allRecords) {
-      totalInput += BigInt(r.inputTokens);
-      totalOutput += BigInt(r.outputTokens);
       const e = providerMap.get(r.provider);
       if (e) {
         e.input += BigInt(r.inputTokens);
@@ -57,7 +64,7 @@ export class TokenMeter {
     for (const [provider, d] of providerMap) {
       byProvider.push({ provider, inputTokens: d.input, outputTokens: d.output, requestCount: d.count });
     }
-    return { totalInputTokens: totalInput, totalOutputTokens: totalOutput, totalCost: 0, byProvider, recordCount: this.allRecords.length };
+    return { totalInputTokens: this.cumulativeInput, totalOutputTokens: this.cumulativeOutput, totalCost: 0, byProvider, recordCount: this.cumulativeCount };
   }
 
   private flush(): void {
