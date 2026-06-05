@@ -67,14 +67,14 @@ P2 最终一致 (可容忍 < 60s 窗口, 精度 > 99%):
 
 | 层级 | 文件数 | 核心完成度 | 关键 Stub 数 |
 |------|--------|-----------|-------------|
-| Go 后端 (A+B 层) | 208 | ~85% | 12 noop (bootstrap.go)，3 安全缺口已关闭 |
+| Go 后端 (A+B 层) | 208 | ~90% | Bootstrap config-aware 路由已实现，代码质量 5 HIGH 已关闭 |
 | React 前端 (C 层) | 87 | ~75% | 8 面板 `() => null` + 3 "Coming Soon" 页面 |
-| Node.js IO (B 层) | 28 | ~85% | 多 Provider 路由 + TokenMeter 聚合查询已实现 |
+| Node.js IO (B 层) | 28 | ~90% | 多 Provider 路由 + TokenMeter 聚合 + 环形缓冲 + chatStream 计量 |
 | 数据库 | 10 迁移 | ~85% | 9 对 up/down, 覆盖 15+ 表 |
 
 **已完成的真实实现**: JWT/RBAC/邀请系统, Pipeline 状态机+Gate+FileLock, QueryEngine(25KB)+MessageBuffer 批量写入, PromptBuilder 三层, SkillLoader, 11 种 Agent 工具, WebSocket 实时通信(心跳+重连), LLM 多提供商(Go Router+Node Provider), 可观测性(熔断/SLO/Prometheus), Learning 反馈循环, AB 实验框架。
 
-**待关闭的高优先级 Stub**: noopContainerRuntime(Phase 4), OIDC JWT 签名未验证(安全高危), LLM chat/chatStream 仅路由 Anthropic, Token 用量查询返回零, 8 面板系统全 stub(Phase 9)。
+**待关闭的高优先级 Stub**: 8 面板系统全 stub(Phase 9), Vault SecretStore 适配器(Phase 5), MinIO ObjectStore 适配器(Phase 5)。
 
 详细清单见各章节 `[v6 审计]` 标注，完整报告见附录 A。
 
@@ -2297,12 +2297,15 @@ RTL (阿拉伯语/希伯来语): CSS logical properties
 > - **✅ JWT Secret 环境变量化**: `config/profiles/minimal.yaml` 改用 `${OF_JWT_SECRET}`，`cmd/server/main.go` 启动时调用 `NewJWTServiceWithValidation` 校验 secret 强度（≥32 字节 + 拒绝已知默认值）。
 > - **已实现**: JWT 签发/验证/刷新 (`auth/service/jwt.go`), bcrypt 密码哈希, RBAC 中间件链 (CORS→SecurityHeaders→Logging→RateLimit→Tenant→Auth), 危险命令阻断 (LocalShellExecutor), WebSocket 首帧认证。
 >
-> **[代码质量审查] 已知改进项** (非阻塞，后续迭代):
-> - OIDC `parseIDTokenUnsafe` 降级路径需更严格的启用条件
-> - `validateOIDCConfig` 应在初始化时调用
-> - JWT `Verify()` 应先验证签名再检查过期
-> - TokenMeter `allRecords` 需添加上限防止内存泄漏
-> - `chatStream` 缺少 token 计量
+> **[代码质量审查] 改进项 — 已关闭** (2026-06-05 Code Quality Closure):
+> - ✅ H-01: JWT `Verify()` 签名优先验证，防止时序侧信道 (`5987353`)
+> - ✅ H-02: `validateOIDCConfig` 接入 `NewOIDCProvider` 构造函数 (`b8ef0fd`)
+> - ✅ H-03: `chatStream` 添加基于字符数的 token 计量 (`06f8010`)
+> - ✅ H-04: TokenMeter `allRecords` 环形缓冲区上限 10k + 累计计数器 (`bc4d863`)
+> - ✅ H-05: `enterprise.yaml` 从 23 行补全到 ~90 行 (`0111147`)
+> - ✅ H-06: Vault SecretStore 降级添加 `slog.Warn` 明确告知 (`8caf468`)
+> - ✅ H-07: `newContainerRuntime` config-aware 路由 (`8caf468`)
+> - ✅ H-08: `newObjectStore` config-aware 路由 (`8caf468`)
 
 ### 6.1 Prompt 注入防护 (三明治架构)
 
