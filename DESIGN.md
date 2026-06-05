@@ -67,14 +67,14 @@ P2 最终一致 (可容忍 < 60s 窗口, 精度 > 99%):
 
 | 层级 | 文件数 | 核心完成度 | 关键 Stub 数 |
 |------|--------|-----------|-------------|
-| Go 后端 (A+B 层) | 208 | ~90% | Bootstrap config-aware 路由已实现，代码质量 5 HIGH 已关闭 |
-| React 前端 (C 层) | 87 | ~75% | 8 面板 `() => null` + 3 "Coming Soon" 页面 |
+| Go 后端 (A+B 层) | 210 | ~93% | Bootstrap config-aware 路由, 代码质量 5 HIGH 已关闭, chat.stop/ChatStream fallback/Settings 持久化/Checkpoint 持久化已完成 |
+| React 前端 (C 层) | 88 | ~82% | 11 面板 React.lazy 接入真实组件 + 3 "Coming Soon" 页面 |
 | Node.js IO (B 层) | 28 | ~90% | 多 Provider 路由 + TokenMeter 聚合 + 环形缓冲 + chatStream 计量 |
-| 数据库 | 10 迁移 | ~85% | 9 对 up/down, 覆盖 15+ 表 |
+| 数据库 | 11 迁移 | ~88% | 11 对 up/down, 覆盖 17+ 表 |
 
-**已完成的真实实现**: JWT/RBAC/邀请系统, Pipeline 状态机+Gate+FileLock, QueryEngine(25KB)+MessageBuffer 批量写入, PromptBuilder 三层, SkillLoader, 11 种 Agent 工具, WebSocket 实时通信(心跳+重连), LLM 多提供商(Go Router+Node Provider), 可观测性(熔断/SLO/Prometheus), Learning 反馈循环, AB 实验框架。
+**已完成的真实实现**: JWT/RBAC/邀请系统, Pipeline 状态机+Gate+FileLock, QueryEngine(25KB)+MessageBuffer 批量写入, PromptBuilder 三层, SkillLoader, 11 种 Agent 工具, WebSocket 实时通信(心跳+重连+chat.stop 流取消), LLM 多提供商(Go Router 含 ChatStream fallback+Node Provider), Settings 持久化到 PG, Checkpoint 持久化(PGCheckpointRepo), 可观测性(熔断/SLO/Prometheus), Learning 反馈循环, AB 实验框架, Experiments/Skills API 真实数据。
 
-**待关闭的高优先级 Stub**: 8 面板系统全 stub(Phase 9), Vault SecretStore 适配器(Phase 5), MinIO ObjectStore 适配器(Phase 5)。
+**待关闭的高优先级 Stub**: Vault SecretStore 适配器(Phase 5), MinIO ObjectStore 适配器(Phase 5), 3 Coming Soon 页面(Feature Flag)。
 
 详细清单见各章节 `[v6 审计]` 标注，完整报告见附录 A。
 
@@ -441,7 +441,7 @@ Pipeline 失败时自动分类，避免学到噪声:
 
 > 5 个独立 spec (QE-01~05) 合并，P0/P1 全闭环。采纳自 Claude Code 源码分析 + Gate 挂起评审 + QE Specs 审核。
 >
-> **[v6 审计]** 实际代码 `internal/agent/domain/query_engine.go` (25.09KB, 841行)。状态机实现 4 态: `IDLE / AWAITING_LLM / AWAITING_TOOLS / AWAITING_USER`。已集成 MessageBuffer 批量写入优化（减少 ~90% DB 操作，5s 或 100 条消息触发 flush）。支持流式事件: delta/tool_start/tool_done/tool_error/context_compress/done/error。ContextCompressor 已实现。CheckpointRepository 接口已定义。
+> **[v6 审计]** 实际代码 `internal/agent/domain/query_engine.go` (25.09KB, 841行)。状态机实现 4 态: `IDLE / AWAITING_LLM / AWAITING_TOOLS / AWAITING_USER`。已集成 MessageBuffer 批量写入优化（减少 ~90% DB 操作，5s 或 100 条消息触发 flush）。支持流式事件: delta/tool_start/tool_done/tool_error/context_compress/done/error。ContextCompressor 已实现。CheckpointRepository 接口已扩展 (Save/LoadLatest/List) 并有 `PGCheckpointRepo` 持久化实现。
 
 Query Engine 管理单次对话(Pipeline 内一个 Stage)的完整生命周期。**状态机 (6 态)**:
 
@@ -1570,13 +1570,13 @@ Router 位于 Go 协调层(非 Node.js IO 层):
 
 ---
 
-## 五、C层: 协作工作台 `[v6 审计: 核心完成, 面板系统 stub]`
+## 五、C层: 协作工作台 `[v6 审计: 核心完成]` `[Runtime Stub Closure: 面板系统已接入]`
 
-> **[v6 审计]** 前端实际代码 `frontend/src/` — 87 文件, 19 功能模块:
+> **[v6 审计]** 前端实际代码 `frontend/src/` — 88 文件, 19 功能模块:
 > - **路由**: 20 条 (App.tsx), 3 级 RBAC 守卫 (ProtectedRoute/AdminRoute/ManagerRoute), 大量 lazy loading
 > - **已完成页面**: login, register, invite, dashboard, project, chat(WebSocket 实时), admin(Runbook/审计/FeatureFlags), cost-dashboard, review_inbox, settings, onboarding, code_review, ab_experiment, requirements
 > - **占位页面**: compliance/monitoring/adr — 均为 "Coming Soon" (Feature Flag 条件注册)
-> - **面板系统**: `panel-registry.ts` 注册 8 面板 (chat/diff/filetree/gate/terminal/topology/test-report/cicd), 组件均为 `() => null` stub — Phase 9
+> - **面板系统**: `panel-registry.ts` 注册 11 面板 (chat/diff/filetree/gate/terminal/topology/test-report/cicd/flowchart/comments/chat-history), 使用 React.lazy 接入 `features/` 真实组件 — ✅ 已完成
 > - **共享层**: api.ts(30+ API 方法, 30s 超时, 401 自动重定向, Electron 兼容), auth.tsx(RBAC 5 角色层级), useWebSocket.ts(指数退避重连 1s→30s), i18n(en-US/zh-CN), theme-provider, a11y
 > - **WebSocket**: 子协议认证 `['openforge.auth', 'bearer.${token}']`, 11 种事件类型, ChatProvider 管理流式聊天状态
 
@@ -2647,7 +2647,7 @@ config/profiles/
 
 | 能力域 | 接口 | minimal 实现 | standard 实现 | enterprise 实现 |
 |--------|------|-------------|--------------|-----------------|
-| 容器编排 | `ContainerRuntime` | ⚠️ `noopContainerRuntime` (适配器存在但 bootstrap 不路由) | ⚠️ `noopContainerRuntime` | ⚠️ `noopContainerRuntime` |
+| 容器编排 | `ContainerRuntime` | ⚠️ `kernel.NoopContainerRuntime` (统一实现, Phase 4 Docker) | ⚠️ `kernel.NoopContainerRuntime` | ⚠️ `kernel.NoopContainerRuntime` |
 | 密钥管理 | `SecretStore` | ✅ `envfileSecretStore` | ✅ `envfileSecretStore` | ⚠️ `envfileSecretStore` (Vault 适配器存在但 bootstrap 未路由) |
 | 对象存储 | `ObjectStore` | ⚠️ `noopObjectStore` | ⚠️ `noopObjectStore` | ⚠️ `noopObjectStore` (MinIO 适配器存在但未路由) |
 | 任务队列 | `TaskQueue` | ⚠️ `noopTaskQueue` | ✅ `RedisTaskQueue` (内存 channel fallback) | ✅ `RedisTaskQueue` |
@@ -3906,27 +3906,27 @@ migrations/
 ## 十八、开发阶段 (重排后: UI 尽早交付) `[v6 审计: Phase 状态更新]`
 
 > **[v6 审计] 实际 Phase 状态** (基于代码扫描，非文档声明):
-> - **Phase 1**: ✅ 已完成 — 208 Go 文件, 11 内部包, 组合根 bootstrap.go(723行), 12 能力域(4 真实+8 stub), LLM Router+Registry, 11 种 Agent 工具, Pipeline 状态机, Gate 审批, FileLock, 学习引擎框架
-> - **Phase 2**: ⚠️ 大部分完成 — Web 聊天界面+WebSocket+JWT Auth+RBAC+邀请系统已实现；安全门禁 3 项待关闭(OIDC签名/Profile签名/JWT Secret)
-> - **Phase 3**: ⚠️ 大部分完成 — Pipeline 状态机+Gate+审批收件箱+Diff 预览已实现；面板系统 8 面板仍为 stub
-> - **Phase 4**: ⚠️ 部分完成 — Token 成本看板已实现, Docker Sandbox 框架存在但功能不完整, noopContainerRuntime 仍活跃
-> - **Phase 5**: ⚠️ 部分完成 — Node.js IO 层已启动(gRPC+3 Provider), 但 chat 仅路由 Anthropic, OpenAI 未接入
+> - **Phase 1**: ✅ 已完成 — 210 Go 文件, 11 内部包, 组合根 bootstrap.go, 12 能力域(4 真实+8 stub), LLM Router+Registry, 11 种 Agent 工具, Pipeline 状态机, Gate 审批, FileLock, 学习引擎框架
+> - **Phase 2**: ✅ 已完成 — Web 聊天界面+WebSocket(含 chat.stop 流取消)+JWT Auth+RBAC+邀请系统+Settings 持久化；安全门禁已关闭
+> - **Phase 3**: ✅ 大部分完成 — Pipeline 状态机+Gate+审批收件箱+Diff 预览+11 面板 React.lazy 接入真实组件+Experiments/Skills API 真实数据
+> - **Phase 4**: ⚠️ 部分完成 — Token 成本看板已实现, Docker Sandbox 框架存在但功能不完整, kernel.NoopContainerRuntime 统一占位
+> - **Phase 5**: ⚠️ 部分完成 — Node.js IO 层已启动(gRPC+3 Provider), ChatStream fallback 已实现, Ollama 死注册已清理
 > - **Phase 6**: ⚠️ 部分完成 — RBAC 5 角色已实现, Feature Flags 已实现, OIDC/SSO 签名验证未启用
 > - **Phase 7**: ⚠️ 框架完成 — LearningService 反馈循环+AB 实验+Retrospective+KnowledgeSnapshot+PreferenceStore+TrajectoryStore 全部有 PG 适配器
-> - **Phase 8**: ⚠️ 框架完成 — 熔断器(BreakerPool)+SLO Tracker+HashRing+PrometheusExporter+LoadShedder 已实现, Redis 任务队列仍走内存 fallback
-> - **Phase 9-10**: ❌ 未开始 — 面板系统全 stub, compliance/monitoring/adr 页面 Coming Soon
+> - **Phase 8**: ⚠️ 框架完成 — 熔断器(BreakerPool)+SLO Tracker+HashRing+PrometheusExporter+LoadShedder+Checkpoint 持久化(PGCheckpointRepo) 已实现, Redis 任务队列仍走内存 fallback
+> - **Phase 9-10**: ❌ 未开始 — compliance/monitoring/adr 页面 Coming Soon
 
 | Phase | 内容 | 用户可见交付 | 组件数 | v6 实际状态 |
 |-------|------|-------------|--------|-------------|
 | **Phase 1** | 项目骨架 + 单 Agent LLM 对话 (CLI) + **12 个能力域 (4 真实 + 8 stub)** + **LLM Router (Go) + 模型注册表 (Anthropic/DeepSeek 直通)** + **BashTool (local-shell)** | CLI: "帮我写 Hello World" + Agent 可执行 ls/grep/npm install (仅 minimal profile) | 1 (Go 单二进制) | ✅ 已完成 |
-| **Phase 2** | 极简 Web 对话界面 (聊天框 + Markdown + 拓扑图) + BFF Auth + Terminal (只读) 面板 | PM 浏览器与 Agent 对话, 查看模块拓扑, 观察命令输出 | 3 (Go + Node/BFF + React) | ⚠️ 安全门禁待关闭 |
-| **Phase 3** | Pipeline 状态机 + 实现阶段 + Diff 预览 (side-by-side) + 行级评论 + 审批收件箱 + **模型切换 UI** | 开发能审查代码, PM 能看阶段进度, 前端切换模型 | 5 | ⚠️ 面板 stub |
+| **Phase 2** | 极简 Web 对话界面 (聊天框 + Markdown + 拓扑图) + BFF Auth + Terminal (只读) 面板 | PM 浏览器与 Agent 对话, 查看模块拓扑, 观察命令输出 | 3 (Go + Node/BFF + React) | ✅ 已完成 |
+| **Phase 3** | Pipeline 状态机 + 实现阶段 + Diff 预览 (side-by-side) + 行级评论 + 审批收件箱 + **模型切换 UI** | 开发能审查代码, PM 能看阶段进度, 前端切换模型 | 5 | ✅ 面板已接入 |
 | **Phase 4** | Docker Sandbox + 自动化测试 + 一键 Staging 部署 + 验证反馈 + **Token 成本看板** | **完整闭环**: 需求→代码→部署→PM 体验→反馈 + 成本可见 | 5 | ⚠️ Sandbox 不完整 |
 | Phase 5 | CSP 多 Agent 协作 + Tool Registry + 嵌入索引 + 子 Pipeline 分支 + **Node.js IO 层启动** + **OpenAI/Gemini 翻译层** | Agent 能力增强 (后台), 模型选择扩展到非 Anthropic 提供商 | 6 | ⚠️ LLM 路由不完整 |
 | Phase 6 | 企业级: RBAC + SSO + 审计 + 沙箱安全 + 二维模块归属 + **CommandExecutor 切换 docker-sandbox** | 多团队可用, 安全合规 | 6 | ⚠️ OIDC 未启用 |
 | Phase 7 | 自学习 4 层 + A/B 测试 + 知识回滚 + 回顾/总结报告 + LLM 优先级调度 (WFQ) | 知识积累, 效率可见提升 | 7 | ⚠️ 框架完成 |
 | Phase 8 | 性能优化 + 高并发 (预热池/分片/读写分离) + 高可用 (熔断/降级/检查点) + DR | 压测通过 SLO, 灾备就绪 | 9 | ⚠️ 框架完成 |
-| Phase 9 | 完整工作台 (需求面板 / CI-CD 看板 / 成本看板 / A/B 实验看板) | 全功能工作台 | 11 | ❌ 面板全 stub |
+| Phase 9 | 完整工作台 (需求面板 / CI-CD 看板 / 成本看板 / A/B 实验看板) | 全功能工作台 | 11 | ⚠️ 面板已接入, Coming Soon 页面待实现 |
 | Phase 9-10 | 可移植 + 扩展 + 合规报告 + Runbook + 离线部署包 + **enterprise 实现交付** | 企业级就绪 | 13 | ❌ 未开始 |
 
 > **C3 修复**: Phase 1 仅交付 minimal 实现 + 接口 stub。enterprise 实现 (Vault HA / K8s Pod API / Multi-Region DR / DockerSandboxExecutor) 随 Phase 9-10 引入，不要求 Phase 1 就写完。
@@ -4008,7 +4008,7 @@ cmd/
 | `EventBus` | **真实** | `goroutineEventBus` — goroutine+channel pub/sub | ✅ 全 profile 相同 |
 | `Cache` | **真实** | `memoryCache` — 内存 map 缓存 | ✅ 全 profile 相同 |
 | `ServiceRegistry` | **真实** | `staticServiceRegistry` — 静态服务发现 | ✅ 全 profile 相同 |
-| `ContainerRuntime` | stub | `noopContainerRuntime` — 空操作 | ❌ minimal→noop |
+| `ContainerRuntime` | stub | `kernel.NoopContainerRuntime` — 统一占位 | ❌ minimal→noop (Phase 4 Docker) |
 | `ObjectStore` | stub | `noopObjectStore` — Get 返回 not found | ❌ (⚠️ minio 适配器存在但未路由) |
 | `TaskQueue` | stub | `noopTaskQueue` — 空操作 | ❌ minimal→noop |
 | `DisasterRecovery` | stub | `noopDR` — 空操作 | ❌ (⚠️ pg_disaster_recovery 适配器存在) |
@@ -4066,31 +4066,31 @@ QueryEngine.Start()
 
 | 层级 | 文件数 | 完成度 | 核心实现 | 高优 Stub |
 |------|--------|--------|---------|-----------|
-| Go 后端 | 208 | ~80% | 六边形架构, 30+ 端点, QueryEngine, 11 工具, LLM Router | 12 noop 能力域, OIDC 签名 |
-| React 前端 | 87 | ~75% | 20 路由, 3 级 RBAC, WebSocket 实时聊天, Admin 面板 | 8 面板 stub, 3 Coming Soon |
+| Go 后端 | 210 | ~93% | 六边形架构, 30+ 端点, QueryEngine, 11 工具, LLM Router+ChatStream fallback, Settings/Checkpoint 持久化 | 8 noop 能力域 |
+| React 前端 | 88 | ~82% | 20 路由, 3 级 RBAC, WebSocket 实时聊天+chat.stop, Admin 面板, 11 面板真实组件 | 3 Coming Soon |
 | Node.js IO | 28 | ~70% | gRPC 5 RPC, 3 LLM Provider, Proto 生成 | chat 仅 Anthropic, token 查询零 |
-| 数据库 | 18 SQL | ~85% | 15+ 表, 连接池, 批量写入, WORM 审计 | 无 002 迁移 |
+| 数据库 | 22 SQL | ~88% | 17+ 表, 连接池, 批量写入, WORM 审计, user_settings, checkpoint | — |
 
-### A.2 Stub/Noop 实现清单 (21 项)
+### A.2 Stub/Noop 实现清单 (17 项)
 
 **高优先级（影响核心功能）:**
 
 | # | 位置 | Stub | 影响 | 计划 |
 |---|------|------|------|------|
-| 1 | `bootstrap.go` | `noopContainerRuntime` | 容器管理空操作 | Phase 4 |
+| 1 | `kernel/interfaces.go` | `NoopContainerRuntime` (统一实现) | 容器管理占位 | Phase 4 |
 | 2 | `bootstrap.go` | `noopObjectStore` | 对象存储 not found | Phase 5+ |
 | 3 | `bootstrap.go` | `noopTaskQueue` | 任务队列空操作 | Phase 5+ |
 | 4 | `bootstrap.go` | `noopDR` | 灾难恢复空操作 | Phase 8+ |
 | 5 | `bootstrap.go` | `noopLB` | 负载均衡空操作 | Phase 8+ |
 | 6 | ~~`server.ts`~~ | ~~`getTokenUsage`~~ | ✅ 已对接 TokenMeter | — |
-| 7 | ~~`server.ts`~~ | ~~chat/chatStream~~ | ✅ 多 Provider 路由 | — |
+| 7 | ~~`server.ts`~~ | ~~chat/chatStream~~ | ✅ 多 Provider 路由 + ChatStream fallback | — |
 | 8 | ~~`oidc_provider.go`~~ | ~~JWT 签名验证~~ | ✅ coreos/go-oidc | — |
 
 **中优先级（影响用户体验）:**
 
 | # | 位置 | Stub | 影响 | 计划 |
 |---|------|------|------|------|
-| 9 | `panel-registry.ts` | 8 面板 `() => null` | 工作台不可用 | Phase 9 |
+| ~~9~~ | ~~`panel-registry.ts`~~ | ~~8 面板 `() => null`~~ | ✅ 11 面板 React.lazy 接入真实组件 | — |
 | 10-12 | `compliance/monitoring/adr` | Coming Soon | 3 页面占位 | Feature Flag |
 | 13 | `prompt_builder.go` | `ProjectPrefsLoader` | 返回空字符串 | Phase 6 |
 | 14 | `bootstrap.go` | `stdoutTelemetry` | noopSpan | Phase 8+ |
