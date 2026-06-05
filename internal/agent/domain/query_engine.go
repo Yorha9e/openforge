@@ -45,9 +45,11 @@ type PipelineContext struct {
 	UserRole       string
 }
 
-// CheckpointRepository saves checkpoints for recovery.
+// CheckpointRepository persists checkpoints for state recovery.
 type CheckpointRepository interface {
 	Save(ctx context.Context, cp *Checkpoint) error
+	LoadLatest(ctx context.Context, pipelineID string) (*Checkpoint, error)
+	List(ctx context.Context, pipelineID string) ([]*Checkpoint, error)
 }
 
 // CheckpointData holds serialized state for recovery.
