@@ -99,13 +99,38 @@ func (r *Router) chatWithFallback(ctx context.Context, entry *ModelEntry, req Ch
 	return ChatResponse{}, fmt.Errorf("all providers exhausted: %w", err)
 }
 
-func (r *Router) ChatStream(ctx context.Context, req port.ChatRequest) (<-chan port.StreamChunk, error) {
-	entry, err := r.registry.Lookup(req.Config.Model)
+func (r *Router) streamWithFallback(ctx context.Context, entry *ModelEntry, req ChatRequest) (<-chan StreamChunk, error) {
+	provider, err := r.getProvider(entry)
 	if err != nil {
 		return nil, err
 	}
 
-	provider, err := r.getProvider(entry)
+	ch, err := provider.ChatStream(ctx, req)
+	if err == nil {
+		return ch, nil
+	}
+
+	for _, fbAlias := range entry.Fallback {
+		fbEntry, lookupErr := r.registry.Lookup(fbAlias)
+		if lookupErr != nil {
+			continue
+		}
+		fbReq := req
+		fbReq.Model = fbEntry.ModelID
+		fbProvider, fbErr := r.getProvider(fbEntry)
+		if fbErr != nil {
+			continue
+		}
+		fbCh, fbErr := fbProvider.ChatStream(ctx, fbReq)
+		if fbErr == nil {
+			return fbCh, nil
+		}
+	}
+	return nil, fmt.Errorf("all stream providers exhausted: %w", err)
+}
+
+func (r *Router) ChatStream(ctx context.Context, req port.ChatRequest) (<-chan port.StreamChunk, error) {
+	entry, err := r.registry.Lookup(req.Config.Model)
 	if err != nil {
 		return nil, err
 	}
@@ -118,7 +143,7 @@ func (r *Router) ChatStream(ctx context.Context, req port.ChatRequest) (<-chan p
 		MaxTokens:    req.Config.MaxTokens,
 	}
 
-	streamCh, err := provider.ChatStream(ctx, llmReq)
+	streamCh, err := r.streamWithFallback(ctx, entry, llmReq)
 	if err != nil {
 		return nil, err
 	}
