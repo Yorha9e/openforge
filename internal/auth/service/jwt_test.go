@@ -59,3 +59,18 @@ func TestJWTVerifyTampered(t *testing.T) {
 		t.Fatal("expected error for tampered token")
 	}
 }
+
+func TestNewJWTServiceRejectsWeakSecret(t *testing.T) {
+	_, err := NewJWTServiceWithValidation("short", 1*time.Hour, 24*time.Hour)
+	if err == nil {
+		t.Fatal("expected error for weak secret")
+	}
+	_, err = NewJWTServiceWithValidation("dev-secret-change-in-production-32b!", 1*time.Hour, 24*time.Hour)
+	if err == nil {
+		t.Fatal("expected error for known default secret")
+	}
+	_, err = NewJWTServiceWithValidation("this-is-a-strong-secret-at-least-32-bytes-long", 1*time.Hour, 24*time.Hour)
+	if err != nil {
+		t.Fatalf("unexpected error for strong secret: %v", err)
+	}
+}

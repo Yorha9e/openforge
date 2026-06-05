@@ -99,3 +99,16 @@ func (s *JWTService) sign(data string) string {
 	mac.Write([]byte(data))
 	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }
+
+const knownDefaultSecret = "dev-secret-change-in-production-32b!"
+const minSecretLen = 32
+
+func NewJWTServiceWithValidation(secret string, accessTTL, refreshTTL time.Duration) (*JWTService, error) {
+	if len(secret) < minSecretLen {
+		return nil, fmt.Errorf("JWT secret too short: must be >= %d bytes, got %d", minSecretLen, len(secret))
+	}
+	if secret == knownDefaultSecret {
+		return nil, fmt.Errorf("JWT secret is the known default — set OF_JWT_SECRET env var")
+	}
+	return NewJWTService(secret, accessTTL, refreshTTL), nil
+}

@@ -45,7 +45,14 @@ func main() {
 	if refreshTTL == 0 {
 		refreshTTL = 24 * time.Hour
 	}
-	jwtSvc := service.NewJWTService(cfg.JWT.Secret, accessTTL, refreshTTL)
+	jwtSecret := cfg.JWT.Secret
+	if envSecret := os.Getenv("OF_JWT_SECRET"); envSecret != "" {
+		jwtSecret = envSecret
+	}
+	jwtSvc, err := service.NewJWTServiceWithValidation(jwtSecret, accessTTL, refreshTTL)
+	if err != nil {
+		log.Fatalf("JWT configuration error: %v", err)
+	}
 
 	mux := server.RegisterRoutes(of, jwtSvc, cfg)
 
