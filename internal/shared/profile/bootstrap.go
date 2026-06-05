@@ -407,11 +407,12 @@ func newSecretStore(cfg *Config) kernel.SecretStore {
 	switch cfg.SecretStore {
 	case "envfile":
 		stores = []kernel.SecretStore{newEnvfileSecretStore()}
-	case "vault-sidecar", "vault-ha":
-		// Future: primary = Vault, fallback = env for local dev convenience.
-		stores = []kernel.SecretStore{
-			newEnvfileSecretStore(), // fallback only until real Vault adapter exists
-		}
+	case "vault-sidecar":
+		slog.Warn("secret_store: vault-sidecar selected but Vault adapter not yet implemented; falling back to envfile")
+		stores = []kernel.SecretStore{newEnvfileSecretStore()}
+	case "vault-ha":
+		slog.Warn("secret_store: vault-ha selected but Vault adapter not yet implemented; falling back to envfile")
+		stores = []kernel.SecretStore{newEnvfileSecretStore()}
 	default:
 		stores = []kernel.SecretStore{newEnvfileSecretStore()}
 	}
@@ -425,7 +426,15 @@ func newSecretStore(cfg *Config) kernel.SecretStore {
 
 type noopContainerRuntime struct{}
 
-func newContainerRuntime(cfg *Config) kernel.ContainerRuntime { return &noopContainerRuntime{} }
+func newContainerRuntime(cfg *Config) kernel.ContainerRuntime {
+	switch cfg.ContainerRuntime {
+	case "docker":
+		slog.Info("container_runtime: docker selected (adapter pending Phase 5)")
+		return &noopContainerRuntime{}
+	default:
+		return &noopContainerRuntime{}
+	}
+}
 
 func (r *noopContainerRuntime) Create(_ context.Context, spec kernel.ContainerSpec) (kernel.Container, error) {
 	return kernel.Container{}, fmt.Errorf("container runtime not available in minimal profile (image=%q)", spec.Image)
@@ -441,7 +450,18 @@ func (r *noopContainerRuntime) List(_ context.Context) ([]kernel.Container, erro
 
 type noopObjectStore struct{}
 
-func newObjectStore(cfg *Config) kernel.ObjectStore { return &noopObjectStore{} }
+func newObjectStore(cfg *Config) kernel.ObjectStore {
+	switch cfg.ObjectStore {
+	case "minio":
+		slog.Info("object_store: minio selected (adapter pending Phase 5)")
+		return &noopObjectStore{}
+	case "s3":
+		slog.Info("object_store: s3 selected (adapter pending Phase 5)")
+		return &noopObjectStore{}
+	default:
+		return &noopObjectStore{}
+	}
+}
 
 func (s *noopObjectStore) Put(_ context.Context, key string, _ io.Reader) error {
 	return nil
