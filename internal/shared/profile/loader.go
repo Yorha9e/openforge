@@ -1,6 +1,8 @@
 package profile
 
 import (
+	"crypto/ed25519"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"time"
@@ -232,32 +234,42 @@ func Load(path string, verifySignature bool) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read profile %s: %w", path, err)
 	}
-
 	if verifySignature {
-		sigPath := path + ".sig"
-		sig, err := os.ReadFile(sigPath)
-		if err != nil {
-			return nil, fmt.Errorf("read signature %s: %w", sigPath, err)
+		if err := verifyEd25519Signature(path, data); err != nil {
+			return nil, fmt.Errorf("signature verification: %w", err)
 		}
-		pubKey := os.Getenv("OF_PROFILE_PUBKEY")
-		if pubKey == "" {
-			return nil, fmt.Errorf("OF_PROFILE_PUBKEY not set")
-		}
-		_ = sig
-		_ = pubKey
-		// Ed25519 profile signature verification deferred to Phase 8 (per DESIGN.md §6.5).
 	}
-
+	expanded := os.ExpandEnv(string(data))
 	var cfg Config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
+	if err := yaml.Unmarshal([]byte(expanded), &cfg); err != nil {
 		return nil, fmt.Errorf("parse profile: %w", err)
 	}
-
 	if err := cfg.validate(); err != nil {
 		return nil, fmt.Errorf("validate profile: %w", err)
 	}
-
 	return &cfg, nil
+}
+
+func verifyEd25519Signature(path string, data []byte) error {
+	sig, err := os.ReadFile(path + ".sig")
+	if err != nil {
+		return fmt.Errorf("read signature: %w", err)
+	}
+	pubKeyHex := os.Getenv("OF_PROFILE_PUBKEY")
+	if pubKeyHex == "" {
+		return fmt.Errorf("OF_PROFILE_PUBKEY not set")
+	}
+	pubKeyBytes, err := hex.DecodeString(pubKeyHex)
+	if err != nil {
+		return fmt.Errorf("decode public key: %w", err)
+	}
+	if len(pubKeyBytes) != ed25519.PublicKeySize {
+		return fmt.Errorf("invalid public key size: got %d", len(pubKeyBytes))
+	}
+	if !ed25519.Verify(ed25519.PublicKey(pubKeyBytes), data, sig) {
+		return fmt.Errorf("Ed25519 signature verification failed")
+	}
+	return nil
 }
 
 // validate checks that required fields are present and recognized.
