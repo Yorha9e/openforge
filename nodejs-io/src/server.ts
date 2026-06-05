@@ -222,11 +222,18 @@ const handler = connectNodeAdapter({
 
       // ---- GetTokenUsage (unary) -------------------------------------------
       getTokenUsage: async () => {
+        const summary = tokenMeter.getSummary();
         return create(GetTokenUsageResponseSchema, {
-          totalInputTokens: BigInt(0),
-          totalOutputTokens: BigInt(0),
-          totalCost: 0,
-          byProvider: [],
+          totalInputTokens: summary.totalInputTokens,
+          totalOutputTokens: summary.totalOutputTokens,
+          totalCost: summary.totalCost,
+          byProvider: summary.byProvider.map((p) => ({
+            provider: p.provider,
+            inputTokens: p.inputTokens,
+            outputTokens: p.outputTokens,
+            requestCount: BigInt(p.requestCount),
+            cost: 0,
+          })),
         });
       },
     });
