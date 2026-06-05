@@ -79,6 +79,7 @@ type OpenForge struct {
 	FileLockStore   *pipelineadapter.PGFileLockStore
 	FileLockSvc     *service.FileLockService
 	SettingsRepo    *adapter.PGSettingsRepo
+	CheckpointRepo  *adapter.PGCheckpointRepo
 	DB              *sql.DB
 	DepCache        *adapter.DependencyCache
 	DataLifecycle   *compliance.DataLifecycle // G16: compliance data lifecycle manager
@@ -229,6 +230,7 @@ func Bootstrap(cfg *Config) (*OpenForge, error) {
 	of.FileLockStore = pipelineadapter.NewPGFileLockStore(db)
 	of.FileLockSvc = service.NewFileLockService(of.FileLockStore)
 	of.SettingsRepo = adapter.NewPGSettingsRepo(db)
+	of.CheckpointRepo = adapter.NewPGCheckpointRepo(db)
 	of.PipelineSvc = service.NewPipelineService(of.PipelineRepo)
 	of.GateSvc = service.NewGateService(of.PipelineRepo, of.PipelineRepo)
 
@@ -426,26 +428,14 @@ func newSecretStore(cfg *Config) kernel.SecretStore {
 
 // --- ContainerRuntime ------------------------------------------------------
 
-type noopContainerRuntime struct{}
-
 func newContainerRuntime(cfg *Config) kernel.ContainerRuntime {
 	switch cfg.ContainerRuntime {
 	case "docker":
 		slog.Info("container_runtime: docker selected (adapter pending Phase 5)")
-		return &noopContainerRuntime{}
+		return &kernel.NoopContainerRuntime{}
 	default:
-		return &noopContainerRuntime{}
+		return &kernel.NoopContainerRuntime{}
 	}
-}
-
-func (r *noopContainerRuntime) Create(_ context.Context, spec kernel.ContainerSpec) (kernel.Container, error) {
-	return kernel.Container{}, fmt.Errorf("container runtime not available in minimal profile (image=%q)", spec.Image)
-}
-func (r *noopContainerRuntime) Start(_ context.Context, id string) error  { return nil }
-func (r *noopContainerRuntime) Stop(_ context.Context, id string) error   { return nil }
-func (r *noopContainerRuntime) Remove(_ context.Context, id string) error { return nil }
-func (r *noopContainerRuntime) List(_ context.Context) ([]kernel.Container, error) {
-	return nil, nil
 }
 
 // --- ObjectStore -----------------------------------------------------------

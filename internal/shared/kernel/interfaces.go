@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"time"
 )
@@ -88,6 +89,17 @@ type ContainerRuntime interface {
 	Remove(ctx context.Context, id string) error
 	List(ctx context.Context) ([]Container, error)
 }
+
+// NoopContainerRuntime is a placeholder for profiles without container support.
+type NoopContainerRuntime struct{}
+
+func (r *NoopContainerRuntime) Create(_ context.Context, spec ContainerSpec) (Container, error) {
+	return Container{}, fmt.Errorf("container runtime not available (image=%q)", spec.Image)
+}
+func (r *NoopContainerRuntime) Start(_ context.Context, _ string) error   { return nil }
+func (r *NoopContainerRuntime) Stop(_ context.Context, _ string) error    { return nil }
+func (r *NoopContainerRuntime) Remove(_ context.Context, _ string) error  { return nil }
+func (r *NoopContainerRuntime) List(_ context.Context) ([]Container, error) { return nil, nil }
 
 // SecretStore reads secrets.
 type SecretStore interface {

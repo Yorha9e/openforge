@@ -61,7 +61,7 @@ func NewSandboxProvider(cfg SandboxProviderConfig) *SandboxProvider {
 	}
 	p := &SandboxProvider{
 		cfg:     cfg,
-		runtime: newNoopRuntime(),
+		runtime: &kernel.NoopContainerRuntime{},
 		stopCh:  make(chan struct{}),
 	}
 	go p.reaper()
@@ -192,17 +192,4 @@ func (p *SandboxProvider) evictExpiredLocked(now time.Time) {
 	p.warm = kept
 }
 
-// noopRuntime is a placeholder until Docker SDK integration (post-Phase 4).
-type noopRuntime struct{}
 
-func newNoopRuntime() kernel.ContainerRuntime { return &noopRuntime{} }
-
-func (r *noopRuntime) Create(ctx context.Context, spec kernel.ContainerSpec) (kernel.Container, error) {
-	return kernel.Container{ID: "noop"}, nil
-}
-func (r *noopRuntime) Start(ctx context.Context, id string) error  { return nil }
-func (r *noopRuntime) Stop(ctx context.Context, id string) error   { return nil }
-func (r *noopRuntime) Remove(ctx context.Context, id string) error { return nil }
-func (r *noopRuntime) List(ctx context.Context) ([]kernel.Container, error) {
-	return nil, nil
-}

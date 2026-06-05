@@ -50,11 +50,6 @@ func (r *Registry) seedDefaults() {
 		BaseURL: "https://api.deepseek.com/anthropic", KeyRef: "ANTHROPIC_AUTH_TOKEN",
 		FeatureFlags: FeatureFlags{SupportsToolUse: true, SupportsStreaming: true, MaxTokens: 128000},
 	})
-	r.Register(&ModelEntry{
-		Alias: "ollama", Provider: "ollama", ModelID: "qwen3",
-		BaseURL: "http://localhost:11434", KeyRef: "",
-		FeatureFlags: FeatureFlags{SupportsToolUse: true, SupportsStreaming: true, MaxTokens: 32000},
-	})
 }
 
 func (r *Registry) Lookup(alias string) (*ModelEntry, error) {
