@@ -164,10 +164,17 @@ const handler = connectNodeAdapter({
           content: m.content.map((b: any) => b.text ?? "").join(""),
         }));
 
+        // Estimate input tokens from character count (~4 chars per token)
+        const inputChars = messages.reduce(
+          (sum: number, m: { content: string }) => sum + m.content.length,
+          0,
+        );
+
         const model = stripSuffix(req.config?.model || defaultModel);
 
         const providerName = req.config?.provider ?? "anthropic";
         const provider = resolveProvider(providerName);
+        let outputChars = 0;
         for await (const delta of provider.chatStream({
           messages,
           config: {
@@ -178,6 +185,7 @@ const handler = connectNodeAdapter({
             temperature: req.config?.temperature,
           },
         })) {
+          outputChars += delta.length;
           yield create(LLMChatStreamChunkSchema, {
             eventType: "delta",
             delta: create(LLMContentBlockSchema, {
@@ -186,6 +194,17 @@ const handler = connectNodeAdapter({
             }),
           });
         }
+
+        // Record token usage with char-based estimation
+        tokenMeter.record({
+          pipelineId: req.pipelineId,
+          projectId: "",
+          provider: providerName,
+          model,
+          inputTokens: Math.ceil(inputChars / 4),
+          outputTokens: Math.ceil(outputChars / 4),
+          timestamp: new Date(),
+        });
 
         yield create(LLMChatStreamChunkSchema, {
           eventType: "done",
