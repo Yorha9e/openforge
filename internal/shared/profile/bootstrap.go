@@ -78,6 +78,7 @@ type OpenForge struct {
 	CanarySvc       *service.CanaryService
 	FileLockStore   *pipelineadapter.PGFileLockStore
 	FileLockSvc     *service.FileLockService
+	SettingsRepo    *adapter.PGSettingsRepo
 	DB              *sql.DB
 	DepCache        *adapter.DependencyCache
 	DataLifecycle   *compliance.DataLifecycle // G16: compliance data lifecycle manager
@@ -227,6 +228,7 @@ func Bootstrap(cfg *Config) (*OpenForge, error) {
 	of.GateRequestRepo = pipelineadapter.NewPGGateRequestRepository(db)
 	of.FileLockStore = pipelineadapter.NewPGFileLockStore(db)
 	of.FileLockSvc = service.NewFileLockService(of.FileLockStore)
+	of.SettingsRepo = adapter.NewPGSettingsRepo(db)
 	of.PipelineSvc = service.NewPipelineService(of.PipelineRepo)
 	of.GateSvc = service.NewGateService(of.PipelineRepo, of.PipelineRepo)
 

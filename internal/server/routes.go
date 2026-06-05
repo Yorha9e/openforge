@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"openforge/internal/adapter"
 	authadapter "openforge/internal/auth/adapter"
 	authdomain "openforge/internal/auth/domain"
 	rbacmw "openforge/internal/auth/middleware"
@@ -135,8 +136,8 @@ func RegisterRoutes(of *profile.OpenForge, jwtSvc *service.JWTService, cfg *prof
 	mux.HandleFunc("GET /api/models", withRole("observer", handleListModels(of)))
 
 	// Settings (auth)
-	mux.HandleFunc("GET /api/settings", authMw(handleGetSettings()))
-	mux.HandleFunc("PUT /api/settings", authMw(handleUpdateSettings()))
+	mux.HandleFunc("GET /api/settings", authMw(handleGetSettings(of)))
+	mux.HandleFunc("PUT /api/settings", authMw(handleUpdateSettings(of)))
 
 	// Admin status (admin)
 	mux.HandleFunc("GET /api/admin/status", withAdmin(handleAdminStatus(of, cfg)))
@@ -919,35 +920,90 @@ var defaultSettings = userSettings{
 	},
 }
 
-// Session-scoped settings store (in-memory, lost on restart — Phase 7: persist to DB).
-var settingsStore = map[string]*userSettings{}
-
-func getSettingsStore(userID string) *userSettings {
-	if s, ok := settingsStore[userID]; ok {
-		return s
+func loadSettingsFromDB(ctx context.Context, repo *adapter.PGSettingsRepo, userID string) (*userSettings, error) {
+	if repo == nil {
+		cp := defaultSettings
+		cp.Notifications.Channels = make([]string, len(defaultSettings.Notifications.Channels))
+		copy(cp.Notifications.Channels, defaultSettings.Notifications.Channels)
+		return &cp, nil
 	}
-	cp := defaultSettings
-	cp.Notifications.Channels = make([]string, len(defaultSettings.Notifications.Channels))
-	copy(cp.Notifications.Channels, defaultSettings.Notifications.Channels)
-	settingsStore[userID] = &cp
-	return &cp
+	row, err := repo.Get(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	if row == nil {
+		cp := defaultSettings
+		cp.Notifications.Channels = make([]string, len(defaultSettings.Notifications.Channels))
+		copy(cp.Notifications.Channels, defaultSettings.Notifications.Channels)
+		return &cp, nil
+	}
+	var s userSettings
+	if err := json.Unmarshal(row.Notifications, &s.Notifications); err != nil {
+		return nil, fmt.Errorf("unmarshal notifications: %w", err)
+	}
+	if err := json.Unmarshal(row.Layout, &s.Layout); err != nil {
+		return nil, fmt.Errorf("unmarshal layout: %w", err)
+	}
+	if err := json.Unmarshal(row.Language, &s.Language); err != nil {
+		return nil, fmt.Errorf("unmarshal language: %w", err)
+	}
+	if err := json.Unmarshal(row.Project, &s.Project); err != nil {
+		return nil, fmt.Errorf("unmarshal project: %w", err)
+	}
+	return &s, nil
 }
 
-func handleGetSettings() http.HandlerFunc {
+func settingsToRow(userID string, s *userSettings) (*adapter.UserSettingsRow, error) {
+	notif, err := json.Marshal(s.Notifications)
+	if err != nil {
+		return nil, fmt.Errorf("marshal notifications: %w", err)
+	}
+	layout, err := json.Marshal(s.Layout)
+	if err != nil {
+		return nil, fmt.Errorf("marshal layout: %w", err)
+	}
+	lang, err := json.Marshal(s.Language)
+	if err != nil {
+		return nil, fmt.Errorf("marshal language: %w", err)
+	}
+	proj, err := json.Marshal(s.Project)
+	if err != nil {
+		return nil, fmt.Errorf("marshal project: %w", err)
+	}
+	return &adapter.UserSettingsRow{
+		UserID:        userID,
+		Notifications: notif,
+		Layout:        layout,
+		Language:      lang,
+		Project:       proj,
+	}, nil
+}
+
+func handleGetSettings(of *profile.OpenForge) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		s := getSettingsStore(UserIDFromContext(r.Context()))
+		userID := UserIDFromContext(r.Context())
+		s, err := loadSettingsFromDB(r.Context(), of.SettingsRepo, userID)
+		if err != nil {
+			writeError(w, 500, "failed to load settings")
+			return
+		}
 		writeJSON(w, 200, s)
 	}
 }
 
-func handleUpdateSettings() http.HandlerFunc {
+func handleUpdateSettings(of *profile.OpenForge) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req userSettings
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, 400, "invalid body")
 			return
 		}
-		s := getSettingsStore(UserIDFromContext(r.Context()))
+		userID := UserIDFromContext(r.Context())
+		s, err := loadSettingsFromDB(r.Context(), of.SettingsRepo, userID)
+		if err != nil {
+			writeError(w, 500, "failed to load settings")
+			return
+		}
 
 		// Update notifications if provided
 		if req.Notifications.EmailEnabled || req.Notifications.WebhookURL != "" || len(req.Notifications.Channels) > 0 {
@@ -976,6 +1032,19 @@ func handleUpdateSettings() http.HandlerFunc {
 		// Update project settings if provided
 		if req.Project.WorkDir != "" {
 			s.Project.WorkDir = req.Project.WorkDir
+		}
+
+		// Persist to DB
+		if of.SettingsRepo != nil {
+			row, err := settingsToRow(userID, s)
+			if err != nil {
+				writeError(w, 500, "failed to serialize settings")
+				return
+			}
+			if err := of.SettingsRepo.Upsert(r.Context(), row); err != nil {
+				writeError(w, 500, "failed to save settings")
+				return
+			}
 		}
 
 		writeJSON(w, 200, s)
