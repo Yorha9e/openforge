@@ -1,6 +1,7 @@
 package service
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -57,6 +58,36 @@ func TestJWTVerifyTampered(t *testing.T) {
 	_, err := svc.Verify(tampered)
 	if err == nil {
 		t.Fatal("expected error for tampered token")
+	}
+}
+
+func TestVerifyRejectsInvalidSignatureBeforeExpiry(t *testing.T) {
+	// Create an expired token
+	svc := NewJWTService("test-secret-key-32-bytes-long!!", 1*time.Millisecond, 24*time.Hour)
+	token, _ := svc.Issue("u@t.com", "dev", "p1")
+	time.Sleep(5 * time.Millisecond)
+
+	// Tamper the signature so it's both expired AND has invalid sig
+	parts := strings.Split(token.AccessToken, ".")
+	if len(parts) != 3 {
+		t.Fatal("unexpected token format")
+	}
+	// Replace last char of signature to invalidate it
+	sig := parts[2]
+	if sig[len(sig)-1] == 'A' {
+		sig = sig[:len(sig)-1] + "B"
+	} else {
+		sig = sig[:len(sig)-1] + "A"
+	}
+	tamperedToken := parts[0] + "." + parts[1] + "." + sig
+
+	_, err := svc.Verify(tamperedToken)
+	if err == nil {
+		t.Fatal("expected error for expired token with invalid signature")
+	}
+	// Must return "invalid signature", NOT "token expired"
+	if !strings.Contains(err.Error(), "invalid signature") {
+		t.Errorf("expected 'invalid signature' error, got: %q", err.Error())
 	}
 }
 

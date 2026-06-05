@@ -65,6 +65,12 @@ func (s *JWTService) Verify(token string) (*Claims, error) {
 	if len(parts) != 3 {
 		return nil, fmt.Errorf("invalid token format")
 	}
+	// 1. Verify signature first (prevent timing side-channel)
+	expectedSig := s.sign(parts[0] + "." + parts[1])
+	if !hmac.Equal([]byte(parts[2]), []byte(expectedSig)) {
+		return nil, fmt.Errorf("invalid signature")
+	}
+	// 2. Only after valid signature, decode and check expiry
 	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
 		return nil, fmt.Errorf("decode payload: %w", err)
@@ -75,10 +81,6 @@ func (s *JWTService) Verify(token string) (*Claims, error) {
 	}
 	if time.Now().UTC().UnixMilli() > claims.ExpiresAt {
 		return nil, fmt.Errorf("token expired")
-	}
-	expectedSig := s.sign(parts[0] + "." + parts[1])
-	if !hmac.Equal([]byte(parts[2]), []byte(expectedSig)) {
-		return nil, fmt.Errorf("invalid signature")
 	}
 	return &claims, nil
 }
