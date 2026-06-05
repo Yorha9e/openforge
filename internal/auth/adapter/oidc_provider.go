@@ -38,9 +38,12 @@ type OIDCProvider struct {
 	verifier *oidc.IDTokenVerifier
 }
 
-func NewOIDCProvider(config profile.OIDCConfig) *OIDCProvider {
+func NewOIDCProvider(config profile.OIDCConfig) (*OIDCProvider, error) {
+	if err := validateOIDCConfig(config); err != nil {
+		return nil, fmt.Errorf("oidc config: %w", err)
+	}
 	if !config.Enabled {
-		return &OIDCProvider{config: config}
+		return &OIDCProvider{config: config}, nil
 	}
 	oauth := &oauth2.Config{
 		ClientID:     config.ClientID,
@@ -62,7 +65,7 @@ func NewOIDCProvider(config profile.OIDCConfig) *OIDCProvider {
 		oauth:    oauth,
 		client:   &http.Client{Timeout: 10 * time.Second},
 		verifier: verifier,
-	}
+	}, nil
 }
 
 func (p *OIDCProvider) AuthCodeURL(state string) (string, error) {

@@ -171,9 +171,13 @@ func RegisterRoutes(of *profile.OpenForge, jwtSvc *service.JWTService, cfg *prof
 
 	// OIDC (conditionally registered when auth.provider is "oidc")
 	if cfg.Auth.Provider == "oidc" {
-		oidcProvider := authadapter.NewOIDCProvider(cfg.Auth.OIDC)
-		mux.HandleFunc("GET /api/auth/oidc/login", handleOIDCLogin(oidcProvider))
-		mux.HandleFunc("GET /api/auth/oidc/callback", handleOIDCCallback(oidcProvider, jwtSvc, authRepo))
+		oidcProvider, err := authadapter.NewOIDCProvider(cfg.Auth.OIDC)
+		if err != nil {
+			slog.Warn("OIDC disabled due to invalid config", "error", err)
+		} else {
+			mux.HandleFunc("GET /api/auth/oidc/login", handleOIDCLogin(oidcProvider))
+			mux.HandleFunc("GET /api/auth/oidc/callback", handleOIDCCallback(oidcProvider, jwtSvc, authRepo))
+		}
 	}
 
 	// WebSocket (auth via first-frame protocol, not HTTP header)

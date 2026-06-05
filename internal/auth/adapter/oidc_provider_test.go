@@ -39,12 +39,26 @@ func TestParseIDTokenUnsafeParsesValidClaims(t *testing.T) {
 }
 
 func TestNewOIDCProviderDisabled(t *testing.T) {
-	p := NewOIDCProvider(profile.OIDCConfig{Enabled: false})
+	p, err := NewOIDCProvider(profile.OIDCConfig{Enabled: false})
+	if err != nil {
+		t.Fatalf("unexpected error for disabled config: %v", err)
+	}
 	if p.Enabled() {
 		t.Fatal("expected disabled provider")
 	}
-	_, err := p.AuthCodeURL("state")
+	_, err = p.AuthCodeURL("state")
 	if err == nil {
 		t.Fatal("expected error from disabled provider")
+	}
+}
+
+func TestNewOIDCProviderRejectsInvalidConfig(t *testing.T) {
+	_, err := NewOIDCProvider(profile.OIDCConfig{
+		Enabled:   true,
+		IssuerURL: "",
+		ClientID:  "some-client",
+	})
+	if err == nil {
+		t.Fatal("expected error for enabled config with empty issuer_url")
 	}
 }
