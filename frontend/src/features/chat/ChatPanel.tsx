@@ -31,7 +31,7 @@ function useActiveSkills() {
   return skills;
 }
 
-export function ChatPanel({ embedded, pipelineId: explicitPipelineId }: { embedded?: boolean; pipelineId?: string }) {
+export function ChatPanel({ embedded, pipelineId: explicitPipelineId, branchId }: { embedded?: boolean; pipelineId?: string; branchId?: string | null }) {
   const { id } = useParams<{ id: string }>();
   const [params] = useSearchParams();
   const pipelineId = explicitPipelineId || params.get('pipeline') || 'default';
@@ -43,7 +43,7 @@ export function ChatPanel({ embedded, pipelineId: explicitPipelineId }: { embedd
   const containerHeight = embedded ? '100%' : '100vh';
 
   return (
-    <ChatProvider pipelineId={pipelineId}>
+    <ChatProvider pipelineId={pipelineId} branchId={branchId ?? undefined}>
       <div style={{ height: containerHeight, maxHeight: containerHeight, background: tokens.bg, color: tokens.text, display: 'flex', flexDirection: 'column', fontFamily: tokens.fontBody }} role="region" aria-label="Chat panel">
         <header style={{ padding: '8px 24px', borderBottom: `1px solid ${tokens.border}`, fontSize: 14, color: tokens.muted, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>

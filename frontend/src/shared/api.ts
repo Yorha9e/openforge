@@ -208,7 +208,8 @@ export const api = {
 
   activePipelines: () => request<any[]>('/pipelines/active'),
 
-  getMessages: (pipelineId: string) => request<any>(`/pipelines/${pipelineId}/messages`),
+  getMessages: (pipelineId: string, branchId?: string) =>
+    request<any>(`/pipelines/${pipelineId}/messages${branchId ? `?branch_id=${encodeURIComponent(branchId)}` : ''}`),
 
   listBranches: (pipelineId: string) => request<{ branches: any[] }>(`/pipelines/${pipelineId}/branches`),
 

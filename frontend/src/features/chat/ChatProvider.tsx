@@ -48,7 +48,7 @@ const ChatContext = createContext<ChatState>({
   send: () => {}, cancel: () => {}, clear: () => {},
 });
 
-export function ChatProvider({ pipelineId, children, onLogEntry }: { pipelineId: string; children: ReactNode; onLogEntry?: (entry: any) => void }) {
+export function ChatProvider({ pipelineId, branchId, children, onLogEntry }: { pipelineId: string; branchId?: string; children: ReactNode; onLogEntry?: (entry: any) => void }) {
   const { token } = useAuth();
   const { status, send: wsSend, subscribe } = useWebSocket(token);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -60,7 +60,7 @@ export function ChatProvider({ pipelineId, children, onLogEntry }: { pipelineId:
   const streamingRef = useRef('');
   const idCounter = useRef(0);
 
-  // Load historical messages from DB when pipeline changes
+  // Load historical messages from DB when pipeline or branch changes
   useEffect(() => {
     setMessages([]);
     setStreaming('');
@@ -69,7 +69,7 @@ export function ChatProvider({ pipelineId, children, onLogEntry }: { pipelineId:
     idCounter.current = 0;
 
     if (!pipelineId || pipelineId === 'default') return;
-    api.getMessages(pipelineId).then((msgs: any[]) => {
+    api.getMessages(pipelineId, branchId).then((msgs: any[]) => {
       if (!Array.isArray(msgs)) return;
       const historical: Message[] = msgs.map((m: any, idx: number) => {
         const base: Message = {
@@ -94,7 +94,7 @@ export function ChatProvider({ pipelineId, children, onLogEntry }: { pipelineId:
       }
       setMessages(historical);
     }).catch(() => { /* silent, show empty chat */ });
-  }, [pipelineId]);
+  }, [pipelineId, branchId]);
 
   useEffect(() => {
     const unsub1 = subscribe('chat.stream', (p: any) => {

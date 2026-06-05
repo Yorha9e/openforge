@@ -22,11 +22,13 @@ interface ProModeState {
   fileContent: FileContentData | null;
   fileContentLoading: boolean;
   selectedFileStatus: 'added' | 'modified' | 'deleted' | undefined;
+  activeBranchId: string | null;
   selectFile: (path: string | null) => void;
   updateFiles: (files: ChangedFile[]) => void;
   addLog: (entry: LogEntry) => void;
   clearLogs: () => void;
   setDirty: (dirty: boolean) => void;
+  setActiveBranchId: (branchId: string | null) => void;
 }
 
 const ProModeContext = createContext<ProModeState>({
@@ -38,11 +40,13 @@ const ProModeContext = createContext<ProModeState>({
   fileContent: null,
   fileContentLoading: false,
   selectedFileStatus: undefined,
+  activeBranchId: null,
   selectFile: () => {},
   updateFiles: () => {},
   addLog: () => {},
   clearLogs: () => {},
   setDirty: () => {},
+  setActiveBranchId: () => {},
 });
 
 export function ProModeProvider({ pipelineId, children }: { pipelineId: string; children: ReactNode }) {
@@ -52,6 +56,7 @@ export function ProModeProvider({ pipelineId, children }: { pipelineId: string; 
   const [isDirty, setIsDirty] = useState(false);
   const [fileContent, setFileContent] = useState<FileContentData | null>(null);
   const [fileContentLoading, setFileContentLoading] = useState(false);
+  const [activeBranchId, setActiveBranchId] = useState<string | null>(null);
 
   // Fetch file content when selectedFile changes
   useEffect(() => {
@@ -102,6 +107,10 @@ export function ProModeProvider({ pipelineId, children }: { pipelineId: string; 
     setIsDirty(dirty);
   }, []);
 
+  const handleSetActiveBranchId = useCallback((branchId: string | null) => {
+    setActiveBranchId(branchId);
+  }, []);
+
   return (
     <ProModeContext.Provider value={{
       pipelineId,
@@ -112,11 +121,13 @@ export function ProModeProvider({ pipelineId, children }: { pipelineId: string; 
       fileContent,
       fileContentLoading,
       selectedFileStatus,
+      activeBranchId,
       selectFile,
       updateFiles,
       addLog,
       clearLogs,
       setDirty,
+      setActiveBranchId: handleSetActiveBranchId,
     }}>
       {children}
     </ProModeContext.Provider>

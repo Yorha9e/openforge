@@ -139,7 +139,7 @@ function DiffPanelWrapper() {
 }
 
 function ProModeContent({ pipeline }: { pipeline: PipelineData | null }) {
-  const { pipelineId, selectedFile, selectFile, files, updateFiles, setDirty, isDirty } = useProMode();
+  const { pipelineId, selectedFile, selectFile, files, updateFiles, setDirty, isDirty, activeBranchId } = useProMode();
   const [activePanels, setActivePanels] = useState<Set<string>>(new Set(['chat', 'diff', 'files', 'gate']));
   const [activePreset, setActivePreset] = useState<string>('code-review');
   const dockviewApiRef = useRef<DockviewApi | null>(null);
@@ -262,7 +262,7 @@ function ProModeContent({ pipeline }: { pipeline: PipelineData | null }) {
   const components = {
     chat: (_props: IDockviewPanelProps) => (
       <div style={{ height: '100%', overflow: 'hidden' }}>
-        <ChatPanel embedded pipelineId={pipelineId} />
+        <ChatPanel embedded pipelineId={pipelineId} branchId={activeBranchId} />
       </div>
     ),
     diff: (_props: IDockviewPanelProps) => (

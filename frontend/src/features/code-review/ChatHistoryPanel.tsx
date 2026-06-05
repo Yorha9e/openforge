@@ -18,9 +18,8 @@ interface BranchNode extends Branch {
 }
 
 export function ChatHistoryPanel() {
-  const { pipelineId } = useProMode();
+  const { pipelineId, activeBranchId, setActiveBranchId } = useProMode();
   const [branches, setBranches] = useState<Branch[]>([]);
-  const [activeBranchId, setActiveBranchId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -78,8 +77,6 @@ export function ChatHistoryPanel() {
 
   const handleBranchClick = (branchId: string) => {
     setActiveBranchId(branchId);
-    // TODO: Send WS message to switch branch
-    // ws.send({ type: 'chat.switch_branch', payload: { branch_id: branchId } });
   };
 
   const getStatusColor = (status: string) => {
