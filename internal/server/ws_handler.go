@@ -70,6 +70,7 @@ type wsConn struct {
 	userRole           string
 	mu                 sync.Mutex
 	engines            map[string]*domain.QueryEngine
+	streamCancels      map[string]context.CancelFunc // pipelineID → cancel
 	of                 *profile.OpenForge
 	pongFail           int
 	lastPipelineStage  string
@@ -92,15 +93,16 @@ func handleChatWS(of *profile.OpenForge, jwtSvc *service.JWTService) http.Handle
 		}
 
 		c := &wsConn{
-			conn:     conn,
-			jwtSvc:   jwtSvc,
-			authRepo: authadapter.NewPGAuthRepository(of.DB),
-			userID:   claims.UserID,
-			userRole: claims.Role,
-			engines:  make(map[string]*domain.QueryEngine),
-			of:       of,
-			pongFail: 0,
-			wsRPC:    domain.NewWSRPC(conn, 30*time.Second),
+			conn:          conn,
+			jwtSvc:        jwtSvc,
+			authRepo:      authadapter.NewPGAuthRepository(of.DB),
+			userID:        claims.UserID,
+			userRole:      claims.Role,
+			engines:       make(map[string]*domain.QueryEngine),
+			streamCancels: make(map[string]context.CancelFunc),
+			of:            of,
+			pongFail:      0,
+			wsRPC:         domain.NewWSRPC(conn, 30*time.Second),
 		}
 		c.run()
 	}
@@ -227,7 +229,14 @@ func (c *wsConn) handleMessage(raw []byte) {
 			return
 		}
 
-		ctx := context.Background()
+		ctx, cancel := context.WithCancel(context.Background())
+		c.mu.Lock()
+		if oldCancel, ok := c.streamCancels[p.PipelineID]; ok {
+			oldCancel()
+		}
+		c.streamCancels[p.PipelineID] = cancel
+		c.mu.Unlock()
+
 		startTime := time.Now()
 		success := true
 
@@ -299,6 +308,12 @@ func (c *wsConn) handleMessage(raw []byte) {
 			c.of.SLO.RecordPipeline(time.Since(startTime), success)
 		}
 
+		// Clean up stream cancel
+		c.mu.Lock()
+		delete(c.streamCancels, p.PipelineID)
+		c.mu.Unlock()
+		cancel()
+
 		pipeline, err := c.of.PipelineRepo.GetByID(ctx, p.PipelineID)
 		if err == nil {
 			// Only emit stage_change when stage or status actually changed
@@ -357,7 +372,20 @@ func (c *wsConn) handleMessage(raw []byte) {
 		}
 
 	case "chat.stop":
-		// Phase 3: cancel active stream
+		var p struct {
+			PipelineID string `json:"pipeline_id"`
+		}
+		_ = json.Unmarshal(msg.Payload, &p)
+		c.mu.Lock()
+		if cancel, ok := c.streamCancels[p.PipelineID]; ok {
+			cancel()
+			delete(c.streamCancels, p.PipelineID)
+		}
+		c.mu.Unlock()
+		c.write(map[string]any{
+			"type":    "chat.stopped",
+			"payload": map[string]string{"pipeline_id": p.PipelineID},
+		})
 
 	case "gate.approve":
 		payloadBytes, _ := json.Marshal(msg.Payload)
