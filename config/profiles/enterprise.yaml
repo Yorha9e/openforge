@@ -1,22 +1,92 @@
-# enterprise.yaml — multi-region K8s, large enterprise
+# enterprise.yaml — multi-AZ K8s, 200+ person enterprise team
 profile: enterprise
 security_tier: regulated
 
 secret_store: vault-ha
-container_runtime: k8s-pod
-object_store: minio-cluster
+container_runtime: docker
+object_store: minio
 task_queue: redis-cluster-streams
-event_bus: redis-cluster-pubsub
+event_bus: redis-pubsub
 cache: redis-cluster
-telemetry: otel-collector
-service_registry: k8s-service
+telemetry: prometheus-loki
+service_registry: consul
 disaster_recovery: multi-region
 load_balancer: k8s-ingress
-notifier: multi-channel
+notifier: feishu
+command_executor: docker-sandbox
+
+feature_flags:
+  enterprise_platform: true
+  compliance_suite: true
+  production_ops: true
+  distribution_artifacts: true
+
+docker:
+  host: "unix:///var/run/docker.sock"
+  api_version: "1.45"
 
 database:
-  host: of-pg-primary.internal
+  host: of-postgres-primary
   port: 5432
   user: openforge
+  password: ${DB_PASSWORD}
   dbname: openforge
-  sslmode: require
+  sslmode: verify-full
+
+redis:
+  host: of-redis-cluster
+  port: 6379
+
+llm:
+  default_provider: deepseek
+  default_model: deepseek
+  models:
+    - alias: opus
+      provider: anthropic
+      model_id: claude-opus-4-7-20250514
+      base_url: https://api.anthropic.com
+      fallback: [sonnet, deepseek]
+    - alias: sonnet
+      provider: anthropic
+      model_id: claude-sonnet-4-6-20250514
+      base_url: https://api.anthropic.com
+      fallback: [haiku, deepseek]
+    - alias: haiku
+      provider: anthropic
+      model_id: claude-haiku-4-5-20251001
+      base_url: https://api.anthropic.com
+    - alias: deepseek
+      provider: deepseek
+      model_id: deepseek-v4-pro[1m]
+      base_url: https://api.deepseek.com/anthropic
+      fallback: [sonnet]
+
+grpc:
+  nodejs_io_addr: of-nodejs-io:50051
+  coordinator_addr: of-coordinator:50052
+
+jwt:
+  secret: ${JWT_SECRET}
+  access_ttl: "30m"
+  refresh_ttl: "12h"
+
+auth:
+  provider: jwt
+  oidc:
+    enabled: true
+    issuer_url: ${OIDC_ISSUER_URL}
+    client_id: ${OIDC_CLIENT_ID}
+    client_secret: ${OIDC_CLIENT_SECRET}
+    redirect_url: ${OIDC_REDIRECT_URL}
+  builtin_users:
+    - username: admin
+      display_name: "Admin"
+      role: admin
+      password_hash: ${ADMIN_PASSWORD_HASH}
+
+pg:
+  backup_dir: /backups/postgres
+  pg_tools_path: /usr/lib/postgresql/16/bin
+
+notify:
+  feishu_webhook: ${FEISHU_WEBHOOK}
