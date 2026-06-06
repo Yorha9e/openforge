@@ -1,9 +1,61 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { tokens } from '../../shared/design-tokens';
+import { api } from '../../shared/api';
 
 type Role = 'pm' | 'developer' | 'reviewer';
 type SetupType = 'existing' | 'new';
+
+export interface OnboardingFormState {
+  role: Role;
+  setupType: SetupType;
+  repoUrl: string;
+}
+
+export type PersistDeps = {
+  api: { updateSettings: (settings: unknown) => Promise<unknown> };
+  navigate: (to: string, opts?: { replace?: boolean }) => void;
+  onFinish?: () => void;
+};
+
+/**
+ * Build the settings payload that gets persisted to `/api/settings`
+ * when the user finishes onboarding.
+ *
+ * Exported as a pure helper so the payload shape is unit-testable
+ * without rendering the full React tree.
+ */
+export function buildOnboardingSettings(
+  role: Role,
+  setupType: SetupType,
+  repoUrl: string,
+): { role: Role; projectType: SetupType; setupComplete: true; repoUrl?: string } {
+  const payload: { role: Role; projectType: SetupType; setupComplete: true; repoUrl?: string } = {
+    role,
+    projectType: setupType,
+    setupComplete: true,
+  };
+  if (setupType === 'existing' && repoUrl) {
+    payload.repoUrl = repoUrl;
+  }
+  return payload;
+}
+
+/**
+ * Persist onboarding choices via `api.updateSettings`, then navigate home
+ * and invoke the optional `onFinish` callback. Throws if the API call fails
+ * so callers can surface an error to the user.
+ */
+export async function persistOnboarding(
+  deps: PersistDeps,
+  state: OnboardingFormState,
+): Promise<void> {
+  await deps.api.updateSettings(
+    buildOnboardingSettings(state.role, state.setupType, state.repoUrl),
+  );
+  deps.navigate('/', { replace: true });
+  deps.onFinish?.();
+}
 
 interface RoleOption {
   id: Role;
@@ -353,13 +405,14 @@ function DemoChat() {
  * 3-step onboarding flow: Role Selection -> Project Setup -> Demo Chat.
  * Shown on first login or via /onboarding route.
  */
-export default function OnboardingFlow() {
+export default function OnboardingFlow({ onFinish }: { onFinish?: () => void } = {}) {
   const navigate = useNavigate();
   const [currentStep, setCurrentStep] = useState(1);
   const [selectedRole, setSelectedRole] = useState<Role | null>(null);
   const [setupType, setSetupType] = useState<SetupType>('existing');
   const [repoUrl, setRepoUrl] = useState('');
   const [error, setError] = useState('');
+  const [finishing, setFinishing] = useState(false);
 
   const canProceedFromStep1 = selectedRole !== null;
   const canProceedFromStep2 = setupType === 'new' || (setupType === 'existing' && /^https?:\/\/.+/.test(repoUrl));
@@ -388,8 +441,19 @@ export default function OnboardingFlow() {
     navigate('/', { replace: true });
   };
 
-  const handleFinish = () => {
-    navigate('/', { replace: true });
+  const handleFinish = async () => {
+    if (!selectedRole || finishing) return;
+    setFinishing(true);
+    try {
+      await persistOnboarding(
+        { api, navigate, onFinish },
+        { role: selectedRole, setupType, repoUrl },
+      );
+    } catch (err) {
+      // Surface a minimal inline error; user can retry via the same button.
+      setError(err instanceof Error ? err.message : 'Failed to save onboarding settings');
+      setFinishing(false);
+    }
   };
 
   const handleRoleSelect = (role: Role) => {

@@ -2,6 +2,7 @@ import { useState, type ReactNode } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from './auth';
 import { tokens } from './design-tokens';
+import { NotificationCenter } from '../features/notifications/NotificationCenter';
 
 interface NavItem {
   path: string;
@@ -190,6 +191,7 @@ export function AppLayout({ children, title, breadcrumbs }: { children: ReactNod
 
           {/* User info */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <NotificationCenter />
             <span style={{ color: tokens.muted, fontSize: 13 }}>{user?.id}</span>
             <button
               onClick={logout}
