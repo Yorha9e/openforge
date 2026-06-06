@@ -120,10 +120,12 @@ export default function AdminPage() {
         <h1 style={{ fontSize: 24, fontWeight: 700, fontFamily: tokens.fontHeading, margin: 0, color: tokens.text }}>Admin Panel</h1>
         <div style={{ display: 'flex', gap: 8 }}>
           <button onClick={() => navigate('/admin/invitations')}
+            aria-label="Manage invitations"
             style={{ padding: '8px 16px', background: tokens.surface, border: `1px solid ${tokens.border}`, borderRadius: 4, cursor: 'pointer', color: tokens.text, fontSize: 13 }}>
             Invitations →
           </button>
           <button onClick={() => navigate('/admin/skills')}
+            aria-label="Manage skills"
             style={{ padding: '8px 16px', background: tokens.surface, border: `1px solid ${tokens.border}`, borderRadius: 4, cursor: 'pointer', color: tokens.text, fontSize: 13 }}>
             Skill Management →
           </button>
@@ -244,6 +246,7 @@ export default function AdminPage() {
             <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
               <button
                 onClick={() => FEATURE_GROUPS.forEach(g => handleToggleFlag(g.key).catch(() => {}))}
+                aria-label="Enable all enterprise feature groups"
                 style={{ padding: '5px 14px', border: `1px solid ${tokens.border}`, borderRadius: 4, background: 'transparent', color: tokens.text, fontSize: 12, cursor: 'pointer' }}
               >
                 Enable All
@@ -252,6 +255,7 @@ export default function AdminPage() {
                 onClick={() => FEATURE_GROUPS.forEach(g => {
                   if (featureFlags?.[g.key]) handleToggleFlag(g.key);
                 })}
+                aria-label="Disable all enabled enterprise feature groups"
                 style={{ padding: '5px 14px', border: `1px solid ${tokens.border}`, borderRadius: 4, background: 'transparent', color: tokens.text, fontSize: 12, cursor: 'pointer' }}
               >
                 Disable All
