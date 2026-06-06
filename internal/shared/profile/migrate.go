@@ -56,7 +56,25 @@ func (r *MigrationRunner) DSN() string {
 }
 
 // Run executes all pending .up.sql files, each in its own transaction.
+//
+// Before running any DDL, Run performs a failover gate check: it asks the
+// target PostgreSQL instance whether it is in recovery mode (a hot-standby
+// replica serving read traffic during a failover, or an old primary that has
+// been demoted). DDL on a recovery-mode server is impossible, but more
+// importantly we want migrations to run on the *intended* primary, not a
+// read-only replica that may have just been promoted mid-migration.
+//
+// On gate refusal, Run returns a non-nil error before executing anything.
 func (r *MigrationRunner) Run(ctx context.Context) error {
+	// 1. Failover gate: refuse to run DDL against a server in recovery.
+	var inRecovery bool
+	if err := r.db.QueryRowContext(ctx, "SELECT pg_is_in_recovery()").Scan(&inRecovery); err != nil {
+		return fmt.Errorf("migration gate: check pg state: %w", err)
+	}
+	if inRecovery {
+		return fmt.Errorf("migration gate: PG in recovery mode, refusing to run DDL")
+	}
+	// 2. Existing migration execution logic.
 	if err := r.ensureTrackingTable(ctx); err != nil {
 		return fmt.Errorf("migrate: tracking table: %w", err)
 	}
