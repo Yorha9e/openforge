@@ -6,7 +6,7 @@ ALTER TABLE "user" ADD COLUMN IF NOT EXISTS role VARCHAR(16) DEFAULT 'dev';
 
 -- Create invitation table
 CREATE TABLE IF NOT EXISTS invitation (
-    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id          UUID PRIMARY KEY DEFAULT uuid_generate_v7(),
     token       VARCHAR(64) NOT NULL UNIQUE,
     role        VARCHAR(16) NOT NULL CHECK (role IN ('admin','pm','dev_lead','dev','observer')),
     project_id  TEXT REFERENCES project(id),

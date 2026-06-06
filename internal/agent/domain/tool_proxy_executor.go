@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/google/uuid"
+	"openforge/internal/shared/uuid"
 )
 
 // ToolProxyExecutor implements the tool.Executor interface for tools that need
@@ -31,7 +31,7 @@ func (e *ToolProxyExecutor) Execute(ctx context.Context, args map[string]interfa
 	}
 	
 	// Generate a unique request ID
-	requestID := uuid.New().String()
+	requestID := uuid.New()
 	
 	// Get tool name from context or args
 	toolName, _ := args["tool"].(string)

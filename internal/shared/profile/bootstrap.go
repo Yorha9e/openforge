@@ -304,12 +304,26 @@ func Bootstrap(cfg *Config) (*OpenForge, error) {
 	of.SLO = observabilitydomain.NewSLOTracker()
 	of.PrometheusExporter = obsadapter.NewPrometheusExporter()
 
-	// Run database migrations
+	// Run database migrations.
+	// When cfg.Database.MigrationDSN is set, run as the dedicated of_migration
+	// role (DDL-capable). Fall back to the app-user pool when no separate
+	// migration DSN is configured (minimal profiles / dev).
 	migrationsDir := "migrations"
 	if _, err := os.Stat(migrationsDir); err == nil {
-		runner := NewMigrationRunner(db, migrationsDir)
-		if err := runner.Run(context.Background()); err != nil {
-			return nil, fmt.Errorf("migration: %w", err)
+		if cfg.Database.MigrationDSN != "" {
+			migrationRunner, err := NewMigrationRunnerFromDSN(cfg.Database.MigrationDSN, migrationsDir)
+			if err != nil {
+				return nil, fmt.Errorf("migration runner: %w", err)
+			}
+			defer migrationRunner.Close()
+			if err := migrationRunner.Run(context.Background()); err != nil {
+				return nil, fmt.Errorf("migration: %w", err)
+			}
+		} else {
+			runner := NewMigrationRunner(db, migrationsDir)
+			if err := runner.Run(context.Background()); err != nil {
+				return nil, fmt.Errorf("migration: %w", err)
+			}
 		}
 	}
 

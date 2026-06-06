@@ -1,7 +1,7 @@
 -- 003_gate_request.up.sql — Gate request tracking table
 
 CREATE TABLE IF NOT EXISTS gate_request (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v7(),
     pipeline_id TEXT NOT NULL REFERENCES pipeline(id),
     stage VARCHAR(8) NOT NULL,
     status VARCHAR(16) NOT NULL DEFAULT 'pending'
