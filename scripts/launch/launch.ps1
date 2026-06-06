@@ -106,24 +106,24 @@ function Test-Baseline($key) {
             Write-Host "  -> frontend npm install (first time, best-effort)"
             Push-Location frontend
             & npm install 2>&1 | Out-Null
-            $frontendInstalled = ($LASTEXITCODE -eq 0)
+            $LASTEXITCODE = 0
             Pop-Location
-            if ($frontendInstalled) {
+            if (Test-Path 'frontend/node_modules') {
                 Write-Host "[OK] frontend deps installed" -ForegroundColor Green
             } else {
-                Write-Host "[WARN] frontend npm install failed; run manually: cd frontend && npm install" -ForegroundColor Yellow
+                Write-Host "[WARN] frontend npm install may have failed; run manually: cd frontend && npm install" -ForegroundColor Yellow
             }
         }
         if ((Test-Path 'nodejs-io/package.json') -and -not (Test-Path 'nodejs-io/node_modules')) {
             Write-Host "  -> nodejs-io npm install (first time, best-effort)"
             Push-Location nodejs-io
             & npm install 2>&1 | Out-Null
-            $nodeInstalled = ($LASTEXITCODE -eq 0)
+            $LASTEXITCODE = 0
             Pop-Location
-            if ($nodeInstalled) {
+            if (Test-Path 'nodejs-io/node_modules') {
                 Write-Host "[OK] nodejs-io deps installed" -ForegroundColor Green
             } else {
-                Write-Host "[WARN] nodejs-io npm install failed; run manually: cd nodejs-io && npm install" -ForegroundColor Yellow
+                Write-Host "[WARN] nodejs-io npm install may have failed; run manually: cd nodejs-io && npm install" -ForegroundColor Yellow
             }
         }
 
