@@ -101,35 +101,26 @@ function Test-Baseline($key) {
             if ($LASTEXITCODE -ne 0) { throw "buf generate failed" }
         }
 
-        # 2. Install node deps if missing (best-effort; harness may show npm warnings as errors but script continues)
-        if ((Test-Path 'frontend/package.json') -and -not (Test-Path 'frontend/node_modules')) {
-            Write-Host "  -> frontend npm install (first time, may print warnings)"
-            Push-Location frontend
+        # 2. Install node deps if missing (capture output to log file to bypass PowerShell stderr handling)
+        function Install-NodeDeps($subdir) {
+            if (-not (Test-Path "$subdir/package.json")) { return }
+            if (Test-Path "$subdir/node_modules") { return }
+            Write-Host "  -> $subdir npm install (first time, capturing log)"
+            $logFile = Join-Path $env:TEMP "npm-install-$(Split-Path $subdir -Leaf).log"
+            Push-Location $subdir
             try {
-                & cmd /c "npm install --no-audit --no-fund --prefer-offline 2>&1" | Out-Null
+                & cmd /c "npm install --no-audit --no-fund --legacy-peer-deps 1>$logFile 2>&1" | Out-Null
             } catch { }
-            $LASTEXITCODE = 0
             Pop-Location
-            if (Test-Path 'frontend/node_modules') {
-                Write-Host "[OK] frontend deps installed" -ForegroundColor Green
+            $LASTEXITCODE = 0
+            if (Test-Path "$subdir/node_modules") {
+                Write-Host "[OK] $subdir deps installed (log: $logFile)" -ForegroundColor Green
             } else {
-                Write-Host "[WARN] frontend node_modules missing; please run: cd frontend && npm install" -ForegroundColor Yellow
+                Write-Host "[WARN] $subdir npm install may have failed. See $logFile" -ForegroundColor Yellow
             }
         }
-        if ((Test-Path 'nodejs-io/package.json') -and -not (Test-Path 'nodejs-io/node_modules')) {
-            Write-Host "  -> nodejs-io npm install (first time, may print warnings)"
-            Push-Location nodejs-io
-            try {
-                & cmd /c "npm install --no-audit --no-fund --prefer-offline --legacy-peer-deps 2>&1" | Out-Null
-            } catch { }
-            $LASTEXITCODE = 0
-            Pop-Location
-            if (Test-Path 'nodejs-io/node_modules') {
-                Write-Host "[OK] nodejs-io deps installed" -ForegroundColor Green
-            } else {
-                Write-Host "[WARN] nodejs-io node_modules missing; please run: cd nodejs-io && npm install" -ForegroundColor Yellow
-            }
-        }
+        Install-NodeDeps 'frontend'
+        Install-NodeDeps 'nodejs-io'
 
         # 3. Go tests
         Write-Host "  -> go test ./internal/... -count=1"
