@@ -11,8 +11,27 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$ProjectRoot = git rev-parse --show-toplevel
+
+# Detect if we're running inside a worktree. If so, operate from the main repo root
+# (so that $ProjectRoot/.worktrees/... paths resolve correctly for both prereq checks
+#  and the bootstrap). All bootstrap operations will use $wt = Join-Path $ProjectRoot $cfg.Dir.
+$gitDir = git rev-parse --git-dir 2>$null
+$gitCommon = git rev-parse --git-common-dir 2>$null
+if ($gitDir -ne $gitCommon) {
+    # Running in a worktree
+    $ProjectRoot = Split-Path $gitCommon -Parent
+    Write-Host "[INFO] Detected worktree. Operating from main root: $ProjectRoot" -ForegroundColor DarkGray
+} else {
+    $ProjectRoot = git rev-parse --show-toplevel
+}
 Set-Location $ProjectRoot
+
+# Also detect which path we're working in (for status display)
+$ActiveWorktree = $null
+if ($gitDir -ne $gitCommon) {
+    $ActiveWorktree = (git rev-parse --show-toplevel) -replace [regex]::Escape($ProjectRoot), ''
+    $ActiveWorktree = $ActiveWorktree.TrimStart('/', '\')
+}
 
 # Path definitions: key -> { Branch, Dir, Plan }
 $Paths = [ordered]@{
@@ -38,19 +57,7 @@ function Test-Prereqs {
     Section "Prerequisites Check"
     $ok = $true
 
-    # 1. Detect if we're already in a worktree (vs main repo)
-    $gitDir = git rev-parse --git-dir 2>$null
-    $gitCommon = git rev-parse --git-common-dir 2>$null
-    $inWorktree = ($gitDir -ne $gitCommon)
-    if ($inWorktree) {
-        Write-Host "[INFO] running inside a worktree ($gitDir)" -ForegroundColor DarkGray
-        $mainRoot = Split-Path $gitCommon -Parent
-        Set-Location $mainRoot
-        $ProjectRoot = $mainRoot
-        Write-Host "[INFO] switched to main repo root: $ProjectRoot" -ForegroundColor DarkGray
-    }
-
-    # 2. .worktrees gitignored (only meaningful at main repo root)
+    # 1. .worktrees gitignored (only meaningful at main repo root)
     git check-ignore .worktrees *> $null
     if ($LASTEXITCODE -ne 0) {
         Write-Host "[X] .worktrees not gitignored (at main repo)" -ForegroundColor Red
@@ -59,7 +66,7 @@ function Test-Prereqs {
         Write-Host "[OK] .worktrees gitignored" -ForegroundColor Green
     }
 
-    # 3. main branch exists
+    # 2. main branch exists
     git rev-parse --verify refs/heads/main *> $null
     if ($LASTEXITCODE -ne 0) {
         Write-Host "[X] main branch not found" -ForegroundColor Red
@@ -68,7 +75,7 @@ function Test-Prereqs {
         Write-Host "[OK] main branch exists" -ForegroundColor Green
     }
 
-    # 4. main worktree clean
+    # 3. main worktree clean
     $trackedChanges = git status --porcelain | Where-Object { -not $_.StartsWith('??') }
     if ($trackedChanges.Count -gt 0) {
         Write-Host "[X] main has modified tracked files:" -ForegroundColor Red
