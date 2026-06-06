@@ -81,6 +81,7 @@ type OpenForge struct {
 	SettingsRepo    *adapter.PGSettingsRepo
 	CheckpointRepo  *adapter.PGCheckpointRepo
 	DB              *sql.DB
+	RLSDB           *RLSConn // X3 T4 #18: RLS-aware wrapper around DB
 	DepCache        *adapter.DependencyCache
 	DataLifecycle   *compliance.DataLifecycle // G16: compliance data lifecycle manager
 	Shutdown        func()                    // G16: graceful shutdown callback
@@ -195,6 +196,11 @@ func Bootstrap(cfg *Config) (*OpenForge, error) {
 	db.SetConnMaxIdleTime(1 * time.Minute) // Maximum idle time of a connection
 	
 	of.DB = db
+
+	// X3 T4 #18: RLS-aware wrapper. Repositories keep their raw *sql.DB
+	// handle (out of scope to rewrite every call site), but callers that
+	// want RLS scoping can route queries through of.RLSDB.
+	of.RLSDB = NewRLSConn(db)
 
 	// G13: Initialize disaster recovery with DB connection
 	of.DR = newDisasterRecovery(cfg, db)
