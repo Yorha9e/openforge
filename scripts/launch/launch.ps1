@@ -101,29 +101,29 @@ function Test-Baseline($key) {
             if ($LASTEXITCODE -ne 0) { throw "buf generate failed" }
         }
 
-        # 2. Install node deps if missing
+        # 2. Install node deps if missing (best-effort, may need manual run)
         if ((Test-Path 'frontend/package.json') -and -not (Test-Path 'frontend/node_modules')) {
-            Write-Host "  -> frontend npm ci (first time)"
+            Write-Host "  -> frontend npm install (first time, best-effort)"
             Push-Location frontend
-            & npm ci *> $null
+            & npm install 2>&1 | Out-Null
             $frontendInstalled = ($LASTEXITCODE -eq 0)
             Pop-Location
-            if (-not $frontendInstalled) {
-                Write-Host "[WARN] frontend npm ci failed" -ForegroundColor Yellow
-            } else {
+            if ($frontendInstalled) {
                 Write-Host "[OK] frontend deps installed" -ForegroundColor Green
+            } else {
+                Write-Host "[WARN] frontend npm install failed; run manually: cd frontend && npm install" -ForegroundColor Yellow
             }
         }
         if ((Test-Path 'nodejs-io/package.json') -and -not (Test-Path 'nodejs-io/node_modules')) {
-            Write-Host "  -> nodejs-io npm ci (first time)"
+            Write-Host "  -> nodejs-io npm install (first time, best-effort)"
             Push-Location nodejs-io
-            & npm ci *> $null
+            & npm install 2>&1 | Out-Null
             $nodeInstalled = ($LASTEXITCODE -eq 0)
             Pop-Location
-            if (-not $nodeInstalled) {
-                Write-Host "[WARN] nodejs-io npm ci failed" -ForegroundColor Yellow
-            } else {
+            if ($nodeInstalled) {
                 Write-Host "[OK] nodejs-io deps installed" -ForegroundColor Green
+            } else {
+                Write-Host "[WARN] nodejs-io npm install failed; run manually: cd nodejs-io && npm install" -ForegroundColor Yellow
             }
         }
 
