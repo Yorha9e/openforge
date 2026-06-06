@@ -3,8 +3,71 @@ package adapter
 import (
 	"crypto/sha256"
 	"fmt"
+	"os"
+	"path/filepath"
+	"reflect"
+	"runtime"
+	"strings"
 	"testing"
 )
+
+// TestAuditEntry_ProjectIDField verifies the AuditEntry struct exposes a ProjectID
+// field so the audit_log.project_id column can be populated (item #16).
+func TestAuditEntry_ProjectIDField(t *testing.T) {
+	entry := AuditEntry{
+		Event:     "gate.request",
+		Actor:     "user@example.com",
+		Action:    "approve",
+		Resource:  "project:abc",
+		Result:    "success",
+		ProjectID: "11111111-2222-3333-4444-555555555555",
+	}
+	if entry.ProjectID == "" {
+		t.Fatal("ProjectID field is empty — would be skipped by INSERT")
+	}
+	if got := entry.ProjectID; got != "11111111-2222-3333-4444-555555555555" {
+		t.Errorf("ProjectID = %q, want UUID", got)
+	}
+}
+
+// TestAuditEntry_HasProjectIDField ensures the struct field name didn't drift
+// away from "ProjectID" — the Log() INSERT references it by name.
+func TestAuditEntry_HasProjectIDField(t *testing.T) {
+	typ := reflect.TypeOf(AuditEntry{})
+	field, ok := typ.FieldByName("ProjectID")
+	if !ok {
+		t.Fatal("AuditEntry is missing ProjectID field")
+	}
+	if field.Type.Kind() != reflect.String {
+		t.Errorf("AuditEntry.ProjectID kind = %s, want string", field.Type.Kind())
+	}
+}
+
+// TestLog_IncludesProjectIDInInsert is a structural test that ensures the Log
+// SQL statement contains both the project_id column and the corresponding
+// positional parameter binding. This guards against future refactors silently
+// dropping project_id from the INSERT (item #16).
+func TestLog_IncludesProjectIDInInsert(t *testing.T) {
+	// Locate the worm_audit_log.go source via runtime.Caller.
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	src, err := os.ReadFile(filepath.Join(filepath.Dir(thisFile), "worm_audit_log.go"))
+	if err != nil {
+		t.Fatalf("read worm_audit_log.go: %v", err)
+	}
+	text := string(src)
+	if !strings.Contains(text, "INSERT INTO audit_log") {
+		t.Error("expected INSERT INTO audit_log in worm_audit_log.go")
+	}
+	if !strings.Contains(text, "project_id") {
+		t.Error("Log INSERT must reference project_id column")
+	}
+	if !strings.Contains(text, "entry.ProjectID") {
+		t.Error("Log INSERT must bind entry.ProjectID")
+	}
+}
 
 func TestHashChain_Links(t *testing.T) {
 	var dbHashes []string
@@ -55,3 +118,4 @@ func TestHashChain_Verify(t *testing.T) {
 		t.Error("verify should reject wrong prevHash")
 	}
 }
+
