@@ -38,14 +38,28 @@ function Test-Prereqs {
     Section "Prerequisites Check"
     $ok = $true
 
+    # 1. Detect if we're already in a worktree (vs main repo)
+    $gitDir = git rev-parse --git-dir 2>$null
+    $gitCommon = git rev-parse --git-common-dir 2>$null
+    $inWorktree = ($gitDir -ne $gitCommon)
+    if ($inWorktree) {
+        Write-Host "[INFO] running inside a worktree ($gitDir)" -ForegroundColor DarkGray
+        $mainRoot = Split-Path $gitCommon -Parent
+        Set-Location $mainRoot
+        $ProjectRoot = $mainRoot
+        Write-Host "[INFO] switched to main repo root: $ProjectRoot" -ForegroundColor DarkGray
+    }
+
+    # 2. .worktrees gitignored (only meaningful at main repo root)
     git check-ignore .worktrees *> $null
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "[X] .worktrees not gitignored" -ForegroundColor Red
+        Write-Host "[X] .worktrees not gitignored (at main repo)" -ForegroundColor Red
         $ok = $false
     } else {
         Write-Host "[OK] .worktrees gitignored" -ForegroundColor Green
     }
 
+    # 3. main branch exists
     git rev-parse --verify refs/heads/main *> $null
     if ($LASTEXITCODE -ne 0) {
         Write-Host "[X] main branch not found" -ForegroundColor Red
@@ -54,6 +68,7 @@ function Test-Prereqs {
         Write-Host "[OK] main branch exists" -ForegroundColor Green
     }
 
+    # 4. main worktree clean
     $trackedChanges = git status --porcelain | Where-Object { -not $_.StartsWith('??') }
     if ($trackedChanges.Count -gt 0) {
         Write-Host "[X] main has modified tracked files:" -ForegroundColor Red
@@ -100,6 +115,14 @@ function Test-Baseline($key) {
             & buf generate proto *> $null
             if ($LASTEXITCODE -ne 0) { throw "buf generate failed" }
         }
+
+        # 1a. Discard any modified generated files (they were just regenerated, not user edits)
+        Write-Host "  -> reset generated files (gen/, nodejs-io/src/gen/)"
+        & git checkout -- 'gen' 'nodejs-io/src/gen' 2>&1 | Out-Null
+        $LASTEXITCODE = 0
+        # 1b. Remove any untracked generated files so they don't pollute status
+        & git clean -fd -- 'gen' 'nodejs-io/src/gen' 2>&1 | Out-Null
+        $LASTEXITCODE = 0
 
         # 2. Install node deps if missing (capture output to log file to bypass PowerShell stderr handling)
         function Install-NodeDeps($subdir) {
