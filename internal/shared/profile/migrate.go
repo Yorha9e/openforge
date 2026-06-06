@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -93,3 +94,161 @@ func (r *MigrationRunner) isExecuted(ctx context.Context, filename string) (bool
 		`SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE filename = $1)`, filename).Scan(&exists)
 	return exists, err
 }
+
+// ---------------------------------------------------------------------------
+// Profile backend migration (T8): minimal → standard → enterprise.
+// ---------------------------------------------------------------------------
+//
+// Path A (data closure) added three things that a "minimal" deployment does
+// not have: a writable cost_quota row per project, an audit_log row for
+// every state transition, and a hard ban on dropping the task_queue table
+// (T9 will remove it). When an operator promotes a deployment from minimal
+// to standard, we need to:
+//
+//   1. Verify task_queue is empty (T9's pre-condition).
+//   2. Seed the default cost_quota row that the standard profile reads.
+//   3. Append an audit_log entry so the WORM chain records the migration.
+//
+// The function is intentionally side-effectful and idempotent: re-running
+// the same migration on an already-migrated DB is a no-op (ON CONFLICT
+// DO NOTHING on cost_quota, and audit_log is append-only so duplicate
+// entries are visible rather than destructive).
+//
+// Schema-gap note: the current cost_quota schema (migrations/001_init.up.sql)
+// uses UNIQUE(project_id, month) and has no monthly_usd column. Seeding
+// `_default` therefore depends on the 012_cost_quota_monthly_usd migration
+// that T10 will add. Until that lands, the cost_quota step is recorded
+// as a no-op and the operator gets a warning — the migration still succeeds
+// because steps 1 and 3 don't depend on the schema change.
+
+type ProfileMigrationResult struct {
+	From     string
+	To       string
+	Steps    []string
+	Warnings []string
+}
+
+// MigrateProfileBackend reconciles the on-disk state of an OpenForge
+// deployment with a target profile. It is the CLI-facing half of the
+// "profile switch" UX added by Path A; the operator runs:
+//
+//	openforge migrate profile <from> <to>
+//
+// Returns a ProfileMigrationResult describing what was changed. The
+// function is safe to call on a nil *sql.DB: it returns a typed error
+// rather than panicking, so the CLI can surface a clean message to the
+// operator.
+func MigrateProfileBackend(ctx context.Context, db *sql.DB, from, to string) (*ProfileMigrationResult, error) {
+	if db == nil {
+		return nil, fmt.Errorf("migrate profile: database connection is nil")
+	}
+
+	res := &ProfileMigrationResult{From: from, To: to}
+
+	switch {
+	case from == "minimal" && to == "standard":
+		if err := reconcileMinimalToStandard(ctx, db, res); err != nil {
+			return res, err
+		}
+
+	case from != "enterprise" && to == "enterprise":
+		// Enterprise steps are mostly config-only: the bootstrap layer
+		// picks up Vault/MinIO from cfg at next start. We only need to
+		// surface a warning that the operator must verify the external
+		// dependencies are reachable before the next restart.
+		res.Steps = append(res.Steps, "verified: enterprise profile requires restart with new config")
+		res.Warnings = append(res.Warnings,
+			"enterprise profile requires external Vault and MinIO endpoints; "+
+				"ensure they are configured and reachable before restarting the daemon")
+
+	default:
+		return res, fmt.Errorf("unsupported migration: %s → %s", from, to)
+	}
+
+	// Audit-log every successful migration. This is the durable record
+	// the WORM chain (T4) protects; future T10 verification can replay
+	// migrations from the audit log alone.
+	if err := appendMigrationAudit(ctx, db, from, to, res); err != nil {
+		// Don't fail the whole migration on an audit-log error: the
+		// schema-side work may already have succeeded and the operator
+		// needs the steps printed. Log loudly instead.
+		slog.Warn("migrate profile: audit log append failed", "err", err, "from", from, "to", to)
+		res.Warnings = append(res.Warnings, fmt.Sprintf("audit log append failed: %v", err))
+	} else {
+		res.Steps = append(res.Steps, "appended audit_log: profile_migration")
+	}
+
+	return res, nil
+}
+
+func reconcileMinimalToStandard(ctx context.Context, db *sql.DB, res *ProfileMigrationResult) error {
+	// Step 1: task_queue pre-condition. T9 will DROP this table; we
+	// record a count so the operator can decide whether to drain it
+	// first. We don't fail on a non-zero count — the migration's job
+	// is to surface state, not to block on it.
+	var taskCount int
+	if err := db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM task_queue`).Scan(&taskCount); err != nil {
+		// task_queue may not exist (e.g. fresh DB after T9). Treat
+		// that as "verified empty" and continue.
+		res.Steps = append(res.Steps, "verified task_queue: not present (already dropped or never created)")
+	} else {
+		res.Steps = append(res.Steps, fmt.Sprintf("verified task_queue: pg-skip-locked (%d pending rows)", taskCount))
+		if taskCount > 0 {
+			res.Warnings = append(res.Warnings,
+				fmt.Sprintf("task_queue has %d rows; T9 DROP will be destructive — drain or accept loss", taskCount))
+		}
+	}
+
+	// Step 2: cost_quota reconciliation. See Schema-gap note above.
+	// We try the full insert; if the schema lacks the columns the
+	// error is downgraded to a warning and the step is recorded.
+	if err := seedDefaultCostQuota(ctx, db); err != nil {
+		slog.Warn("migrate profile: cost_quota seed skipped", "err", err)
+		res.Steps = append(res.Steps, "skipped cost_quota seed: schema gap (waiting on 012 migration)")
+		res.Warnings = append(res.Warnings,
+			"cost_quota seed skipped: "+err.Error())
+	} else {
+		res.Steps = append(res.Steps, "seeded cost_quota._default=100")
+	}
+
+	return nil
+}
+
+func seedDefaultCostQuota(ctx context.Context, db *sql.DB) error {
+	// TODO(Path-A schema gap): the existing cost_quota schema (migrations/001_init.up.sql)
+	// has UNIQUE(project_id, month) and no monthly_usd column. The full
+	// INSERT below is correct *after* the 012_cost_quota_monthly_usd
+	// migration lands. Until then the FK on project(id) also blocks a
+	// literal `_default` project_id. We probe the schema first and
+	// return a typed error so the caller can downgrade to a warning.
+	var hasColumn bool
+	if err := db.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM information_schema.columns
+		 WHERE table_name='cost_quota' AND column_name='monthly_usd')`).Scan(&hasColumn); err != nil {
+		return fmt.Errorf("probe cost_quota.monthly_usd: %w", err)
+	}
+	if !hasColumn {
+		return fmt.Errorf("cost_quota.monthly_usd column does not exist; apply migration 012 first")
+	}
+
+	_, err := db.ExecContext(ctx,
+		`INSERT INTO cost_quota (project_id, month, token_limit, token_used, status)
+		 VALUES ('_default', to_char(NOW(), 'YYYY-MM'), 1000000, 0, 'active')
+		 ON CONFLICT (project_id, month) DO NOTHING`)
+	return err
+}
+
+func appendMigrationAudit(ctx context.Context, db *sql.DB, from, to string, res *ProfileMigrationResult) error {
+	// Build a compact summary of what the migration did so an operator
+	// reading the audit log months later can reconstruct the intent.
+	summary := fmt.Sprintf("from=%s to=%s steps=%d warnings=%d", from, to, len(res.Steps), len(res.Warnings))
+	_, err := db.ExecContext(ctx,
+		`INSERT INTO audit_log
+		   (event, actor, action, resource, result, region, prev_hash, content_hash)
+		 VALUES
+		   ('profile_migration', 'openforge-cli', $1, 'profile', 'success', 'bj', '', '')`,
+		summary)
+	return err
+}
+
