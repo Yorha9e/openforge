@@ -23,6 +23,7 @@ import (
 	observabilitydomain "openforge/internal/observability/domain"
 	pipelineadapter "openforge/internal/pipeline/adapter"
 	"openforge/internal/pipeline/service"
+	policyadapter "openforge/internal/policy/adapter"
 	"openforge/internal/shared/featureflags"
 	"openforge/internal/shared/kernel"
 )
@@ -83,6 +84,9 @@ type OpenForge struct {
 	DB              *sql.DB
 	DepCache        *adapter.DependencyCache
 	DataLifecycle   *compliance.DataLifecycle // G16: compliance data lifecycle manager
+	// AuditLog is the WORM audit logger. After T4 it uses a dedicated
+	// of_audit_writer connection (cfg.AuditWriterDSN) for INSERTs.
+	AuditLog        *policyadapter.AuditLogger
 	Shutdown        func()                    // G16: graceful shutdown callback
 }
 
@@ -195,6 +199,24 @@ func Bootstrap(cfg *Config) (*OpenForge, error) {
 	db.SetConnMaxIdleTime(1 * time.Minute) // Maximum idle time of a connection
 	
 	of.DB = db
+
+	// G16: Open a separate writer connection for the audit log so that
+	// INSERTs flow through the dedicated of_audit_writer role. The reader
+	// side keeps using the application DSN (openforge), which after
+	// migration 012 only has SELECT on audit_log. When the writer DSN is
+	// not configured we keep the legacy single-DSN behavior.
+	if cfg.AuditWriterDSN != "" {
+		auditWriter, err := sql.Open("postgres", cfg.AuditWriterDSN)
+		if err != nil {
+			return nil, fmt.Errorf("audit writer db: %w", err)
+		}
+		auditWriter.SetMaxOpenConns(5)
+		auditWriter.SetMaxIdleConns(2)
+		auditWriter.SetConnMaxLifetime(5 * time.Minute)
+		of.AuditLog = policyadapter.NewWithWriter(db, auditWriter)
+	} else {
+		of.AuditLog = policyadapter.NewAuditLogger(db)
+	}
 
 	// G13: Initialize disaster recovery with DB connection
 	of.DR = newDisasterRecovery(cfg, db)

@@ -46,6 +46,13 @@ type Config struct {
 	GRPC     GRPCConfig     `yaml:"grpc"`
 	JWT      JWTConfig      `yaml:"jwt"`
 	Auth     AuthConfig     `yaml:"auth"`
+
+	// AuditWriterDSN is a libpq-style DSN used exclusively for INSERTs into
+	// audit_log via the of_audit_writer role. Empty means the audit logger
+	// will fall back to the application DSN (legacy single-DSN mode).
+	// When set, it is expected to authenticate as a role whose only
+	// privilege on audit_log is INSERT (see migrations/012_audit_log_revoke).
+	AuditWriterDSN string `yaml:"audit_writer_dsn"`
 }
 
 // FeatureFlagsConfig groups the YAML-level defaults for feature toggles.
