@@ -110,3 +110,11 @@ type GateRequestRepository interface {
 	GetActiveRequest(ctx context.Context, pipelineID, stage string) (*DBGateRequest, error)
 	HandleTimeouts(ctx context.Context) ([]string, error)
 }
+
+// StageRepository manages pipeline stage records.
+type StageRepository interface {
+	Create(ctx context.Context, s *domain.Stage) error
+	GetByID(ctx context.Context, id string) (*domain.Stage, error)
+	ListByPipeline(ctx context.Context, pipelineID string) ([]*domain.Stage, error)
+	UpdateStatus(ctx context.Context, id string, status string, summary string) error
+}
