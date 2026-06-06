@@ -2,8 +2,9 @@ import { useSearchParams, useNavigate } from 'react-router-dom';
 import { tokens } from '../../shared/design-tokens';
 
 type ErrorCode = 404 | 500 | 503;
+export type Error503Reason = 'circuit_open' | 'quota_exhausted';
 
-interface ErrorConfig {
+export interface ErrorConfig {
   code: ErrorCode;
   title: string;
   message: string;
@@ -11,7 +12,46 @@ interface ErrorConfig {
   details?: string;
 }
 
-function getErrorConfig(code: ErrorCode): ErrorConfig {
+/**
+ * Resolve the 503 sub-variant. Returns null when the reason is not recognized
+ * (caller should fall back to a generic 503 view). Exported so unit tests can
+ * assert the copy without a DOM.
+ */
+export function getError503Config(
+  reason: Error503Reason | undefined,
+  retryAfter?: number,
+): ErrorConfig | null {
+  if (reason === 'circuit_open') {
+    const seconds = retryAfter ?? 60;
+    return {
+      code: 503,
+      title: 'Agent engine temporarily degraded',
+      message: `Circuit breaker is open. Auto-retry in ${seconds}s.`,
+      action: { label: 'View status', to: '/circuit-breaker' },
+    };
+  }
+  if (reason === 'quota_exhausted') {
+    return {
+      code: 503,
+      title: 'Monthly quota exhausted',
+      message: 'Please wait until next month or contact your admin to increase budget.',
+      action: { label: 'View usage', to: '/costs' },
+    };
+  }
+  return null;
+}
+
+function getLegacy503Config(): ErrorConfig {
+  return {
+    code: 503,
+    title: 'Token Quota Exhausted',
+    message: 'Your token quota for this billing period has been reached.',
+    details: 'Usage: 100% (500,000 / 500,000 tokens)',
+    action: { label: 'View Usage', to: '/settings' },
+  };
+}
+
+function getErrorConfig(code: ErrorCode, reason?: Error503Reason, retryAfter?: number): ErrorConfig {
   switch (code) {
     case 404:
       return {
@@ -28,23 +68,39 @@ function getErrorConfig(code: ErrorCode): ErrorConfig {
         details: `Error ID: ${crypto.randomUUID().slice(0, 8).toUpperCase()}`,
         action: { label: 'Try Again', to: -1 as any },
       };
-    case 503:
-      return {
-        code: 503,
-        title: 'Token Quota Exhausted',
-        message: 'Your token quota for this billing period has been reached.',
-        details: 'Usage: 100% (500,000 / 500,000 tokens)',
-        action: { label: 'View Usage', to: '/settings' },
-      };
+    case 503: {
+      const variant = getError503Config(reason, retryAfter);
+      return variant ?? getLegacy503Config();
+    }
   }
 }
 
-export default function ErrorPage() {
-  const [searchParams] = useSearchParams();
+function parseReason(raw: string | null): Error503Reason | undefined {
+  if (raw === 'circuit_open' || raw === 'quota_exhausted') return raw;
+  return undefined;
+}
+
+function parseRetryAfter(raw: string | null): number | undefined {
+  if (!raw) return undefined;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
+/**
+ * Inner component that takes explicit props. The default route export wraps
+ * this and reads useSearchParams; tests can call it with explicit props.
+ */
+export function ErrorPageView({
+  code,
+  reason,
+  retryAfter,
+}: {
+  code: ErrorCode;
+  reason?: Error503Reason;
+  retryAfter?: number;
+}) {
+  const config = getErrorConfig(code, reason, retryAfter);
   const navigate = useNavigate();
-  const codeParam = searchParams.get('code');
-  const code: ErrorCode = codeParam === '404' ? 404 : codeParam === '500' ? 500 : codeParam === '503' ? 503 : 404;
-  const config = getErrorConfig(code);
 
   const handleAction = () => {
     if (code === 500) {
@@ -155,4 +211,13 @@ export default function ErrorPage() {
       </div>
     </div>
   );
+}
+
+export default function ErrorPage() {
+  const [searchParams] = useSearchParams();
+  const codeParam = searchParams.get('code');
+  const code: ErrorCode = codeParam === '404' ? 404 : codeParam === '500' ? 500 : codeParam === '503' ? 503 : 404;
+  const reason = parseReason(searchParams.get('reason'));
+  const retryAfter = parseRetryAfter(searchParams.get('retry_after'));
+  return <ErrorPageView code={code} reason={reason} retryAfter={retryAfter} />;
 }
