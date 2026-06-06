@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -175,4 +176,91 @@ func TestPGDisasterRecovery_CleanupOldBackups(t *testing.T) {
 	if len(files) != 7 {
 		t.Errorf("expected 7 files after cleanup, got %d", len(files))
 	}
+}
+
+func TestPGDisasterRecovery_EncryptedBackup(t *testing.T) {
+	// Skip if pg_dump or gpg are not available (TDD allowance per plan).
+	if _, err := exec.LookPath("pg_dump"); err != nil {
+		t.Skip("requires pg_dump in PATH")
+	}
+	if _, err := exec.LookPath("gpg"); err != nil {
+		t.Skip("requires gpg in PATH")
+	}
+
+	tempDir, err := os.MkdirTemp("", "pg_encrypted_backup_test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	passphraseFile := filepath.Join(tempDir, "passphrase.txt")
+	if err := os.WriteFile(passphraseFile, []byte("test-passphrase-please-rotate"), 0600); err != nil {
+		t.Fatalf("failed to write passphrase file: %v", err)
+	}
+
+	dr := NewPGDisasterRecoveryWithPassphrase(nil, "host=127.0.0.1 dbname=stub", tempDir, "", passphraseFile)
+	if dr == nil {
+		t.Fatal("constructor returned nil")
+	}
+	// With nil db the constructor returns an empty struct; populate the
+	// minimum fields the encryptBackup unit under test needs.
+	dr.passphraseFile = passphraseFile
+	dr.backupDir = tempDir
+
+	// encryptBackup is the unit under test for T6 — it runs gpg on an
+	// already-produced plaintext dump and removes the plaintext.
+	plaintext := filepath.Join(tempDir, "backup_20260607_000000.dump")
+	if err := os.WriteFile(plaintext, []byte("plaintext-pg-dump-bytes"), 0644); err != nil {
+		t.Fatalf("failed to seed plaintext: %v", err)
+	}
+
+	encrypted, err := dr.encryptBackup(context.Background(), plaintext)
+	if err != nil {
+		t.Fatalf("encryptBackup failed: %v", err)
+	}
+	if encrypted == plaintext {
+		t.Fatal("encryptBackup returned the plaintext path; expected .gpg suffix")
+	}
+	if filepath.Ext(encrypted) != ".gpg" {
+		t.Errorf("expected .gpg suffix, got %q", encrypted)
+	}
+
+	info, err := os.Stat(encrypted)
+	if err != nil {
+		t.Fatalf("expected encrypted file at %q: %v", encrypted, err)
+	}
+	if info.Size() == 0 {
+		t.Error("encrypted file is empty")
+	}
+
+	if _, err := os.Stat(plaintext); !os.IsNotExist(err) {
+		t.Errorf("plaintext dump should be removed; stat err = %v", err)
+	}
+
+	data, err := os.ReadFile(encrypted)
+	if err != nil {
+		t.Fatalf("failed to read encrypted file: %v", err)
+	}
+	if containsBytes(data, []byte("plaintext-pg-dump-bytes")) {
+		t.Error("encrypted file leaks plaintext content")
+	}
+}
+
+func containsBytes(haystack, needle []byte) bool {
+	if len(needle) == 0 {
+		return true
+	}
+	for i := 0; i+len(needle) <= len(haystack); i++ {
+		match := true
+		for j := 0; j < len(needle); j++ {
+			if haystack[i+j] != needle[j] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
+		}
+	}
+	return false
 }
