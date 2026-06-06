@@ -59,6 +59,12 @@ type TokenCostRepository interface {
 
 	// BatchRecordTokenUsage 批量写入，封装在单个事务内。
 	BatchRecordTokenUsage(ctx context.Context, recs []TokenUsageRecord) error
+
+	// GetBudget 读 cost_quota 中给定 project 的月度预算（美元）。0 表示无限制。
+	GetBudget(ctx context.Context, projectID string) (monthlyUSD float64, err error)
+
+	// SetBudget 覆盖写 cost_quota 行（PK = project_id）。monthlyUSD=0 表示清空。
+	SetBudget(ctx context.Context, projectID string, monthlyUSD float64) error
 }
 
 // TokenUsageRecord 与 token_usage 表列一一对应；pipeline_id/project_id 来自上游 QueryEngine。

@@ -367,6 +367,47 @@ func (r *PGRepository) BatchRecordTokenUsage(ctx context.Context, recs []port.To
 	return tx.Commit()
 }
 
+// --- Cost Quota ---
+
+// GetBudget 读 cost_quota 中给定 project 的月度预算（美元）。0 表示无限制。
+//
+// TODO(Path-A schema gap): 现有 cost_quota schema 没有 monthly_usd 列，PK 也不是
+// project_id 单列。T10 集成验证时需要先补迁移（012_cost_quota_monthly_usd.up.sql）。
+func (r *PGRepository) GetBudget(ctx context.Context, projectID string) (float64, error) {
+	if r == nil || r.db == nil {
+		return 0, fmt.Errorf("pipeline repository database is not configured")
+	}
+	var b sql.NullFloat64
+	err := r.db.QueryRowContext(ctx, `SELECT monthly_usd FROM cost_quota WHERE project_id = $1`, projectID).Scan(&b)
+	if err == sql.ErrNoRows {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	if !b.Valid {
+		return 0, nil
+	}
+	return b.Float64, nil
+}
+
+// SetBudget 覆盖写 cost_quota 行（PK = project_id）。monthlyUSD=0 表示清空。
+//
+// TODO(Path-A schema gap): 现有 cost_quota schema 没有 monthly_usd / updated_at 列，
+// 且 UNIQUE 约束是 (project_id, month) 而非 project_id 单列。T10 集成验证时需要
+// 先补迁移并决定是用 (project_id) 单列还是 (project_id, month='all') 行。
+func (r *PGRepository) SetBudget(ctx context.Context, projectID string, monthlyUSD float64) error {
+	if r == nil || r.db == nil {
+		return fmt.Errorf("pipeline repository database is not configured")
+	}
+	_, err := r.db.ExecContext(ctx, `
+		INSERT INTO cost_quota (project_id, monthly_usd, updated_at)
+		VALUES ($1, $2, NOW())
+		ON CONFLICT (project_id) DO UPDATE SET monthly_usd = EXCLUDED.monthly_usd, updated_at = NOW()
+	`, projectID, monthlyUSD)
+	return err
+}
+
 func nextMonthReset() time.Time {
 	now := time.Now()
 	return time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()).AddDate(0, 1, 0)

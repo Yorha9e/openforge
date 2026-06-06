@@ -132,6 +132,7 @@ func RegisterRoutes(of *profile.OpenForge, jwtSvc *service.JWTService, cfg *prof
 	// Token/Cost (pm)
 	mux.HandleFunc("GET /api/projects/{id}/token-usage", withRole("pm", handleTokenUsage(of)))
 	mux.HandleFunc("GET /api/projects/{id}/token-budget", withRole("pm", handleTokenBudget(of)))
+	mux.HandleFunc("PUT /api/projects/{id}/token-budget", withRoles([]string{"pm", "admin"}, handleUpdateBudget(of)))
 
 	// Models (observer)
 	mux.HandleFunc("GET /api/models", withRole("observer", handleListModels(of)))
@@ -816,6 +817,28 @@ func handleTokenBudget(of *profile.OpenForge) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusOK, b)
+	}
+}
+
+func handleUpdateBudget(of *profile.OpenForge) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		projectID := r.PathValue("id")
+		var body struct {
+			MonthlyUSD float64 `json:"monthly_usd"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeError(w, 400, "invalid body")
+			return
+		}
+		if body.MonthlyUSD < 0 {
+			writeError(w, 400, "monthly_usd must be >= 0")
+			return
+		}
+		if err := of.PipelineRepo.SetBudget(r.Context(), projectID, body.MonthlyUSD); err != nil {
+			writeError(w, 500, err.Error())
+			return
+		}
+		writeJSON(w, 200, map[string]any{"project_id": projectID, "monthly_usd": body.MonthlyUSD})
 	}
 }
 
