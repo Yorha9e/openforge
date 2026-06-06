@@ -101,7 +101,33 @@ function Test-Baseline($key) {
             if ($LASTEXITCODE -ne 0) { throw "buf generate failed" }
         }
 
-        # 2. Go tests
+        # 2. Install node deps if missing
+        if ((Test-Path 'frontend/package.json') -and -not (Test-Path 'frontend/node_modules')) {
+            Write-Host "  -> frontend npm ci (first time)"
+            Push-Location frontend
+            & npm ci *> $null
+            $frontendInstalled = ($LASTEXITCODE -eq 0)
+            Pop-Location
+            if (-not $frontendInstalled) {
+                Write-Host "[WARN] frontend npm ci failed" -ForegroundColor Yellow
+            } else {
+                Write-Host "[OK] frontend deps installed" -ForegroundColor Green
+            }
+        }
+        if ((Test-Path 'nodejs-io/package.json') -and -not (Test-Path 'nodejs-io/node_modules')) {
+            Write-Host "  -> nodejs-io npm ci (first time)"
+            Push-Location nodejs-io
+            & npm ci *> $null
+            $nodeInstalled = ($LASTEXITCODE -eq 0)
+            Pop-Location
+            if (-not $nodeInstalled) {
+                Write-Host "[WARN] nodejs-io npm ci failed" -ForegroundColor Yellow
+            } else {
+                Write-Host "[OK] nodejs-io deps installed" -ForegroundColor Green
+            }
+        }
+
+        # 3. Go tests
         Write-Host "  -> go test ./internal/... -count=1"
         & go test ./internal/... -count=1 *> $null
         if ($LASTEXITCODE -ne 0) {
@@ -111,7 +137,7 @@ function Test-Baseline($key) {
         }
         Write-Host "[OK] Go tests passed" -ForegroundColor Green
 
-        # 3. Frontend typecheck (best-effort)
+        # 4. Frontend typecheck (best-effort)
         if (Test-Path 'frontend/package.json') {
             Write-Host "  -> frontend npm run typecheck"
             Push-Location frontend
@@ -121,11 +147,11 @@ function Test-Baseline($key) {
             if ($typecheckOk) {
                 Write-Host "[OK] frontend typecheck passed" -ForegroundColor Green
             } else {
-                Write-Host "[WARN] frontend typecheck had errors" -ForegroundColor Yellow
+                Write-Host "[WARN] frontend typecheck had errors (see above)" -ForegroundColor Yellow
             }
         }
 
-        # 4. nodejs-io tests (best-effort)
+        # 5. nodejs-io tests (best-effort)
         if (Test-Path 'nodejs-io/package.json') {
             Write-Host "  -> nodejs-io npm test"
             Push-Location nodejs-io
