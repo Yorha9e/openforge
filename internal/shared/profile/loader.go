@@ -186,12 +186,14 @@ type RedisConfig struct {
 
 // DatabaseConfig holds database connection parameters.
 type DatabaseConfig struct {
-	Host     string `yaml:"host"`
-	Port     int    `yaml:"port"`
-	User     string `yaml:"user"`
-	Password string `yaml:"password"`
-	DBName   string `yaml:"dbname"`
-	SSLMode  string `yaml:"sslmode"`
+	Host         string `yaml:"host"`
+	Port         int    `yaml:"port"`
+	User         string `yaml:"user"`
+	Password     string `yaml:"password"`
+	DBName       string `yaml:"dbname"`
+	SSLMode      string `yaml:"sslmode"`
+	AppDSN       string `yaml:"app_dsn"`       // X3 T3 (#19): DSN for runtime app user
+	MigrationDSN string `yaml:"migration_dsn"` // X3 T3 (#19): DSN for migration user
 }
 
 // LLMConfig holds LLM provider configuration.

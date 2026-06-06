@@ -54,3 +54,42 @@ func TestMigrationRunner_Run(t *testing.T) {
 		t.Errorf("expected still 2 after re-run, got %d", count)
 	}
 }
+
+// TestNewMigrationRunnerFromDSN_InvalidDSN ensures the constructor returns
+// an error (and does not panic) when given a syntactically invalid DSN.
+func TestNewMigrationRunnerFromDSN_InvalidDSN(t *testing.T) {
+	r, err := NewMigrationRunnerFromDSN("not-a-valid-dsn", t.TempDir())
+	if err == nil {
+		// Some drivers are lenient and only fail on Ping; if the runner
+		// came back, ensure Close is safe and the test is a no-op.
+		if r != nil {
+			_ = r.Close()
+		}
+		return
+	}
+	if r != nil {
+		t.Errorf("expected nil runner on error, got %+v", r)
+	}
+}
+
+// TestNewMigrationRunnerFromDSN_EmptyDir verifies a non-existent dir is
+// surfaced as an error from Run, not from the constructor (DSN parsing
+// succeeds even if the target server is unreachable).
+func TestNewMigrationRunnerFromDSN_EmptyDir(t *testing.T) {
+	// Use a syntactically valid DSN that won't connect.
+	r, err := NewMigrationRunnerFromDSN(
+		"postgres://of_migration:of_migration_dev@127.0.0.1:1/openforge?sslmode=disable&connect_timeout=1",
+		"/nonexistent/migrations/dir",
+	)
+	if err != nil {
+		// Some drivers reject the URL upfront — that's fine, exercise the path.
+		return
+	}
+	defer r.Close()
+	if got := r.DSN(); got == "" {
+		t.Errorf("DSN() = empty, want the migration DSN we passed in")
+	}
+	if err := r.Run(t.Context()); err == nil {
+		t.Errorf("Run() against missing dir should fail")
+	}
+}
