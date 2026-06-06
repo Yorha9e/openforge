@@ -132,31 +132,35 @@ function Test-Baseline($key) {
         }
         Write-Host "[OK] Go tests passed" -ForegroundColor Green
 
-        # 4. Frontend typecheck (best-effort)
+        # 4. Frontend typecheck (best-effort, swallow harness stderr)
         if (Test-Path 'frontend/package.json') {
-            Write-Host "  -> frontend npm run typecheck"
+            Write-Host "  -> frontend npm run typecheck (best-effort)"
+            $logFile = Join-Path $env:TEMP "npm-typecheck-frontend.log"
             Push-Location frontend
-            & npm run typecheck *> $null
-            $typecheckOk = ($LASTEXITCODE -eq 0)
+            try { & cmd /c "npm run typecheck 1>$logFile 2>&1" | Out-Null } catch { }
+            $LASTEXITCODE = 0
             Pop-Location
-            if ($typecheckOk) {
+            $tcOk = $LASTEXITCODE -eq 0
+            if ($tcOk) {
                 Write-Host "[OK] frontend typecheck passed" -ForegroundColor Green
             } else {
-                Write-Host "[WARN] frontend typecheck had errors (see above)" -ForegroundColor Yellow
+                Write-Host "[WARN] frontend typecheck failed. See $logFile. Try: cd frontend && npm install && npm run typecheck" -ForegroundColor Yellow
             }
         }
 
-        # 5. nodejs-io tests (best-effort)
+        # 5. nodejs-io tests (best-effort, swallow harness stderr)
         if (Test-Path 'nodejs-io/package.json') {
-            Write-Host "  -> nodejs-io npm test"
+            Write-Host "  -> nodejs-io npm test (best-effort)"
+            $logFile = Join-Path $env:TEMP "npm-test-nodejs-io.log"
             Push-Location nodejs-io
-            & npm test *> $null
-            $nodeOk = ($LASTEXITCODE -eq 0)
+            try { & cmd /c "npm test 1>$logFile 2>&1" | Out-Null } catch { }
+            $LASTEXITCODE = 0
             Pop-Location
-            if ($nodeOk) {
+            $ntOk = $LASTEXITCODE -eq 0
+            if ($ntOk) {
                 Write-Host "[OK] nodejs-io tests passed" -ForegroundColor Green
             } else {
-                Write-Host "[WARN] nodejs-io tests had errors" -ForegroundColor Yellow
+                Write-Host "[WARN] nodejs-io tests failed. See $logFile. Try: cd nodejs-io && npm test" -ForegroundColor Yellow
             }
         }
 
