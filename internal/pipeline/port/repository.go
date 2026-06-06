@@ -51,6 +51,29 @@ type TokenCostRepository interface {
 	AggregateByModel(ctx context.Context, projectID string, days int) ([]TokenCostRow, error)
 	GetProjectBudget(ctx context.Context, projectID string) (*ProjectBudget, error)
 	GetCurrentMonthUsage(ctx context.Context, projectID string) (int64, float64, error)
+
+	// RecordTokenUsage 写入单条 token_usage 记录。供 Node.js TokenMeter.flush() 通过
+	// gRPC RecordTokenUsage 调用。token_usage.id 是 BIGSERIAL + 分区键(created_at)的
+	// 复合主键，幂等由调用方保证（同 ID 不会重复 flush）。
+	RecordTokenUsage(ctx context.Context, rec TokenUsageRecord) error
+
+	// BatchRecordTokenUsage 批量写入，封装在单个事务内。
+	BatchRecordTokenUsage(ctx context.Context, recs []TokenUsageRecord) error
+}
+
+// TokenUsageRecord 与 token_usage 表列一一对应；pipeline_id/project_id 来自上游 QueryEngine。
+// 注：DB 中 id 列为 BIGSERIAL（与 created_at 组成复合主键），调用方传入的 ID 仅用于
+// gRPC 层回执关联，不参与 INSERT；落库 id 由 DB 序列生成。
+type TokenUsageRecord struct {
+	ID               string
+	PipelineID       string
+	ProjectID        string
+	Provider         string
+	Model            string
+	PromptTokens     int64
+	CompletionTokens int64
+	EstimatedCost    float64
+	CreatedAt        time.Time
 }
 
 // DBMessage mirrors the conversation_message table.

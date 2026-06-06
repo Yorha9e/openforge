@@ -25,6 +25,12 @@ func (s *stubTokenCostRepo) GetProjectBudget(ctx context.Context, projectID stri
 func (s *stubTokenCostRepo) GetCurrentMonthUsage(ctx context.Context, projectID string) (int64, float64, error) {
 	return 1000, 5.0, nil
 }
+func (s *stubTokenCostRepo) RecordTokenUsage(ctx context.Context, rec port.TokenUsageRecord) error {
+	return nil
+}
+func (s *stubTokenCostRepo) BatchRecordTokenUsage(ctx context.Context, recs []port.TokenUsageRecord) error {
+	return nil
+}
 
 func TestTokenCostService_DailyUsage(t *testing.T) {
 	repo := &stubTokenCostRepo{daily: []port.TokenCostRow{{Date: "2026-05-23", PromptTokens: 100}}}

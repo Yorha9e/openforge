@@ -310,6 +310,63 @@ func (r *PGRepository) GetCurrentMonthUsage(ctx context.Context, projectID strin
 	return tokens, cost, err
 }
 
+// --- RecordTokenUsage ---
+
+// RecordTokenUsage 写入单条 token_usage 记录。
+// 注：DB 中 id 列为 BIGSERIAL（与 created_at 组成复合主键，无单独 UNIQUE 约束）；
+//     因此不使用 ON CONFLICT，调用方需自行保证幂等。rec.ID 仅用于日志/回执关联。
+func (r *PGRepository) RecordTokenUsage(ctx context.Context, rec port.TokenUsageRecord) error {
+	if r == nil || r.db == nil {
+		return fmt.Errorf("pipeline repository database is not configured")
+	}
+	const q = `
+		INSERT INTO token_usage
+			(pipeline_id, project_id, provider, model,
+			 prompt_tokens, completion_tokens, estimated_cost, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	`
+	_, err := r.db.ExecContext(ctx, q,
+		rec.PipelineID, rec.ProjectID, rec.Provider, rec.Model,
+		rec.PromptTokens, rec.CompletionTokens, rec.EstimatedCost, rec.CreatedAt)
+	return err
+}
+
+// BatchRecordTokenUsage 在单个事务内批量写入；空切片为 no-op。
+func (r *PGRepository) BatchRecordTokenUsage(ctx context.Context, recs []port.TokenUsageRecord) error {
+	if len(recs) == 0 {
+		return nil
+	}
+	if r == nil || r.db == nil {
+		return fmt.Errorf("pipeline repository database is not configured")
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() // safe; Commit 后 no-op
+
+	const q = `
+		INSERT INTO token_usage
+			(pipeline_id, project_id, provider, model,
+			 prompt_tokens, completion_tokens, estimated_cost, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	`
+	stmt, err := tx.PrepareContext(ctx, q)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for _, rec := range recs {
+		if _, err := stmt.ExecContext(ctx,
+			rec.PipelineID, rec.ProjectID, rec.Provider, rec.Model,
+			rec.PromptTokens, rec.CompletionTokens, rec.EstimatedCost, rec.CreatedAt,
+		); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 func nextMonthReset() time.Time {
 	now := time.Now()
 	return time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()).AddDate(0, 1, 0)
