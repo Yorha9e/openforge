@@ -14,6 +14,7 @@ import (
 	agentport "openforge/internal/agent/port"
 	authadapter "openforge/internal/auth/adapter"
 	"openforge/internal/auth/service"
+	pipelinedomain "openforge/internal/pipeline/domain"
 	"openforge/internal/shared/profile"
 
 	"github.com/gorilla/websocket"
@@ -207,12 +208,24 @@ func (c *wsConn) authenticate() bool {
 	return true
 }
 
+// wsWriter is the minimal sink required by dispatch. The production wsConn
+// uses c.write (backed by *websocket.Conn); tests can inject a capturing
+// implementation without spinning up a real WebSocket server.
+type wsWriter func(v any)
+
+// handleMessage parses a raw websocket payload and routes it through dispatch.
 func (c *wsConn) handleMessage(raw []byte) {
 	var msg wsMessage
 	if err := json.Unmarshal(raw, &msg); err != nil {
 		return
 	}
+	c.dispatch(msg, c.write)
+}
 
+// dispatch handles a parsed wsMessage by routing it to the correct handler.
+// It is separated from handleMessage so that tests can drive the routing
+// logic without needing a real *websocket.Conn.
+func (c *wsConn) dispatch(msg wsMessage, write wsWriter) {
 	switch msg.Type {
 	case "auth":
 		// Already authenticated; re-auth ignored in Phase 2
@@ -225,7 +238,7 @@ func (c *wsConn) handleMessage(raw []byte) {
 
 		qe := c.getOrCreateEngine(p.PipelineID, p.WorkDir)
 		if qe == nil {
-			c.write(map[string]any{"type": "error", "payload": map[string]string{"message": "access denied: no role in project"}})
+			write(map[string]any{"type": "error", "payload": map[string]string{"message": "access denied: no role in project"}})
 			return
 		}
 
@@ -242,7 +255,7 @@ func (c *wsConn) handleMessage(raw []byte) {
 
 		stream, err := qe.SubmitMessage(ctx, p.Message)
 		if err != nil {
-			c.write(map[string]any{"type": "error", "payload": map[string]string{"message": err.Error()}})
+			write(map[string]any{"type": "error", "payload": map[string]string{"message": err.Error()}})
 			if c.of.SLO != nil {
 				c.of.SLO.RecordPipeline(time.Since(startTime), false)
 			}
@@ -252,9 +265,9 @@ func (c *wsConn) handleMessage(raw []byte) {
 		for ev := range stream {
 			switch ev.Type {
 			case "delta":
-				c.write(map[string]any{"type": "chat.stream", "payload": map[string]string{"delta": ev.Content}})
+				write(map[string]any{"type": "chat.stream", "payload": map[string]string{"delta": ev.Content}})
 			case "tool_start":
-				c.write(map[string]any{
+				write(map[string]any{
 					"type": "tool.start",
 					"payload": map[string]string{
 						"tool_name": ev.ToolName,
@@ -263,7 +276,7 @@ func (c *wsConn) handleMessage(raw []byte) {
 				})
 			case "tool_done":
 				outputType := detectOutputType(ev.ToolName, ev.Content)
-				c.write(map[string]any{
+				write(map[string]any{
 					"type": "tool.done",
 					"payload": map[string]string{
 						"tool_name":   ev.ToolName,
@@ -277,7 +290,7 @@ func (c *wsConn) handleMessage(raw []byte) {
 				if ev.Error != nil {
 					errMsg = ev.Error.Error()
 				}
-				c.write(map[string]any{
+				write(map[string]any{
 					"type": "tool.error",
 					"payload": map[string]string{
 						"tool_name": ev.ToolName,
@@ -285,21 +298,21 @@ func (c *wsConn) handleMessage(raw []byte) {
 					},
 				})
 			case "context_compress":
-				c.write(map[string]any{
+				write(map[string]any{
 					"type": "context.compress",
 					"payload": map[string]string{
 						"content": ev.Content,
 					},
 				})
 			case "done":
-				c.write(map[string]any{"type": "chat.stream_done", "payload": map[string]string{"content": ev.Content}})
+				write(map[string]any{"type": "chat.stream_done", "payload": map[string]string{"content": ev.Content}})
 			case "error":
 				success = false
 				errMsg := ""
 				if ev.Error != nil {
 					errMsg = ev.Error.Error()
 				}
-				c.write(map[string]any{"type": "error", "payload": map[string]string{"message": errMsg}})
+				write(map[string]any{"type": "error", "payload": map[string]string{"message": errMsg}})
 			}
 		}
 
@@ -320,7 +333,7 @@ func (c *wsConn) handleMessage(raw []byte) {
 			if pipeline.CurrentStage != c.lastPipelineStage || pipeline.Status != c.lastPipelineStatus {
 				c.lastPipelineStage = pipeline.CurrentStage
 				c.lastPipelineStatus = pipeline.Status
-				c.write(map[string]any{
+				write(map[string]any{
 					"type": "pipeline.stage_change",
 					"payload": map[string]string{
 						"pipeline_id": pipeline.ID,
@@ -331,7 +344,7 @@ func (c *wsConn) handleMessage(raw []byte) {
 
 				// Emit files_changed event if there are changed files
 				if len(pipeline.ChangedFiles) > 0 {
-					c.write(map[string]any{
+					write(map[string]any{
 						"type": "pipeline.files_changed",
 						"payload": map[string]any{
 							"pipeline_id":   pipeline.ID,
@@ -362,7 +375,7 @@ func (c *wsConn) handleMessage(raw []byte) {
 		}
 		used := qe.TokenUsed()
 		if budget > 0 && float64(used)/float64(budget) > 0.7 {
-			c.write(map[string]any{
+			write(map[string]any{
 				"type": "pipeline.token_warning",
 				"payload": map[string]int{
 					"used":   used,
@@ -382,20 +395,73 @@ func (c *wsConn) handleMessage(raw []byte) {
 			delete(c.streamCancels, p.PipelineID)
 		}
 		c.mu.Unlock()
-		c.write(map[string]any{
+		write(map[string]any{
 			"type":    "chat.stopped",
 			"payload": map[string]string{"pipeline_id": p.PipelineID},
 		})
 
 	case "gate.approve":
-		payloadBytes, _ := json.Marshal(msg.Payload)
 		var gp struct {
 			PipelineID string `json:"pipeline_id"`
 			Stage      string `json:"stage"`
+			Approver   string `json:"approver"`
+			Comment    string `json:"comment"`
 		}
-		json.Unmarshal(payloadBytes, &gp)
-		c.write(map[string]any{"type": "gate.notify", "payload": map[string]string{
+		if err := json.Unmarshal(msg.Payload, &gp); err != nil {
+			write(map[string]any{"type": "error", "payload": map[string]string{
+				"code": "invalid_payload", "message": "invalid gate.approve payload",
+			}})
+			return
+		}
+		if gp.Approver == "" {
+			gp.Approver = c.userID
+		}
+		if c.of.GateSvc == nil {
+			write(map[string]any{"type": "error", "payload": map[string]string{
+				"code": "gate_approve_failed", "message": "gate service not configured",
+			}})
+			return
+		}
+		if err := c.of.GateSvc.Approve(context.Background(), gp.PipelineID, gp.Stage, gp.Approver, pipelinedomain.GateChecklist{}, gp.Comment); err != nil {
+			write(map[string]any{"type": "error", "payload": map[string]string{
+				"code": "gate_approve_failed", "message": err.Error(),
+			}})
+			return
+		}
+		write(map[string]any{"type": "gate.notify", "payload": map[string]string{
 			"pipeline_id": gp.PipelineID, "stage": gp.Stage, "event": "approved",
+		}})
+
+	case "gate.reject":
+		var gp struct {
+			PipelineID string `json:"pipeline_id"`
+			Stage      string `json:"stage"`
+			Approver   string `json:"approver"`
+			Reason     string `json:"reason"`
+		}
+		if err := json.Unmarshal(msg.Payload, &gp); err != nil {
+			write(map[string]any{"type": "error", "payload": map[string]string{
+				"code": "invalid_payload", "message": "invalid gate.reject payload",
+			}})
+			return
+		}
+		if gp.Approver == "" {
+			gp.Approver = c.userID
+		}
+		if c.of.GateSvc == nil {
+			write(map[string]any{"type": "error", "payload": map[string]string{
+				"code": "gate_reject_failed", "message": "gate service not configured",
+			}})
+			return
+		}
+		if err := c.of.GateSvc.Reject(context.Background(), gp.PipelineID, gp.Stage, gp.Approver, nil, gp.Reason); err != nil {
+			write(map[string]any{"type": "error", "payload": map[string]string{
+				"code": "gate_reject_failed", "message": err.Error(),
+			}})
+			return
+		}
+		write(map[string]any{"type": "gate.notify", "payload": map[string]string{
+			"pipeline_id": gp.PipelineID, "stage": gp.Stage, "event": "rejected",
 		}})
 
 	case "pipeline.cancel":
@@ -405,18 +471,18 @@ func (c *wsConn) handleMessage(raw []byte) {
 		}
 		json.Unmarshal(payloadBytes, &cp)
 		c.of.PipelineSvc.Cancel(context.Background(), cp.PipelineID)
-		c.write(map[string]any{"type": "pipeline.finished", "payload": map[string]string{
+		write(map[string]any{"type": "pipeline.finished", "payload": map[string]string{
 			"pipeline_id": cp.PipelineID, "status": "cancelled",
 		}})
 
 	case "tool.proxy_result":
 		if err := c.wsRPC.HandleProxyResult(msg.Payload); err != nil {
 			slog.Error("failed to handle proxy result", "error", err)
-			c.write(map[string]any{"type": "error", "payload": map[string]string{"message": err.Error()}})
+			write(map[string]any{"type": "error", "payload": map[string]string{"message": err.Error()}})
 		}
 
 	case "ping":
-		c.write(map[string]any{"type": "pong"})
+		write(map[string]any{"type": "pong"})
 	}
 }
 
