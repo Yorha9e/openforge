@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"regexp"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -227,6 +228,22 @@ type JWTConfig struct {
 	RefreshTTL string `yaml:"refresh_ttl"`
 }
 
+// envVarRe matches ${VAR} placeholders only (not bare $VAR). This avoids
+// corrupting values that legitimately contain $ characters (e.g. bcrypt
+// hashes like "$2a$10$..." which start with a digit and would otherwise be
+// misinterpreted by os.ExpandEnv).
+var envVarRe = regexp.MustCompile(`\$\{([a-zA-Z_][a-zA-Z0-9_]*)\}`)
+
+// expandEnvSafe substitutes ${VAR} placeholders with their environment values.
+// Unlike os.ExpandEnv, this does not treat bare $VAR (without braces) as a
+// variable, so values like bcrypt hashes are preserved verbatim.
+func expandEnvSafe(s string) string {
+	return envVarRe.ReplaceAllStringFunc(s, func(match string) string {
+		name := match[2 : len(match)-1]
+		return os.Getenv(name)
+	})
+}
+
 // Load reads a YAML profile from path, optionally verifies its Ed25519
 // signature, and returns a validated Config.
 func Load(path string, verifySignature bool) (*Config, error) {
@@ -239,7 +256,7 @@ func Load(path string, verifySignature bool) (*Config, error) {
 			return nil, fmt.Errorf("signature verification: %w", err)
 		}
 	}
-	expanded := os.ExpandEnv(string(data))
+	expanded := expandEnvSafe(string(data))
 	var cfg Config
 	if err := yaml.Unmarshal([]byte(expanded), &cfg); err != nil {
 		return nil, fmt.Errorf("parse profile: %w", err)
