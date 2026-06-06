@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"openforge/internal/auth/domain"
@@ -136,25 +137,46 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-func RateLimitMiddleware(maxPerSec int) func(http.Handler) http.Handler {
+func RateLimitMiddleware(ipPerSec, projectPerSec int) func(http.Handler) http.Handler {
 	type entry struct {
 		count   int
 		resetAt time.Time
 	}
-	buckets := make(map[string]*entry)
+	ipBuckets := make(map[string]*entry)
+	projBuckets := make(map[string]*entry)
+	var mu sync.Mutex
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ip := r.RemoteAddr
 			now := time.Now()
-			b, ok := buckets[ip]
-			if !ok || now.After(b.resetAt) {
-				buckets[ip] = &entry{count: 1, resetAt: now.Add(time.Second)}
-			} else if b.count >= maxPerSec {
-				writeError(w, 429, "rate limit exceeded")
+			mu.Lock()
+			defer mu.Unlock()
+
+			// 1. IP 维度
+			ib, ok := ipBuckets[ip]
+			if !ok || now.After(ib.resetAt) {
+				ipBuckets[ip] = &entry{count: 1, resetAt: now.Add(time.Second)}
+			} else if ib.count >= ipPerSec {
+				w.Header().Set("Retry-After", "1")
+				writeError(w, 429, "ip rate limit exceeded")
 				return
 			} else {
-				b.count++
+				ib.count++
+			}
+
+			// 2. project 维度（X-Project-ID header 来自 TenantMiddleware 上游）
+			if pid := r.Header.Get("X-Project-ID"); pid != "" {
+				pb, ok := projBuckets[pid]
+				if !ok || now.After(pb.resetAt) {
+					projBuckets[pid] = &entry{count: 1, resetAt: now.Add(time.Second)}
+				} else if pb.count >= projectPerSec {
+					w.Header().Set("Retry-After", "60")
+					writeError(w, 429, "project rate limit exceeded")
+					return
+				} else {
+					pb.count++
+				}
 			}
 			next.ServeHTTP(w, r)
 		})
