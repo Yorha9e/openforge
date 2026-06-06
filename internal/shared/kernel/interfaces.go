@@ -106,12 +106,54 @@ type SecretStore interface {
 	Get(ctx context.Context, key string) ([]byte, error)
 }
 
+// ObjectLockMode is the WORM lock mode for a bucket or object.
+type ObjectLockMode string
+
+const (
+	// ObjectLockModeGovernance protects objects from deletion by
+	// non-privileged users; a privileged user (with s3:BypassGovernanceRetention)
+	// may override the retention window.
+	ObjectLockModeGovernance ObjectLockMode = "GOVERNANCE"
+	// ObjectLockModeCompliance strictly forbids deletion (even by privileged
+	// users) until the retain-until date. Use only when regulatory
+	// requirements demand it.
+	ObjectLockModeCompliance ObjectLockMode = "COMPLIANCE"
+)
+
+// ObjectLockConfig configures a bucket's default object lock settings.
+// A non-zero Days sets the default retention period for new objects.
+type ObjectLockConfig struct {
+	Mode ObjectLockMode
+	Days int
+}
+
+// RetentionConfig sets per-object retention. An object with a non-zero
+// retain-until date cannot be deleted (Delete returns an error) until the
+// date has passed (or a privileged caller uses bypass for GOVERNANCE).
+type RetentionConfig struct {
+	Mode ObjectLockMode
+	Days int
+}
+
 // ObjectStore is blob/artifact storage.
 type ObjectStore interface {
 	Put(ctx context.Context, key string, reader io.Reader) error
 	Get(ctx context.Context, key string) (io.ReadCloser, error)
 	Delete(ctx context.Context, key string) error
 	List(ctx context.Context, prefix string) ([]string, error)
+	// SetBucketObjectLock enables object lock on the bucket with the given
+	// default retention. Implementations that don't support object lock
+	// (or are disabled/noop) should return nil. The default retention
+	// applies to objects that don't set their own.
+	SetBucketObjectLock(ctx context.Context, cfg ObjectLockConfig) error
+	// GetBucketObjectLock reports the bucket's current object lock
+	// configuration. Implementations without support may return
+	// ObjectLockConfig{} with a nil error, or an error.
+	GetBucketObjectLock(ctx context.Context) (ObjectLockConfig, error)
+	// SetObjectRetention applies per-object retention. Once set, the
+	// object cannot be deleted until the retain-until date has passed
+	// (or a privileged caller uses bypass for GOVERNANCE).
+	SetObjectRetention(ctx context.Context, key string, ret RetentionConfig) error
 }
 
 // Cache is a key-value store with TTL.

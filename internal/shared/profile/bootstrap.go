@@ -141,7 +141,25 @@ func Bootstrap(cfg *Config) (*OpenForge, error) {
 	of := &OpenForge{Config: cfg}
 	of.Secrets = newSecretStore(cfg)
 	of.Container = newContainerRuntime(cfg)
-	of.Object = newObjectStore(cfg)
+	objStore := newObjectStore(cfg)
+	of.Object = objStore
+
+	// T7: After constructing the MinIO store, apply bucket-level object
+	// lock in GOVERNANCE mode with 365-day default retention. This closes
+	// the WORM-at-S3-level loop: combined with T4 (audit_log DB-level
+	// REVOKE) and T5 (VerifyChain), the audit trail is triple-protected.
+	// We only attempt this when the store is the real MinIO implementation
+	// AND IsEnabled() is true; otherwise the bucket isn't reachable and
+	// any RPC would fail. Failure is logged but non-fatal — the bucket may
+	// already have the lock applied, or a follow-up bootstrap can re-try.
+	if ms, ok := objStore.(*adapter.MinioObjectStore); ok && ms.IsEnabled() {
+		if err := ms.SetBucketObjectLock(context.Background(), kernel.ObjectLockConfig{
+			Mode: kernel.ObjectLockModeGovernance,
+			Days: 365,
+		}); err != nil {
+			slog.Warn("minio object lock not applied", "err", err, "bucket", cfg.Minio.Bucket)
+		}
+	}
 	of.TaskQ = newTaskQueue(cfg)
 	of.Events = newEventBus(cfg)
 	of.Cache = newCache(cfg)
@@ -557,6 +575,15 @@ func (s *noopObjectStore) Delete(_ context.Context, key string) error {
 }
 func (s *noopObjectStore) List(_ context.Context, prefix string) ([]string, error) {
 	return nil, nil
+}
+func (s *noopObjectStore) SetBucketObjectLock(_ context.Context, _ kernel.ObjectLockConfig) error {
+	return nil
+}
+func (s *noopObjectStore) GetBucketObjectLock(_ context.Context) (kernel.ObjectLockConfig, error) {
+	return kernel.ObjectLockConfig{}, nil
+}
+func (s *noopObjectStore) SetObjectRetention(_ context.Context, _ string, _ kernel.RetentionConfig) error {
+	return nil
 }
 
 // --- TaskQueue -------------------------------------------------------------
