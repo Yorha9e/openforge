@@ -1,0 +1,26 @@
+﻿{
+  "meta": {
+    "project": "openforge_roadshow",
+    "canvas": "1280x720",
+    "deck_rendering": "editorial",
+    "deck_palette": "dark-cinematic",
+    "colors": {
+      "bg": "#1a1a2e",
+      "primary": "#00d4ff",
+      "accent": "#7c3aed",
+      "text": "#ffffff"
+    }
+  },
+  "images": [
+    {
+      "filename": "cover_bg.png",
+      "dimensions": "1280x720",
+      "ratio": 1.78,
+      "purpose": "Cover background",
+      "page_role": "hero_page",
+      "text_policy": "none",
+      "reference": "Dark abstract digital landscape suggesting code infrastructure and AI orchestration; vast central area for centered title overlay; subtle geometric grid lines fading into deep navy void; no human figures, no text",
+      "status": "Pending"
+    }
+  ]
+}
