@@ -8,12 +8,19 @@ option go_package = "openforge/gen/go/agent/v1;agentv1";
 // LLM Router Service — Go 协调层 → Node.js LLM Router
 // ============================================================
 
+import "google/protobuf/timestamp.proto";
+
 service LLMRouterService {
   rpc Chat(LLMChatRequest) returns (LLMChatResponse);
   rpc ChatStream(LLMChatRequest) returns (stream LLMChatStreamChunk);
   rpc ListModels(ListModelsRequest) returns (ListModelsResponse);
   rpc SwitchModel(SwitchModelRequest) returns (SwitchModelResponse);
   rpc GetTokenUsage(GetTokenUsageRequest) returns (GetTokenUsageResponse);
+  // RecordTokenUsage 由 Node.js IO 层调用 → Go 协调层。
+  // 用于把 Node TokenMeter.flush() 的批量记录写入 token_usage 表。
+  // 注: Go 端会丢弃 r.Id 字段(由 DB BIGSERIAL 序列生成);proto 层的 id 仅用于
+  // gRPC 回执关联。
+  rpc RecordTokenUsage(RecordTokenUsageRequest) returns (RecordTokenUsageResponse);
 }
 
 // -----------------------------------------------------------
@@ -164,4 +171,29 @@ message SwitchModelResponse {
 // 流式输出中 SwitchModel 语义:
 //   SwitchModel 是 promise-style: 当前 ChatStream 不受影响, 下一轮 Chat/ChatStream 自动使用新模型
 //   如需立即生效 → client 应先 StopGeneration → SwitchModel → ResumeGeneration
+
+// -----------------------------------------------------------
+// RecordTokenUsage — Node.js → Go 持久化通道
+// -----------------------------------------------------------
+
+message RecordTokenUsageRequest {
+  repeated TokenUsageRecord records = 1;
+}
+
+message TokenUsageRecord {
+  string id = 1;                 // UUID v4 from Node; Go 端不持久化(DB 序列生成)
+  string pipeline_id = 2;
+  string project_id = 3;
+  string provider = 4;
+  string model = 5;
+  int64 prompt_tokens = 6;
+  int64 completion_tokens = 7;
+  double estimated_cost = 8;
+  google.protobuf.Timestamp created_at = 9;
+}
+
+message RecordTokenUsageResponse {
+  int32 inserted = 1;            // echo back rows actually inserted
+  int32 skipped = 2;             // ON CONFLICT DO NOTHING count (always 0 for T1)
+}
 

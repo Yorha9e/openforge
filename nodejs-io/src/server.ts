@@ -5,24 +5,20 @@
 // context-window suffixes like "[1m]" are parsed automatically.
 
 import { createServer } from "node:http";
-import { connectNodeAdapter } from "@connectrpc/connect-node";
+import { randomUUID } from "node:crypto";
+import { connectNodeAdapter, createConnectTransport } from "@connectrpc/connect-node";
+import { createClient, type Client } from "@connectrpc/connect";
 import { create } from "@bufbuild/protobuf";
+import { timestampFromDate } from "@bufbuild/protobuf/wkt";
 
 import { AnthropicProvider } from "./llm/providers/anthropic.js";
 import { DeepSeekProvider } from "./llm/providers/deepseek.js";
 import { OpenAIProvider } from "./llm/providers/openai.js";
-import { TokenMeter } from "./llm/token_meter.js";
+import { TokenMeter, type FlushTransport, type TokenRecord } from "./llm/token_meter.js";
 import { ModelSelector } from "./llm/domain/model_selector.js";
 import type { LLMProvider } from "./kernel/interfaces.js";
-
-/** Strip "[Nm]" / "[Nk]" suffix from a model name before sending to the API. */
-function stripSuffix(model: string): string {
-  return model.replace(/\[\d+[mk]\]$/i, "");
-}
-
-// Generated proto types and service descriptor (protoc-gen-es v2 GenService)
+import { LLMRouterService } from "./gen/agent/v1/llm_connect.js";
 import {
-  LLMRouterService,
   LLMChatResponseSchema,
   LLMContentBlockSchema,
   LLMUsageSchema,
@@ -31,7 +27,17 @@ import {
   ListModelsResponseSchema,
   ModelInfoSchema,
   SwitchModelResponseSchema,
+  RecordTokenUsageRequestSchema,
+  TokenUsageRecordSchema,
 } from "./gen/agent/v1/llm_pb.js";
+
+/** Strip "[Nm]" / "[Nk]" suffix from a model name before sending to the API. */
+function stripSuffix(model: string): string {
+  return model.replace(/\[\d+[mk]\]$/i, "");
+}
+
+// Generated proto types and service descriptor (protoc-gen-es v2 GenService)
+// are imported above from "./gen/agent/v1/llm_connect.js" + "./gen/agent/v1/llm_pb.js".
 
 // ---------------------------------------------------------------------------
 // Bootstrap
@@ -57,7 +63,42 @@ const openai = new OpenAIProvider(
   process.env.OPENAI_BASE_URL ?? "https://api.openai.com",
   process.env.OPENAI_API_KEY ?? "",
 );
-const tokenMeter = new TokenMeter();
+
+// T2: Wire TokenMeter.flush() → Go gRPC RecordTokenUsage → token_usage table.
+// The Go coordinate layer listens on OF_GRPC_ADDR (default :8030) and exposes
+// LLMRouterService at /agent.v1.LLMRouterService/. If the env var is unset we
+// fall back to the default; failures bubble up to TokenMeter which re-enqueues
+// the batch (bounded by 2 * maxBufferSize).
+const goGrpcAddr = process.env.OF_GRPC_ADDR ?? "http://127.0.0.1:8030";
+const goTransport = createConnectTransport({ baseUrl: goGrpcAddr, httpVersion: "1.1" });
+// The generated descriptor uses @bufbuild/protobuf's `as const` shape, which
+// is structurally compatible with DescService at runtime. The type system
+// in this version of @connectrpc/connect expects a stricter DescService type,
+// so we cast through any — the same pattern the connectNodeAdapter uses below.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const goLLMClient = createClient(LLMRouterService as any, goTransport) as any;
+
+const tokenUsageFlush: FlushTransport = async (batch: TokenRecord[]) => {
+  await goLLMClient.recordTokenUsage(
+    create(RecordTokenUsageRequestSchema, {
+      records: batch.map((r) =>
+        create(TokenUsageRecordSchema, {
+          id: randomUUID(),
+          pipelineId: r.pipelineId,
+          projectId: r.projectId,
+          provider: r.provider,
+          model: r.model,
+          promptTokens: BigInt(r.inputTokens),
+          completionTokens: BigInt(r.outputTokens),
+          estimatedCost: 0, // TODO: 接 Anthropic pricing
+          createdAt: timestampFromDate(r.timestamp),
+        }),
+      ),
+    }),
+  );
+};
+
+const tokenMeter = new TokenMeter(tokenUsageFlush);
 tokenMeter.start();
 
 const providers: Record<string, LLMProvider> = {

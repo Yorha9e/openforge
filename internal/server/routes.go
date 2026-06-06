@@ -13,7 +13,9 @@ import (
 	"time"
 
 	"openforge/internal/adapter"
+	agentadapter "openforge/internal/agent/adapter"
 	agentdomain "openforge/internal/agent/domain"
+	"openforge/gen/go/agent/v1/agentv1connect"
 	authadapter "openforge/internal/auth/adapter"
 	authdomain "openforge/internal/auth/domain"
 	rbacmw "openforge/internal/auth/middleware"
@@ -185,6 +187,17 @@ func RegisterRoutes(of *profile.OpenForge, jwtSvc *service.JWTService, cfg *prof
 
 	// WebSocket (auth via first-frame protocol, not HTTP header)
 	mux.HandleFunc("GET /ws/chat", handleChatWS(of, jwtSvc))
+
+	// T2: gRPC server for Node.js IO layer → Go (LLMRouterService.RecordTokenUsage).
+	// The other 5 RPCs return CodeUnimplemented (their production handlers live
+	// in Node.js on :50051). Mounted as a path prefix to avoid colliding with
+	// the static file handler below.
+	if of.PipelineRepo != nil {
+		llmServer := agentadapter.NewLLMRouterGRPCServer(of.PipelineRepo)
+		grpcPath, grpcHandler := agentv1connect.NewLLMRouterServiceHandler(llmServer)
+		mux.Handle("POST "+grpcPath, grpcHandler)
+		mux.Handle("GET "+grpcPath, grpcHandler)
+	}
 
 	// Static files
 	mux.HandleFunc("GET /", handleStatic())
