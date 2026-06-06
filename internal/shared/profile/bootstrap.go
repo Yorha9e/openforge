@@ -218,6 +218,43 @@ func Bootstrap(cfg *Config) (*OpenForge, error) {
 		of.AuditLog = policyadapter.NewAuditLogger(db)
 	}
 
+	// T5: WORM audit chain hourly scanner. Every hour, re-walk the
+	// prev_hash/content_hash chain for the last three months of partitions
+	// and surface any break to the operator via the configured notifier.
+	// This complements T4's DB-level REVOKE: T4 stops future tampering
+	// at the role boundary, this ticker catches tampering that already
+	// happened (e.g. via a compromised operator session or direct PG
+	// superuser access). The goroutine lives for the lifetime of the
+	// process; it is not registered with the shutdown callback because a
+	// ticker that exits on shutdown is harmless and the audit chain check
+	// is read-only.
+	auditScanCtx, auditScanCancel := context.WithCancel(context.Background())
+	go func() {
+		ticker := time.NewTicker(1 * time.Hour)
+		defer ticker.Stop()
+		// Run an initial scan at startup so a freshly-bootstrapped
+		// process surfaces any pre-existing chain break within seconds
+		// rather than waiting an hour.
+		runAuditScan(auditScanCtx, of)
+		for {
+			select {
+			case <-ticker.C:
+				runAuditScan(auditScanCtx, of)
+			case <-auditScanCtx.Done():
+				return
+			}
+		}
+	}()
+	// Roll the cancel into the shutdown callback so a graceful stop
+	// terminates the ticker.
+	prevShutdown := of.Shutdown
+	of.Shutdown = func() {
+		auditScanCancel()
+		if prevShutdown != nil {
+			prevShutdown()
+		}
+	}
+
 	// G13: Initialize disaster recovery with DB connection
 	of.DR = newDisasterRecovery(cfg, db)
 
@@ -367,6 +404,34 @@ func Bootstrap(cfg *Config) (*OpenForge, error) {
 // ---------------------------------------------------------------------------
 // Minimal / stub implementations — one per kernel interface.
 // ---------------------------------------------------------------------------
+
+// runAuditScan executes one pass of the WORM audit chain scanner and
+// surfaces any break to the configured notifier. The error is always
+// logged; the notifier is a best-effort escalation path. This function is
+// called by the hourly ticker started in Bootstrap and also once at
+// startup so a freshly-bootstrapped process surfaces pre-existing breaks
+// without waiting an hour.
+func runAuditScan(ctx context.Context, of *OpenForge) {
+	if of.AuditLog == nil {
+		return
+	}
+	err := of.AuditLog.ScanFullChain(ctx)
+	if err == nil {
+		return
+	}
+	slog.Error("audit chain scan failed", "err", err)
+	if of.Notifier != nil {
+		// Best-effort: we don't propagate the notification error because
+		// the scan already failed and the operator has the log line. A
+		// failing notifier is a separate problem.
+		_ = of.Notifier.Send(ctx, kernel.Target{}, kernel.Notification{
+			Level:     "critical",
+			Title:     "audit-chain-break",
+			Body:      err.Error(),
+			ActionURL: "",
+		})
+	}
+}
 
 // --- SecretStore -----------------------------------------------------------
 // ChainSecretStore tries each store in order and returns the first successful
