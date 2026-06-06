@@ -5,6 +5,7 @@ import { tokens } from '../../shared/design-tokens';
 import { TextSkeleton } from '../../shared/skeleton';
 import { marked } from 'marked';
 import { ToolCallCard } from './ToolCallCard';
+import { FailureCard } from './FailureCard';
 
 // Configure marked for safety
 marked.setOptions({
@@ -185,7 +186,7 @@ export function MessageList() {
   if (!messages) return <div style={{ padding: 16 }}><TextSkeleton lines={5} /></div>;
 
   return (
-    <div ref={listRef} style={{ flex: 1, overflowY: 'auto', padding: '16px 24px', fontFamily: tokens.fontBody }} aria-live="polite" role="log" aria-label="Chat messages">
+    <div ref={listRef} style={{ flex: 1, overflowY: 'auto', padding: '16px 24px', fontFamily: tokens.fontBody }} aria-live="polite" role="log" aria-label="Chat messages" data-testid="message-list">
       {messages.map(msg => (
         <div key={msg.id} style={{ display: 'flex', justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start', marginBottom: 12 }}>
           {msg.role === 'tool' ? (
@@ -198,6 +199,14 @@ export function MessageList() {
                 outputType={msg.toolOutputType}
                 status={msg.toolStatus}
                 durationMs={msg.toolDurationMs}
+              />
+            </div>
+          ) : msg.kind === 'failure' ? (
+            <div style={{ maxWidth: '80%', minWidth: 0, width: '100%' }}>
+              <FailureCard
+                failureCode={msg.failureCode || 'UNKNOWN'}
+                rawMessage={msg.rawMessage}
+                errorId={msg.errorId}
               />
             </div>
           ) : (
