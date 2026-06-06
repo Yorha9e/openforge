@@ -532,11 +532,15 @@ type noopObjectStore struct{}
 func newObjectStore(cfg *Config) kernel.ObjectStore {
 	switch cfg.ObjectStore {
 	case "minio":
-		slog.Info("object_store: minio selected (adapter pending Phase 5)")
-		return &noopObjectStore{}
-	case "s3":
-		slog.Info("object_store: s3 selected (adapter pending Phase 5)")
-		return &noopObjectStore{}
+		return adapter.NewMinioObjectStore(adapter.MinioConfig{
+			Endpoint:        cfg.Minio.Endpoint,
+			AccessKeyID:     cfg.Minio.AccessKeyID,
+			SecretAccessKey: cfg.Minio.SecretAccessKey,
+			Bucket:          cfg.Minio.Bucket,
+			UseSSL:          cfg.Minio.UseSSL,
+			Region:          cfg.Minio.Region,
+			Timeout:         cfg.Minio.TimeoutOrDefault(),
+		})
 	default:
 		return &noopObjectStore{}
 	}
