@@ -101,29 +101,33 @@ function Test-Baseline($key) {
             if ($LASTEXITCODE -ne 0) { throw "buf generate failed" }
         }
 
-        # 2. Install node deps if missing (best-effort, may need manual run)
+        # 2. Install node deps if missing (best-effort; harness may show npm warnings as errors but script continues)
         if ((Test-Path 'frontend/package.json') -and -not (Test-Path 'frontend/node_modules')) {
-            Write-Host "  -> frontend npm install (first time, best-effort)"
+            Write-Host "  -> frontend npm install (first time, may print warnings)"
             Push-Location frontend
-            & npm install 2>&1 | Out-Null
+            try {
+                & cmd /c "npm install --no-audit --no-fund --prefer-offline 2>&1" | Out-Null
+            } catch { }
             $LASTEXITCODE = 0
             Pop-Location
             if (Test-Path 'frontend/node_modules') {
                 Write-Host "[OK] frontend deps installed" -ForegroundColor Green
             } else {
-                Write-Host "[WARN] frontend npm install may have failed; run manually: cd frontend && npm install" -ForegroundColor Yellow
+                Write-Host "[WARN] frontend node_modules missing; please run: cd frontend && npm install" -ForegroundColor Yellow
             }
         }
         if ((Test-Path 'nodejs-io/package.json') -and -not (Test-Path 'nodejs-io/node_modules')) {
-            Write-Host "  -> nodejs-io npm install (first time, best-effort)"
+            Write-Host "  -> nodejs-io npm install (first time, may print warnings)"
             Push-Location nodejs-io
-            & npm install 2>&1 | Out-Null
+            try {
+                & cmd /c "npm install --no-audit --no-fund --prefer-offline --legacy-peer-deps 2>&1" | Out-Null
+            } catch { }
             $LASTEXITCODE = 0
             Pop-Location
             if (Test-Path 'nodejs-io/node_modules') {
                 Write-Host "[OK] nodejs-io deps installed" -ForegroundColor Green
             } else {
-                Write-Host "[WARN] nodejs-io npm install may have failed; run manually: cd nodejs-io && npm install" -ForegroundColor Yellow
+                Write-Host "[WARN] nodejs-io node_modules missing; please run: cd nodejs-io && npm install" -ForegroundColor Yellow
             }
         }
 
