@@ -156,7 +156,7 @@ test/integration/cli_chat_test.go              ← 3 个 E2E 测试
 | `cost_quota` | 成本配额 | month 正则 CHECK, status CHECK |
 | `audit_log` | 审计日志 (**月分区**, **WORM**) | result CHECK, prev_hash+content_hash 哈希链 |
 | `feature_flag` | 功能开关 | status/rollout_percent CHECK |
-| `task_queue` | 任务队列 | task_type/status/priority CHECK, 部分索引 |
+| `task_queue` | ~~任务队列~~ (migration 013 已 drop, 改用 Redis Streams) | — |
 
 ---
 
