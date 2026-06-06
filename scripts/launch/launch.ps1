@@ -123,12 +123,11 @@ function Test-Baseline($key) {
             if ($LASTEXITCODE -ne 0) { throw "buf generate failed" }
         }
 
-        # 1a. Discard any modified generated files (they were just regenerated, not user edits)
+        # 1a. Reset modified generated files (best-effort, swallow git errors)
         Write-Host "  -> reset generated files (gen/, nodejs-io/src/gen/)"
-        & git checkout -- 'gen' 'nodejs-io/src/gen' 2>&1 | Out-Null
+        try { & git checkout -- 'gen' 'nodejs-io/src/gen' 2>&1 | Out-Null } catch { }
         $LASTEXITCODE = 0
-        # 1b. Remove any untracked generated files so they don't pollute status
-        & git clean -fd -- 'gen' 'nodejs-io/src/gen' 2>&1 | Out-Null
+        try { & git clean -fd -- 'gen' 'nodejs-io/src/gen' 2>&1 | Out-Null } catch { }
         $LASTEXITCODE = 0
 
         # 2. Install node deps if missing (capture output to log file to bypass PowerShell stderr handling)
