@@ -594,10 +594,22 @@ func (c *wsConn) dispatch(msg wsMessage) {
 		}
 		_ = json.Unmarshal(msg.Payload, &tp)
 		if err := c.dispatchTerminalInput(tp.PipelineID, tp.Input); err != nil {
-			c.write(map[string]any{"type": "error", "payload": map[string]string{"code": "terminal_input_failed", "message": err.Error()}})
+			c.write(map[string]any{"type": "error", "payload": map[string]any{"code": "terminal_input_failed", "message": err.Error()}})
 			return
 		}
-		c.write(map[string]any{"type": "terminal.input_acked", "payload": map[string]string{}})
+		c.write(map[string]any{"type": "terminal.input_acked", "payload": map[string]any{}})
+
+	case "panel.layout.save":
+		var lp struct {
+			UserID string         `json:"user_id"`
+			Layout map[string]any `json:"layout"`
+		}
+		_ = json.Unmarshal(msg.Payload, &lp)
+		if err := c.dispatchPanelLayoutSave(lp.UserID, lp.Layout); err != nil {
+			c.write(map[string]any{"type": "error", "payload": map[string]any{"code": "layout_save_failed", "message": err.Error()}})
+			return
+		}
+		c.write(map[string]any{"type": "panel.layout_saved", "payload": map[string]any{}})
 	}
 }
 
