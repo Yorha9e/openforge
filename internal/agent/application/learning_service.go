@@ -22,6 +22,7 @@ type LearningService struct {
 	llmRouter    *llm.Router
 	retroGen     *domain.RetrospectiveGenerator
 	embeddingIdx *domain.InMemoryEmbeddingIndex
+	layers       *domain.LearningLayers
 }
 
 // NewLearningService creates a LearningService with all required dependencies.
@@ -47,6 +48,7 @@ func NewLearningService(
 // can append newly learned knowledge to the index used by KnowledgeQuerier.
 func (s *LearningService) SetEmbeddingIndex(idx *domain.InMemoryEmbeddingIndex) {
 	s.embeddingIdx = idx
+	s.layers = domain.NewLearningLayers(s.trajStore, nil, s.prefStore, idx)
 }
 
 // HandlePipelineCompleted is the async callback triggered when a pipeline
@@ -56,7 +58,9 @@ func (s *LearningService) SetEmbeddingIndex(idx *domain.InMemoryEmbeddingIndex) 
 //  2. Generate a rule-based retrospective via RetrospectiveGenerator.
 //  3. If an LLM router is available, enhance the lessons through LLM analysis.
 //  4. Persist LLM-derived lessons as preferences for future pipelines.
-func (s *LearningService) HandlePipelineCompleted(ctx context.Context, pipelineID string) {
+//  5. Run the L1-L4 self-learning layers (T9) and append a knowledge
+//     snapshot to the embedding index for future KnowledgeQuerier calls.
+func (s *LearningService) HandlePipelineCompleted(ctx context.Context, pipelineID string, diff string) {
 	go func() {
 		bgCtx := context.Background()
 
@@ -95,7 +99,19 @@ func (s *LearningService) HandlePipelineCompleted(ctx context.Context, pipelineI
 			}
 		}
 
-		// Step 3: Append a knowledge snapshot to the embedding index so that
+		// Step 3: Run the L1-L4 self-learning layers when wired. L1
+		// extracts explicit function signatures from the supplied diff;
+		// L2 diffs the old vs new line sets; L3 reads the trajectory
+		// record to summarise tool frequency and step count; L4 indexes
+		// the snapshot text for future embedding-level recall.
+		if s.layers != nil {
+			_ = s.layers.ExtractL1(pipelineID, diff)
+			_ = s.layers.ExtractL2(pipelineID, diff, diff)
+			_ = s.layers.ExtractL3(pipelineID)
+			_ = s.layers.ExtractL4(buildTrajectorySnapshotText(traj))
+		}
+
+		// Step 4: Append a knowledge snapshot to the embedding index so that
 		// future KnowledgeQuerier.Query calls can surface it for similar
 		// prompts. We build a flat text from the trajectory summary.
 		if s.embeddingIdx != nil {
