@@ -431,7 +431,14 @@ func newSecretStore(cfg *Config) kernel.SecretStore {
 func newContainerRuntime(cfg *Config) kernel.ContainerRuntime {
 	switch cfg.ContainerRuntime {
 	case "docker":
-		slog.Info("container_runtime: docker selected (adapter pending Phase 5)")
+		if cfg.Docker.Host == "" {
+			slog.Warn("container_runtime: docker selected but host empty, falling back to Noop")
+			return &kernel.NoopContainerRuntime{}
+		}
+		return adapter.NewDockerContainerRuntime(cfg.Docker.Host)
+	case "k8s-pod":
+		// Phase 5: real K8s adapter pending. Fall back to Noop for now.
+		slog.Warn("container_runtime: k8s-pod adapter pending, falling back to Noop")
 		return &kernel.NoopContainerRuntime{}
 	default:
 		return &kernel.NoopContainerRuntime{}
