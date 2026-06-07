@@ -27,6 +27,7 @@ import (
 	"openforge/internal/shared/featureflags"
 	"openforge/internal/shared/kernel"
 	"openforge/internal/terminal"
+	"openforge/internal/tool"
 )
 
 // OpenForge is the composition root of all 10 capability domains. It is
@@ -74,6 +75,10 @@ type OpenForge struct {
 	// retrieval. Filled by main.go after Bootstrap returns.
 	EmbeddingIndex  *agentdomain.InMemoryEmbeddingIndex
 	KnowledgeQuerier *agentdomain.KnowledgeQuerier
+
+	// Path C T2: real LocalShellExecutor + Coordinator fields.
+	LocalExecutor *tool.LocalShellExecutor
+	Coordinator   *agentdomain.AgentCoordinator
 
 	PipelineRepo    *pipelineadapter.PGRepository
 	GateRequestRepo *pipelineadapter.PGGateRequestRepository
