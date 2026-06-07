@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"openforge/internal/agent/domain"
 	"openforge/internal/agent/port"
@@ -69,6 +70,12 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// T12: periodic Ed25519 profile revalidation (every 24h).
+	// Failures are logged; the process is intentionally not terminated because
+	// operators are expected to respond to alerts and the running config is
+	// still trusted until a restart.
+	cfg.StartPeriodicRevalidation(ctx, 24*time.Hour, nil)
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)

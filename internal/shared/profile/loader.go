@@ -1,9 +1,11 @@
 package profile
 
 import (
+	"context"
 	"crypto/ed25519"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"os"
 	"regexp"
 	"time"
@@ -13,6 +15,10 @@ import (
 
 // Config represents the full profile configuration loaded from a YAML file.
 type Config struct {
+	// path records the on-disk location the Config was loaded from, so that
+	// periodic revalidation can re-read and re-verify the file.
+	path string
+
 	Profile      string `yaml:"profile"`
 	SecurityTier string `yaml:"security_tier"`
 
@@ -58,14 +64,14 @@ type FeatureFlagsConfig struct {
 
 // VaultConfig holds HashiCorp Vault connection parameters.
 type VaultConfig struct {
-	Addr         string `yaml:"addr"`          // "http://vault:8200"
-	RoleID       string `yaml:"role_id"`       // AppRole
-	SecretID     string `yaml:"secret_id"`
-	AutoUnseal   bool   `yaml:"auto_unseal"`
-	Token        string `yaml:"token"`         // dev mode
-	EnginePath   string `yaml:"engine_path"`   // default "secret"
+	Addr          string `yaml:"addr"`           // "http://vault:8200"
+	RoleID        string `yaml:"role_id"`        // AppRole
+	SecretID      string `yaml:"secret_id"`
+	AutoUnseal    bool   `yaml:"auto_unseal"`
+	Token         string `yaml:"token"`          // dev mode
+	EnginePath    string `yaml:"engine_path"`    // default "secret"
 	EngineVersion string `yaml:"engine_version"` // G14: "v1" or "v2", empty = auto-detect
-	TimeoutSec   int    `yaml:"timeout_sec"`   // default 3
+	TimeoutSec    int    `yaml:"timeout_sec"`    // default 3
 }
 
 // EnginePathOrDefault returns the engine path or default "secret".
@@ -257,7 +263,7 @@ func Load(path string, verifySignature bool) (*Config, error) {
 		}
 	}
 	expanded := expandEnvSafe(string(data))
-	var cfg Config
+	cfg := Config{path: path}
 	if err := yaml.Unmarshal([]byte(expanded), &cfg); err != nil {
 		return nil, fmt.Errorf("parse profile: %w", err)
 	}
@@ -300,4 +306,57 @@ func (c *Config) validate() error {
 		return fmt.Errorf("unknown security_tier: %s", c.SecurityTier)
 	}
 	return nil
+}
+
+// RevalidationObserver is invoked on each periodic revalidation tick.
+// err is nil on success and non-nil on verification failure.
+type RevalidationObserver func(path string, err error)
+
+// StartPeriodicRevalidation spawns a goroutine that re-reads the on-disk
+// profile file on the given interval and re-verifies its Ed25519 signature.
+// Each tick invokes observer (if non-nil) with the profile path and the
+// verification error (nil on success). The goroutine exits when ctx is
+// cancelled. The verifier is intentionally non-fatal: failures are reported
+// to the observer / log but do not terminate the process — operators are
+// expected to respond to alerts.
+func (c *Config) StartPeriodicRevalidation(ctx context.Context, interval time.Duration, observer RevalidationObserver) {
+	if c.path == "" {
+		// No path recorded (e.g. Config built without Load) — nothing to revalidate.
+		slog.Warn("StartPeriodicRevalidation: no profile path recorded; ticker not started")
+		return
+	}
+	if interval <= 0 {
+		interval = 24 * time.Hour
+	}
+	path := c.path
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				data, err := os.ReadFile(path)
+				if err != nil {
+					slog.Error("periodic profile revalidation read failed", "path", path, "err", err)
+					if observer != nil {
+						observer(path, err)
+					}
+					continue
+				}
+				if err := verifyEd25519Signature(path, data); err != nil {
+					slog.Error("periodic profile revalidation failed", "path", path, "err", err)
+					if observer != nil {
+						observer(path, err)
+					}
+				} else {
+					slog.Info("periodic profile revalidation OK", "path", path)
+					if observer != nil {
+						observer(path, nil)
+					}
+				}
+			}
+		}
+	}()
 }

@@ -1,9 +1,16 @@
 package profile
 
 import (
+	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/hex"
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestLoadMinimalProfile(t *testing.T) {
@@ -222,4 +229,147 @@ secret_store: envfile
 	if err == nil {
 		t.Fatal("Expected error when verifySignature=true without pubkey, got nil")
 	}
+}
+
+// TestProfilePeriodicRevalidation_DetectsTampering verifies that the periodic
+// revalidation ticker fires and surfaces a verification error when the on-disk
+// profile.yaml is tampered with after loading.
+func TestProfilePeriodicRevalidation_DetectsTampering(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	profilePath := filepath.Join(dir, "profile.yaml")
+	original := []byte("profile: test\nsecurity_tier: dev\n")
+	if err := os.WriteFile(profilePath, original, 0644); err != nil {
+		t.Fatal(err)
+	}
+	sig := ed25519.Sign(priv, original)
+	if err := os.WriteFile(profilePath+".sig", sig, 0644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OF_PROFILE_PUBKEY", hex.EncodeToString(pub))
+
+	cfg, err := Load(profilePath, true)
+	if err != nil {
+		t.Fatalf("initial Load() with valid signature should succeed, got: %v", err)
+	}
+	if cfg.path == "" {
+		t.Fatal("Load() should record the profile path on Config for revalidation")
+	}
+
+	// Tamper with the on-disk yaml after loading.
+	if err := os.WriteFile(profilePath, []byte("profile: tampered\nsecurity_tier: prod\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Capture revalidation outcomes: ok count + err count, plus the latest error.
+	var (
+		okCount  atomic.Int32
+		errCount atomic.Int32
+		mu       sync.Mutex
+		lastErr  error
+	)
+	observer := func(path string, err error) {
+		mu.Lock()
+		lastErr = err
+		mu.Unlock()
+		if err != nil {
+			errCount.Add(1)
+		} else {
+			okCount.Add(1)
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cfg.StartPeriodicRevalidation(ctx, 50*time.Millisecond, observer)
+
+	// Wait for the ticker to fire at least once after tampering.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if errCount.Load() > 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	cancel()
+	// Give the goroutine a moment to exit cleanly.
+	time.Sleep(50 * time.Millisecond)
+
+	if errCount.Load() == 0 {
+		t.Fatalf("expected periodic revalidation to detect tampering (errCount=0, okCount=%d)", okCount.Load())
+	}
+	mu.Lock()
+	gotErr := lastErr
+	mu.Unlock()
+	if gotErr == nil {
+		t.Fatal("expected non-nil error from observer on tampered profile")
+	}
+}
+
+// TestProfilePeriodicRevalidation_HealthyBeforeTamper verifies the ticker
+// reports OK while the file is unmodified.
+func TestProfilePeriodicRevalidation_HealthyBeforeTamper(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	profilePath := filepath.Join(dir, "profile.yaml")
+	original := []byte("profile: test\nsecurity_tier: dev\n")
+	os.WriteFile(profilePath, original, 0644)
+	sig := ed25519.Sign(priv, original)
+	os.WriteFile(profilePath+".sig", sig, 0644)
+	t.Setenv("OF_PROFILE_PUBKEY", hex.EncodeToString(pub))
+
+	cfg, err := Load(profilePath, true)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	var okCount atomic.Int32
+	observer := func(path string, err error) {
+		if err == nil {
+			okCount.Add(1)
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cfg.StartPeriodicRevalidation(ctx, 50*time.Millisecond, observer)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if okCount.Load() > 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	cancel()
+	time.Sleep(50 * time.Millisecond)
+
+	if okCount.Load() == 0 {
+		t.Fatal("expected at least one OK revalidation tick")
+	}
+}
+
+// TestProfilePeriodicRevalidation_StopsOnContextCancel ensures the goroutine
+// exits when the context is cancelled (no goroutine leak).
+func TestProfilePeriodicRevalidation_StopsOnContextCancel(t *testing.T) {
+	dir := t.TempDir()
+	profilePath := filepath.Join(dir, "profile.yaml")
+	os.WriteFile(profilePath, []byte("profile: test\nsecurity_tier: dev\n"), 0644)
+	cfg, err := Load(profilePath, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cfg.StartPeriodicRevalidation(ctx, 10*time.Millisecond, func(string, error) {})
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	time.Sleep(50 * time.Millisecond)
 }
