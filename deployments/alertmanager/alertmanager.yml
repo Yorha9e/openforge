@@ -1,0 +1,59 @@
+# OpenForge Alertmanager configuration
+# Two Feishu webhook receivers: critical (page on-call) and warning (queue).
+# Set the webhook URL via the OF_FEISHU_WEBHOOK_URL environment variable.
+#   Critical channel: ${OF_FEISHU_WEBHOOK_URL}/critical
+#   Warning channel:  ${OF_FEISHU_WEBHOOK_URL}/warning
+# (A single webhook is fine; the receiving side can branch on the path.)
+
+global:
+  resolve_timeout: 5m
+  smtp_smarthost: ""
+  smtp_from: "alertmanager@openforge.local"
+  smtp_require_tls: false
+
+# Route tree: critical -> feishu-critical, warning -> feishu-warning.
+# Anything not matching falls through to a 'default' receiver (feishu-warning).
+route:
+  group_by: ["alertname", "component", "service"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  receiver: feishu-warning
+  routes:
+    - matchers:
+        - severity = "critical"
+      receiver: feishu-critical
+      group_wait: 10s
+      repeat_interval: 1h
+      continue: true
+    - matchers:
+        - severity = "warning"
+      receiver: feishu-warning
+      group_wait: 30s
+      repeat_interval: 4h
+
+# Inhibit warnings when a critical is firing on the same component.
+inhibit_rules:
+  - source_matchers:
+      - severity = "critical"
+    target_matchers:
+      - severity = "warning"
+    equal: ["alertname", "component"]
+
+receivers:
+  - name: feishu-critical
+    webhook_configs:
+      - url: "${OF_FEISHU_WEBHOOK_URL}/critical"
+        send_resolved: true
+        max_alerts: 0
+        timeout: 10s
+
+  - name: feishu-warning
+    webhook_configs:
+      - url: "${OF_FEISHU_WEBHOOK_URL}/warning"
+        send_resolved: true
+        max_alerts: 0
+        timeout: 10s
+
+templates:
+  - "/etc/alertmanager/templates/*.tmpl"
