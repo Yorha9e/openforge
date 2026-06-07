@@ -84,6 +84,10 @@ type OpenForge struct {
 	DepCache        *adapter.DependencyCache
 	DataLifecycle   *compliance.DataLifecycle // G16: compliance data lifecycle manager
 	Shutdown        func()                    // G16: graceful shutdown callback
+
+	// Path-D T6: Debug trace store.  Optional, may be nil — debug handler
+	// returns 503 in that case.  Default is an in-memory store.
+	TraceStore domain.TraceStore
 }
 
 // Bootstrap creates a new OpenForge composition root from the given profile
@@ -218,6 +222,22 @@ func Bootstrap(cfg *Config) (*OpenForge, error) {
 	}
 	of.FeatureFlags = ff
 
+	// T10: Detect expired feature flags at startup and emit warnings +
+	// notifier events. Notifier is initialized above (of.Notifier), so
+	// it's safe to call here.
+	if expired := featureflags.CheckExpired(of.FeatureFlags, time.Now()); len(expired) > 0 {
+		for _, name := range expired {
+			slog.Warn("feature flag expired", "name", name)
+			if of.Notifier != nil {
+				_ = of.Notifier.Send(context.Background(), kernel.Target{}, kernel.Notification{
+					Level: "warn",
+					Title: "feature_flag_expired",
+					Body:  name,
+				})
+			}
+		}
+	}
+
 	// G16: Initialize compliance data lifecycle when compliance_suite flag is ON
 	if ff.ComplianceSuite {
 		of.DataLifecycle = compliance.NewDataLifecycle(db)
@@ -303,6 +323,10 @@ func Bootstrap(cfg *Config) (*OpenForge, error) {
 
 	of.SLO = observabilitydomain.NewSLOTracker()
 	of.PrometheusExporter = obsadapter.NewPrometheusExporter()
+
+	// Path-D T6: Debug trace store.  Default to in-memory; the 30-day retention
+	// is enforced at the handler layer (handler clamps since to now-30d).
+	of.TraceStore = domain.NewMemTraceStore()
 
 	// Run database migrations
 	migrationsDir := "migrations"

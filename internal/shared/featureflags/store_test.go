@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"os"
 	"testing"
+	"time"
 	_ "github.com/lib/pq"
 )
 
@@ -73,5 +74,57 @@ func TestStore_Save_Overwrite(t *testing.T) {
 	flags, _ := store.Load(ctx)
 	if flags.DistributionArtifacts {
 		t.Error("overwrite should have set false")
+	}
+}
+
+// T10: SaveAll persists lifecycle fields (owner, status, rollout_pct,
+// expires_at) alongside the legacy boolean column.
+func TestStore_SaveAll_PersistsLifecycle(t *testing.T) {
+	db := testDB(t)
+	store := NewStore(db)
+	ctx := context.Background()
+
+	expires := time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC)
+	ff := &FeatureFlags{
+		EnterprisePlatform:    true,
+		ComplianceSuite:       true,
+		ProductionOps:         false,
+		DistributionArtifacts: true,
+		Lifecycle: map[string]FlagLifecycle{
+			"enterprise_platform": {
+				Owner:      "platform-team",
+				Status:     StatusBeta,
+				RolloutPct: 25,
+				ExpiresAt:  &expires,
+			},
+		},
+	}
+	if err := store.SaveAll(ctx, ff); err != nil {
+		t.Fatalf("SaveAll: %v", err)
+	}
+
+	// Verify the lifecycle row was written by reading it back directly.
+	var status string
+	var rolloutPct int
+	var gotExpires *time.Time
+	var owner string
+	err := db.QueryRowContext(ctx,
+		`SELECT owner, status, rollout_pct, expires_at
+		 FROM feature_flags WHERE flag_key = $1`,
+		"enterprise_platform").Scan(&owner, &status, &rolloutPct, &gotExpires)
+	if err != nil {
+		t.Fatalf("scan lifecycle row: %v", err)
+	}
+	if owner != "platform-team" {
+		t.Errorf("owner = %q, want %q", owner, "platform-team")
+	}
+	if status != StatusBeta {
+		t.Errorf("status = %q, want %q", status, StatusBeta)
+	}
+	if rolloutPct != 25 {
+		t.Errorf("rollout_pct = %d, want 25", rolloutPct)
+	}
+	if gotExpires == nil || !gotExpires.Equal(expires) {
+		t.Errorf("expires_at = %v, want %v", gotExpires, expires)
 	}
 }
