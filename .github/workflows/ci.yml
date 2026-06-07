@@ -1,0 +1,46 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # DESIGN §13.3 — buf breaking change gate.
+  # Baseline lives at proto/image.bin; CI regenerates from current source and
+  # fails the build if any FILE-level breaking change is introduced.
+  buf-breaking:
+    name: buf breaking change check
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - name: buf
+        uses: bufbuild/buf-setup-action@v1
+
+      - name: buf mod update (proto)
+        run: buf mod update proto
+
+      - name: build current image
+        run: buf build proto --as-file-descriptor-set -o /tmp/buf-current.bin
+
+      - name: breaking change check against baseline
+        run: buf breaking proto --against proto/image.bin
+
+  # Minimal Go test gate — internal packages only, no external infra.
+  go-test:
+    name: go test ./internal/...
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - name: setup go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: go test
+        run: go test ./internal/... -count=1
