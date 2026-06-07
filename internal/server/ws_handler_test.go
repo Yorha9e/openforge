@@ -243,6 +243,104 @@ func TestWSPanelLayoutSave_PersistsUserLayout(t *testing.T) {
 	}
 }
 
+// --- T5 sync.request / sync.replay tests ---
+
+// TestWSSyncRequest_ReplaysMissedEvents verifies that on reconnect the client
+// sends a sync.request with the last sequence number it consumed, and the
+// server responds with one sync.replay message per missed event in the
+// TraceStore.
+func TestWSSyncRequest_ReplaysMissedEvents(t *testing.T) {
+	c, w := newConnForTest()
+
+	now := time.Now()
+	c.of.TraceStore = &domain.MemTraceStore{
+		Data: map[string][]domain.TraceEvent{
+			"p-1": {
+				{Seq: 1, PipelineID: "p-1", Event: "chat.stream", Payload: []byte(`{"delta":"a"}`), Timestamp: now.Add(-3 * time.Second)},
+				{Seq: 2, PipelineID: "p-1", Event: "chat.stream", Payload: []byte(`{"delta":"b"}`), Timestamp: now.Add(-2 * time.Second)},
+				{Seq: 3, PipelineID: "p-1", Event: "chat.stream_done", Payload: []byte(`{"content":"ok"}`), Timestamp: now.Add(-1 * time.Second)},
+			},
+		},
+	}
+
+	c.dispatch(wsMessage{Type: "sync.request", Payload: mustMarshal(map[string]any{
+		"pipeline_id": "p-1",
+		"last_seq":    0,
+	})})
+
+	// Expect 3 sync.replay messages (one per missed event).
+	var replays []map[string]any
+	for _, m := range w.msgs {
+		if m["type"] == "sync.replay" {
+			replays = append(replays, m)
+		}
+	}
+	if len(replays) != 3 {
+		t.Fatalf("expected 3 sync.replay messages, got %d (all: %#v)", len(replays), w.msgs)
+	}
+	if replays[0]["type"] != "sync.replay" {
+		t.Fatalf("first replay type wrong: %#v", replays[0])
+	}
+	// Verify payload shape
+	p0, _ := replays[0]["payload"].(map[string]any)
+	if p0["event"] != "chat.stream" {
+		t.Fatalf("first replay event wrong: %v", p0["event"])
+	}
+}
+
+// TestWSSyncRequest_NoTraceStore_ReturnsError verifies that when no
+// TraceStore is wired the server emits a sync_failed error instead of
+// silently dropping the request.
+func TestWSSyncRequest_NoTraceStore_ReturnsError(t *testing.T) {
+	c, w := newConnForTest()
+	// No TraceStore on of.
+	c.dispatch(wsMessage{Type: "sync.request", Payload: mustMarshal(map[string]any{
+		"pipeline_id": "p-1",
+		"last_seq":    0,
+	})})
+
+	ack := w.last()
+	if ack == nil || ack["type"] != "error" {
+		t.Fatalf("expected error response, got %#v", ack)
+	}
+	payload, _ := ack["payload"].(map[string]any)
+	if payload["code"] != "sync_failed" {
+		t.Fatalf("expected code sync_failed, got %v", payload["code"])
+	}
+}
+
+// TestWSSyncRequest_LastSeqFiltersStaleEvents verifies that events with
+// seq <= lastSeq are not replayed.
+func TestWSSyncRequest_LastSeqFiltersStaleEvents(t *testing.T) {
+	c, w := newConnForTest()
+
+	now := time.Now()
+	c.of.TraceStore = &domain.MemTraceStore{
+		Data: map[string][]domain.TraceEvent{
+			"p-1": {
+				{Seq: 1, PipelineID: "p-1", Event: "chat.stream", Payload: []byte(`{"delta":"a"}`), Timestamp: now.Add(-3 * time.Second)},
+				{Seq: 2, PipelineID: "p-1", Event: "chat.stream", Payload: []byte(`{"delta":"b"}`), Timestamp: now.Add(-2 * time.Second)},
+				{Seq: 3, PipelineID: "p-1", Event: "chat.stream_done", Payload: []byte(`{"content":"ok"}`), Timestamp: now.Add(-1 * time.Second)},
+			},
+		},
+	}
+
+	c.dispatch(wsMessage{Type: "sync.request", Payload: mustMarshal(map[string]any{
+		"pipeline_id": "p-1",
+		"last_seq":    1,
+	})})
+
+	var replays []map[string]any
+	for _, m := range w.msgs {
+		if m["type"] == "sync.replay" {
+			replays = append(replays, m)
+		}
+	}
+	if len(replays) != 2 {
+		t.Fatalf("expected 2 sync.replay (seq>1), got %d (all: %#v)", len(replays), w.msgs)
+	}
+}
+
 func TestWSChatRetry_UnknownMessageID_ReturnsError(t *testing.T) {
 	c, w := newConnForTest()
 	// No engine registered for p-1, so dispatchChatRetry returns errNoSuchMessage.

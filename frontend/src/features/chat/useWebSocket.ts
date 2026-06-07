@@ -10,6 +10,13 @@ export function useWebSocket(token: string | null) {
   const reconnectTimer = useRef<number>(0);
   const reconnectDelay = useRef(1000);
   const reconnectAttempts = useRef(0);
+  // lastSeqRef tracks the highest sequence number we've consumed from a
+  // sync.replay event. On reconnect we send it back to the server in a
+  // sync.request so the server can replay any events we missed.
+  const lastSeqRef = useRef(0);
+  // activePipelineIdRef remembers the most recent pipeline_id we sent
+  // chat.send for; needed to scope the sync.request on reconnect.
+  const activePipelineIdRef = useRef<string | null>(null);
 
   const connect = useCallback(async () => {
     if (!token) return;
@@ -22,6 +29,17 @@ export function useWebSocket(token: string | null) {
       setStatus('open');
       reconnectDelay.current = 1000;
       reconnectAttempts.current = 0;
+      // On reconnect, ask the server to replay any events we missed
+      // since the last sequence number we successfully consumed.
+      if (lastSeqRef.current > 0 && activePipelineIdRef.current) {
+        ws.send(JSON.stringify({
+          type: 'sync.request',
+          payload: {
+            pipeline_id: activePipelineIdRef.current,
+            last_seq: lastSeqRef.current,
+          },
+        }));
+      }
     };
 
     ws.onclose = () => {
@@ -42,6 +60,14 @@ export function useWebSocket(token: string | null) {
     ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data);
+        // Track the highest sequence number we've seen from a
+        // sync.replay so the next reconnect can ask for "events
+        // newer than this".
+        if (msg.type === 'sync.replay' && msg.payload && typeof msg.payload.seq === 'number') {
+          if (msg.payload.seq > lastSeqRef.current) {
+            lastSeqRef.current = msg.payload.seq;
+          }
+        }
         listenersRef.current.get(msg.type)?.forEach(fn => fn(msg.payload));
       } catch {}
     };
@@ -58,6 +84,11 @@ export function useWebSocket(token: string | null) {
   const send = useCallback((type: string, payload?: any): boolean => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ type, payload }));
+      // Remember the most recent pipeline_id we sent a chat for; the
+      // reconnect sync.request needs to be scoped to a single pipeline.
+      if (type === 'chat.send' && payload && typeof payload.pipeline_id === 'string') {
+        activePipelineIdRef.current = payload.pipeline_id;
+      }
       return true;
     }
     console.warn(`[WS] Cannot send "${type}": WebSocket not connected`);

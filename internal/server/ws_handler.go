@@ -610,6 +610,38 @@ func (c *wsConn) dispatch(msg wsMessage) {
 			return
 		}
 		c.write(map[string]any{"type": "panel.layout_saved", "payload": map[string]any{}})
+
+	case "sync.request":
+		// Client reconnect: replay any TraceEvents newer than lastSeq so
+		// the UI can re-render state it missed while the socket was
+		// closed. Returns one sync.replay message per missed event;
+		// the absence of any replay means "you are caught up".
+		var sp struct {
+			PipelineID string `json:"pipeline_id"`
+			LastSeq    int64  `json:"last_seq"`
+		}
+		_ = json.Unmarshal(msg.Payload, &sp)
+		if c.of == nil || c.of.TraceStore == nil {
+			c.write(map[string]any{"type": "error", "payload": map[string]any{"code": "sync_failed", "message": "trace store not configured"}})
+			return
+		}
+		missed, err := c.of.TraceStore.ListSince(context.Background(), sp.PipelineID, sp.LastSeq)
+		if err != nil {
+			c.write(map[string]any{"type": "error", "payload": map[string]any{"code": "sync_failed", "message": err.Error()}})
+			return
+		}
+		for _, ev := range missed {
+			c.write(map[string]any{
+				"type": "sync.replay",
+				"payload": map[string]any{
+					"seq":        ev.Seq,
+					"event":      ev.Event,
+					"payload":    ev.Payload,
+					"timestamp":  ev.Timestamp,
+					"pipeline_id": ev.PipelineID,
+				},
+			})
+		}
 	}
 }
 

@@ -98,6 +98,7 @@ type OpenForge struct {
 	TerminalService *terminal.Service        // Path C T4: WS terminal.input handler backend
 	OwnershipRepo   *pipelineadapter.PGOwnershipRepository // T13: PG-backed module ownership
 	Shutdown        func()                    // G16: graceful shutdown callback
+	TraceStore      agentdomain.TraceStore   // Path C T5: WS sync.request/replay store (nil = not configured)
 }
 
 // Bootstrap creates a new OpenForge composition root from the given profile
