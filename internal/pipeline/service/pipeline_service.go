@@ -5,16 +5,41 @@ import (
 	"fmt"
 	"time"
 
+	obsadapter "openforge/internal/observability/adapter"
+	obsdomain "openforge/internal/observability/domain"
 	"openforge/internal/pipeline/domain"
 	"openforge/internal/pipeline/port"
 )
 
 type PipelineService struct {
-	repo port.PipelineRepository
+	repo    port.PipelineRepository
+	metrics *obsadapter.PrometheusExporter
 }
 
 func NewPipelineService(repo port.PipelineRepository) *PipelineService {
 	return &PipelineService{repo: repo}
+}
+
+// SetMetrics injects the Prometheus exporter used to record call-site
+// metrics.  Safe to leave nil — every metric call is guarded.
+func (s *PipelineService) SetMetrics(pe *obsadapter.PrometheusExporter) {
+	s.metrics = pe
+}
+
+// recordIncr is a nil-safe wrapper around the exporter's Incr helper.
+func (s *PipelineService) recordIncr(name obsdomain.MetricName) {
+	if s.metrics == nil {
+		return
+	}
+	s.metrics.Incr(string(name))
+}
+
+// recordObserve is a nil-safe wrapper around the exporter's Observe helper.
+func (s *PipelineService) recordObserve(name obsdomain.MetricName, v float64) {
+	if s.metrics == nil {
+		return
+	}
+	s.metrics.Observe(string(name), v)
 }
 
 func (s *PipelineService) Start(ctx context.Context, id string) error {
@@ -26,10 +51,16 @@ func (s *PipelineService) Start(ctx context.Context, id string) error {
 		return err
 	}
 	p.Stages[0].Status = "running"
-	return s.repo.UpdateStatus(ctx, id, p.Status, p.Version)
+	if err := s.repo.UpdateStatus(ctx, id, p.Status, p.Version); err != nil {
+		return err
+	}
+	// Path-D T1: pipeline created.
+	s.recordIncr(obsdomain.MetricPipelineCreated)
+	return nil
 }
 
 func (s *PipelineService) AdvanceStage(ctx context.Context, id string) error {
+	started := time.Now()
 	p, err := s.repo.GetByID(ctx, id)
 	if err != nil {
 		return err
@@ -45,7 +76,13 @@ func (s *PipelineService) AdvanceStage(ctx context.Context, id string) error {
 
 	// L1/L2 or auto/plan mode: advance directly (no gate)
 	p.AdvanceStage()
-	return s.repo.UpdateStatus(ctx, id, p.Status, p.Version)
+	if err := s.repo.UpdateStatus(ctx, id, p.Status, p.Version); err != nil {
+		return err
+	}
+	// Path-D T1: pipeline stage completed + duration observed.
+	s.recordIncr(obsdomain.MetricPipelineCompleted)
+	s.recordObserve(obsdomain.MetricPipelineDuration, time.Since(started).Seconds())
+	return nil
 }
 
 func (s *PipelineService) Pause(ctx context.Context, id string) error {

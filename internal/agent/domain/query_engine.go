@@ -13,6 +13,8 @@ import (
 	"unicode/utf8"
 
 	agentport "openforge/internal/agent/port"
+	obsadapter "openforge/internal/observability/adapter"
+	obsdomain "openforge/internal/observability/domain"
 	pipelineport "openforge/internal/pipeline/port"
 )
 
@@ -80,12 +82,45 @@ type QueryEngine struct {
 	convRepo        pipelineport.ConversationRepository
 	activeBranchID  string
 	mu              sync.Mutex
-	
+
 	// Message buffer for batch writes
 	messageBuffer   *MessageBuffer
 	flushTicker     *time.Ticker
 	done            chan struct{}
 	flushInterval   time.Duration
+
+	// Path-D T1: optional exporter for LLM-tied metrics.  nil-safe.
+	metrics *obsadapter.PrometheusExporter
+}
+
+// SetMetrics injects the Prometheus exporter used to record call-site
+// metrics.  Safe to leave nil — every metric call is guarded.
+func (qe *QueryEngine) SetMetrics(pe *obsadapter.PrometheusExporter) {
+	qe.metrics = pe
+}
+
+// recordIncr is a nil-safe wrapper around the exporter's Incr helper.
+func (qe *QueryEngine) recordIncr(name obsdomain.MetricName) {
+	if qe.metrics == nil {
+		return
+	}
+	qe.metrics.Incr(string(name))
+}
+
+// recordObserve is a nil-safe wrapper around the exporter's Observe helper.
+func (qe *QueryEngine) recordObserve(name obsdomain.MetricName, v float64) {
+	if qe.metrics == nil {
+		return
+	}
+	qe.metrics.Observe(string(name), v)
+}
+
+// recordSet is a nil-safe wrapper around the exporter's Set helper.
+func (qe *QueryEngine) recordSet(name obsdomain.MetricName, v int64) {
+	if qe.metrics == nil {
+		return
+	}
+	qe.metrics.Set(string(name), v)
 }
 
 // NewQueryEngine creates a new QueryEngine with the given LLM client and config.
@@ -355,6 +390,7 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, msg string) (<-chan St
 	qe.state = QueryStateAwaitingLLM
 	qe.mu.Unlock()
 
+	llmStart := time.Now()
 	resp, err := qe.llmClient.Chat(ctx, agentport.ChatRequest{
 		Messages:     trimmed,
 		SystemPrompt: systemPrompt,
@@ -362,6 +398,9 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, msg string) (<-chan St
 		Tools:        qe.buildToolDefs(),
 	})
 	if err != nil {
+		// Path-D T1: LLM call error.
+		qe.recordIncr(obsdomain.MetricLLMCallErrors)
+		qe.recordObserve(obsdomain.MetricLLMCallDuration, time.Since(llmStart).Seconds())
 		qe.mu.Lock()
 		qe.messages = qe.messages[:len(qe.messages)-1]
 		qe.mu.Unlock()
@@ -370,12 +409,20 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, msg string) (<-chan St
 		close(out)
 		return out, nil
 	}
+	// Path-D T1: LLM call latency observed.
+	qe.recordObserve(obsdomain.MetricLLMCallDuration, time.Since(llmStart).Seconds())
 
 	// Track tokens
 	if resp.Usage != nil {
 		atomic.AddInt64(&qe.tokenCount, resp.Usage.InputTokens+resp.Usage.OutputTokens)
+		// Path-D T1: token usage (input + output).
+		qe.recordIncr(obsdomain.MetricTokenUsage)
+		// Best-effort quota snapshot (negative if exhausted — we use 0 as the
+		// running tally; downstream code can wire a real quota source).
+		qe.recordSet(obsdomain.MetricTokenQuotaRemaining, 1)
 	} else {
 		atomic.AddInt64(&qe.tokenCount, int64(utf8.RuneCountInString(resp.Content)/4))
+		qe.recordIncr(obsdomain.MetricTokenUsage)
 	}
 
 	// Persist user message now that LLM call succeeded
@@ -509,6 +556,7 @@ func (qe *QueryEngine) runToolLoop(ctx context.Context, out chan<- StreamEvent, 
 		qe.state = QueryStateAwaitingLLM
 		qe.mu.Unlock()
 
+		llmStart := time.Now()
 		resp, err := qe.llmClient.Chat(ctx, agentport.ChatRequest{
 			Messages:     trimmed,
 			SystemPrompt: systemPrompt,
@@ -516,14 +564,21 @@ func (qe *QueryEngine) runToolLoop(ctx context.Context, out chan<- StreamEvent, 
 			Tools:        qe.buildToolDefs(),
 		})
 		if err != nil {
+			// Path-D T1: LLM call error during tool loop.
+			qe.recordIncr(obsdomain.MetricLLMCallErrors)
+			qe.recordObserve(obsdomain.MetricLLMCallDuration, time.Since(llmStart).Seconds())
 			out <- StreamEvent{Type: "error", Error: fmt.Errorf("LLM call failed: %w", err)}
 			return
 		}
+		// Path-D T1: LLM call latency observed (tool loop).
+		qe.recordObserve(obsdomain.MetricLLMCallDuration, time.Since(llmStart).Seconds())
 
 		if resp.Usage != nil {
 			atomic.AddInt64(&qe.tokenCount, resp.Usage.InputTokens+resp.Usage.OutputTokens)
+			qe.recordIncr(obsdomain.MetricTokenUsage)
 		} else {
 			atomic.AddInt64(&qe.tokenCount, int64(utf8.RuneCountInString(resp.Content)/4))
+			qe.recordIncr(obsdomain.MetricTokenUsage)
 		}
 
 		out <- StreamEvent{Type: "delta", Content: extractTextOnly(resp.Content)}

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	obsadapter "openforge/internal/observability/adapter"
+	obsdomain "openforge/internal/observability/domain"
 	"openforge/internal/pipeline/domain"
 	"openforge/internal/pipeline/port"
 )
@@ -14,6 +16,7 @@ type GateService struct {
 	gateRepo port.GateRepository
 	pipeRepo port.PipelineRepository
 	hooks    domain.HookChain
+	metrics  *obsadapter.PrometheusExporter
 }
 
 func NewGateService(gateRepo port.GateRepository, pipeRepo port.PipelineRepository, hooks ...domain.GateHook) *GateService {
@@ -22,6 +25,20 @@ func NewGateService(gateRepo port.GateRepository, pipeRepo port.PipelineReposito
 		pipeRepo: pipeRepo,
 		hooks:    hooks,
 	}
+}
+
+// SetMetrics injects the Prometheus exporter used to record call-site
+// metrics.  Safe to leave nil — every metric call is guarded.
+func (s *GateService) SetMetrics(pe *obsadapter.PrometheusExporter) {
+	s.metrics = pe
+}
+
+// recordIncr is a nil-safe wrapper around the exporter's Incr helper.
+func (s *GateService) recordIncr(name obsdomain.MetricName) {
+	if s.metrics == nil {
+		return
+	}
+	s.metrics.Incr(string(name))
 }
 
 func (s *GateService) Approve(ctx context.Context, pipelineID, stage, actor string, checklist domain.GateChecklist, summary string) error {
@@ -60,7 +77,12 @@ func (s *GateService) Approve(ctx context.Context, pipelineID, stage, actor stri
 		return err
 	}
 	p.AdvanceStage()
-	return s.pipeRepo.UpdateStatus(ctx, pipelineID, p.Status, p.Version)
+	if err := s.pipeRepo.UpdateStatus(ctx, pipelineID, p.Status, p.Version); err != nil {
+		return err
+	}
+	// Path-D T1: gate approved.
+	s.recordIncr(obsdomain.MetricGateApproveTotal)
+	return nil
 }
 
 func (s *GateService) Reject(ctx context.Context, pipelineID, stage, actor string, comments []domain.LineComment, summary string) error {
@@ -98,7 +120,12 @@ func (s *GateService) Reject(ctx context.Context, pipelineID, stage, actor strin
 	if err := p.Transition("gate_reject"); err != nil {
 		return err
 	}
-	return s.pipeRepo.UpdateStatus(ctx, pipelineID, p.Status, p.Version)
+	if err := s.pipeRepo.UpdateStatus(ctx, pipelineID, p.Status, p.Version); err != nil {
+		return err
+	}
+	// Path-D T1: gate rejected.
+	s.recordIncr(obsdomain.MetricGateRejectTotal)
+	return nil
 }
 
 func (s *GateService) Claim(ctx context.Context, pipelineID, stage, actor string) error {

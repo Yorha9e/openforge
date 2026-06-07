@@ -6,6 +6,8 @@ import (
 	"sync"
 	"time"
 
+	obsadapter "openforge/internal/observability/adapter"
+	obsdomain "openforge/internal/observability/domain"
 	"openforge/internal/agent/port"
 	"openforge/internal/agent/service"
 )
@@ -18,6 +20,7 @@ type AgentCoordinator struct {
 	llmClient port.LLMRouterClient
 	toolReg   port.ToolRegistryClientFull
 	channels  map[string]*service.CSPChannel
+	metrics   *obsadapter.PrometheusExporter
 }
 
 type AgentInstance struct {
@@ -36,6 +39,26 @@ func NewCoordinator(llmClient port.LLMRouterClient, toolReg port.ToolRegistryCli
 		toolReg:   toolReg,
 		channels:  make(map[string]*service.CSPChannel),
 	}
+}
+
+// SetMetrics injects the Prometheus exporter used to record call-site
+// metrics.  Safe to leave nil — every metric call is guarded.
+func (c *AgentCoordinator) SetMetrics(pe *obsadapter.PrometheusExporter) {
+	c.metrics = pe
+}
+
+// recordSet is a nil-safe wrapper around the exporter's Set helper.
+func (c *AgentCoordinator) recordSet(name obsdomain.MetricName, v int64) {
+	if c.metrics == nil {
+		return
+	}
+	c.metrics.Set(string(name), v)
+}
+
+// SetGoroutineCount records the current number of live coordinator
+// goroutines as a gauge.  Path-D T1 callsite.
+func (c *AgentCoordinator) SetGoroutineCount(n int64) {
+	c.recordSet(obsdomain.MetricGoroutineCount, n)
 }
 
 // Spawn creates a new agent and its CSP channel.
@@ -58,6 +81,7 @@ func (c *AgentCoordinator) Spawn(ctx context.Context, id, pipelineID, role, pare
 	}
 	c.agents[id] = agent
 	c.channels[id] = ch
+	c.SetGoroutineCount(int64(len(c.agents)))
 	return agent, nil
 }
 
@@ -115,6 +139,7 @@ func (c *AgentCoordinator) Terminate(ctx context.Context, id string) error {
 	}
 	delete(c.agents, id)
 	delete(c.channels, id)
+	c.SetGoroutineCount(int64(len(c.agents)))
 	return nil
 }
 
