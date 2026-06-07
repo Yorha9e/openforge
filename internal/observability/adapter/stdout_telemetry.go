@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	"openforge/internal/shared/kernel"
@@ -19,6 +21,9 @@ func (t *StdoutTelemetry) Trace(ctx context.Context, name string) (context.Conte
 }
 
 func (t *StdoutTelemetry) Log(level string, msg string, fields map[string]any) {
+	if ShouldSample(parseLevel(level), msg) == Drop {
+		return
+	}
 	entry := map[string]any{
 		"ts":    time.Now().UTC().Format(time.RFC3339),
 		"level": level,
@@ -32,6 +37,25 @@ func (t *StdoutTelemetry) Log(level string, msg string, fields map[string]any) {
 }
 
 func (t *StdoutTelemetry) Metric(name string, value float64, tags map[string]string) {}
+
+// parseLevel maps the human-readable level string passed to Log() to the
+// matching slog.Level so that ShouldSample can apply the right policy.
+func parseLevel(level string) slog.Level {
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "debug":
+		return slog.LevelDebug
+	case "info":
+		return slog.LevelInfo
+	case "warn", "warning":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		// Unknown / empty -> treat as INFO (the safe default that goes through
+		// the 10% sampling path).
+		return slog.LevelInfo
+	}
+}
 
 type stdoutSpan struct {
 	name  string
