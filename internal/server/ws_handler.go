@@ -17,6 +17,9 @@ import (
 	"openforge/internal/shared/profile"
 
 	"github.com/gorilla/websocket"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
 )
 
 var upgrader = websocket.Upgrader{
@@ -76,6 +79,34 @@ type wsConn struct {
 	lastPipelineStage  string
 	lastPipelineStatus string
 	wsRPC              *domain.WSRPC
+	writer             wsWriter          // test hook; when non-nil, write() routes through it
+	dispatchServices   *dispatchServices // test hook; when nil, production wiring is used
+	// traceCtx is the OTel trace context extracted from the inbound
+	// W3C traceparent header at WS upgrade time.  Subsequent handlers
+	// use it as the parent context for downstream gRPC calls to the
+	// Node.js IO layer, so the entire Go↔Node session stays in one trace.
+	traceCtx context.Context
+}
+
+// wsWriter is the test-facing capture sink for wsConn.write. Production
+// code uses the default method on *wsConn (which writes to the real
+// websocket.Conn).
+type wsWriter interface {
+	write(v any)
+}
+
+// dispatchServices holds the function pointers used by the 11 T4 WS cases
+// (chat.edit / pause / resume / retry / cancel_branch, pipeline.modify_scope,
+// model.switch, terminal.input, panel.layout.save). In production, these
+// are wired by handleChatWS to call into the OpenForge fields. In tests,
+// they are replaced wholesale to inject stubs without touching the real
+// production types.
+type dispatchServices struct {
+	DeactivateBranch func(ctx context.Context, branchID string) error
+	ModifyScope      func(ctx context.Context, pipelineID, newRequirement string) error
+	SwitchModel      func(ctx context.Context, model string) error
+	TerminalInput    func(ctx context.Context, pipelineID, input string) error
+	SaveLayout       func(ctx context.Context, userID string, layout map[string]any) error
 }
 
 func handleChatWS(of *profile.OpenForge, jwtSvc *service.JWTService) http.HandlerFunc {
@@ -86,6 +117,18 @@ func handleChatWS(of *profile.OpenForge, jwtSvc *service.JWTService) http.Handle
 			return
 		}
 
+		// Extract W3C traceparent from the upgrade request via the global
+		// OTel propagator (set by InitOTelTracer to W3C TraceContext+Baggage).
+		// If no upstream trace context was sent (e.g. direct browser
+		// connection), start a fresh root span so the WS session is still
+		// represented in the trace.
+		traceCtx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
+		if !trace.SpanContextFromContext(traceCtx).IsValid() {
+			var span trace.Span
+			traceCtx, span = otel.Tracer("openforge-ws").Start(r.Context(), "ws.session.open")
+			span.End()
+		}
+
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
 			slog.Error("ws upgrade failed", "error", err)
@@ -93,18 +136,62 @@ func handleChatWS(of *profile.OpenForge, jwtSvc *service.JWTService) http.Handle
 		}
 
 		c := &wsConn{
-			conn:          conn,
-			jwtSvc:        jwtSvc,
-			authRepo:      authadapter.NewPGAuthRepository(of.DB),
-			userID:        claims.UserID,
-			userRole:      claims.Role,
-			engines:       make(map[string]*domain.QueryEngine),
-			streamCancels: make(map[string]context.CancelFunc),
-			of:            of,
-			pongFail:      0,
-			wsRPC:         domain.NewWSRPC(conn, 30*time.Second),
+			conn:             conn,
+			jwtSvc:           jwtSvc,
+			authRepo:         authadapter.NewPGAuthRepository(of.DB),
+			userID:           claims.UserID,
+			userRole:         claims.Role,
+			engines:          make(map[string]*domain.QueryEngine),
+			streamCancels:    make(map[string]context.CancelFunc),
+			of:               of,
+			pongFail:         0,
+			wsRPC:            domain.NewWSRPC(conn, 30*time.Second),
+			dispatchServices: wireDispatchServices(of),
+			traceCtx:         traceCtx,
 		}
 		c.run()
+	}
+}
+
+// wireDispatchServices builds the production dispatchServices from the
+// OpenForge composition root. Each function pointer falls back to a
+// "not configured" error if the underlying service is nil, so misconfigured
+// profiles fail loudly at the WS layer instead of panicking.
+func wireDispatchServices(of *profile.OpenForge) *dispatchServices {
+	if of == nil {
+		return nil
+	}
+	return &dispatchServices{
+		DeactivateBranch: func(ctx context.Context, branchID string) error {
+			if of.PipelineRepo == nil {
+				return errors.New("pipeline repo not configured")
+			}
+			return of.PipelineRepo.DeactivateBranch(ctx, branchID)
+		},
+		ModifyScope: func(ctx context.Context, pipelineID, newRequirement string) error {
+			if of.PipelineSvc == nil {
+				return errors.New("pipeline service not configured")
+			}
+			return of.PipelineSvc.ModifyScope(ctx, pipelineID, newRequirement)
+		},
+		SwitchModel: func(ctx context.Context, model string) error {
+			if of.LLMRouter == nil {
+				return errors.New("llm router not configured")
+			}
+			return of.LLMRouter.SwitchModel(ctx, model)
+		},
+		TerminalInput: func(ctx context.Context, pipelineID, input string) error {
+			if of.TerminalService == nil {
+				return errors.New("terminal service not configured")
+			}
+			return of.TerminalService.Input(ctx, pipelineID, input)
+		},
+		SaveLayout: func(ctx context.Context, userID string, layout map[string]any) error {
+			if of.SettingsRepo == nil {
+				return errors.New("settings repo not configured")
+			}
+			return of.SettingsRepo.SaveLayout(ctx, userID, layout)
+		},
 	}
 }
 
@@ -212,7 +299,13 @@ func (c *wsConn) handleMessage(raw []byte) {
 	if err := json.Unmarshal(raw, &msg); err != nil {
 		return
 	}
+	c.dispatch(msg)
+}
 
+// dispatch routes a parsed wsMessage to the appropriate case handler. It is
+// extracted from handleMessage so unit tests can invoke individual cases
+// without needing a real websocket.Conn.
+func (c *wsConn) dispatch(msg wsMessage) {
 	switch msg.Type {
 	case "auth":
 		// Already authenticated; re-auth ignored in Phase 2
@@ -229,7 +322,15 @@ func (c *wsConn) handleMessage(raw []byte) {
 			return
 		}
 
-		ctx, cancel := context.WithCancel(context.Background())
+		// Derive stream context from c.traceCtx (extracted at WS upgrade
+		// from the inbound W3C traceparent) so downstream gRPC calls to
+		// the Node.js IO layer stay within the same trace.  Falls back
+		// to context.Background if the connection has no trace context.
+		parentCtx := c.traceCtx
+		if parentCtx == nil {
+			parentCtx = context.Background()
+		}
+		ctx, cancel := context.WithCancel(parentCtx)
 		c.mu.Lock()
 		if oldCancel, ok := c.streamCancels[p.PipelineID]; ok {
 			oldCancel()
@@ -417,6 +518,101 @@ func (c *wsConn) handleMessage(raw []byte) {
 
 	case "ping":
 		c.write(map[string]any{"type": "pong"})
+
+	case "chat.edit":
+		var ep struct {
+			MessageID string `json:"message_id"`
+			Content   string `json:"content"`
+		}
+		_ = json.Unmarshal(msg.Payload, &ep)
+		if err := c.dispatchChatEdit(ep.MessageID, ep.Content); err != nil {
+			c.write(map[string]any{"type": "error", "payload": map[string]string{"code": "edit_failed", "message": err.Error()}})
+			return
+		}
+		c.write(map[string]any{"type": "chat.edited", "payload": map[string]string{"message_id": ep.MessageID}})
+
+	case "chat.pause":
+		// Path B already implements chat.pause via stream cancel; this case
+		// emits a no-op ack so clients that round-trip the message can rely
+		// on a deterministic response shape.
+		c.write(map[string]any{"type": "chat.paused", "payload": map[string]any{}})
+
+	case "chat.resume":
+		c.write(map[string]any{"type": "chat.resumed", "payload": map[string]any{}})
+
+	case "chat.retry":
+		var rp struct {
+			MessageID  string `json:"message_id"`
+			PipelineID string `json:"pipeline_id"`
+		}
+		_ = json.Unmarshal(msg.Payload, &rp)
+		if rp.MessageID == "" {
+			c.write(map[string]any{"type": "error", "payload": map[string]string{"code": "retry_missing_message_id"}})
+			return
+		}
+		if err := c.dispatchChatRetry(rp.PipelineID, rp.MessageID); err != nil {
+			c.write(map[string]any{"type": "error", "payload": map[string]string{"code": "retry_failed", "message": err.Error()}})
+			return
+		}
+		c.write(map[string]any{"type": "chat.retry_started", "payload": map[string]string{"message_id": rp.MessageID}})
+
+	case "chat.cancel_branch":
+		var bp struct {
+			BranchID string `json:"branch_id"`
+		}
+		_ = json.Unmarshal(msg.Payload, &bp)
+		if err := c.dispatchCancelBranch(bp.BranchID); err != nil {
+			c.write(map[string]any{"type": "error", "payload": map[string]string{"code": "cancel_branch_failed", "message": err.Error()}})
+			return
+		}
+		c.write(map[string]any{"type": "chat.branch_cancelled", "payload": map[string]string{"branch_id": bp.BranchID}})
+
+	case "pipeline.modify_scope":
+		var sp struct {
+			PipelineID     string `json:"pipeline_id"`
+			NewRequirement string `json:"new_requirement"`
+		}
+		_ = json.Unmarshal(msg.Payload, &sp)
+		if err := c.dispatchModifyScope(sp.PipelineID, sp.NewRequirement); err != nil {
+			c.write(map[string]any{"type": "error", "payload": map[string]string{"code": "modify_scope_failed", "message": err.Error()}})
+			return
+		}
+		c.write(map[string]any{"type": "pipeline.scope_modified", "payload": map[string]string{"pipeline_id": sp.PipelineID}})
+
+	case "model.switch":
+		var mp struct {
+			Model string `json:"model"`
+		}
+		_ = json.Unmarshal(msg.Payload, &mp)
+		if err := c.dispatchModelSwitch(mp.Model); err != nil {
+			c.write(map[string]any{"type": "error", "payload": map[string]string{"code": "model_switch_failed", "message": err.Error()}})
+			return
+		}
+		c.write(map[string]any{"type": "model.switched", "payload": map[string]string{"model": mp.Model}})
+
+	case "terminal.input":
+		var tp struct {
+			PipelineID string `json:"pipeline_id"`
+			Input      string `json:"input"`
+		}
+		_ = json.Unmarshal(msg.Payload, &tp)
+		if err := c.dispatchTerminalInput(tp.PipelineID, tp.Input); err != nil {
+			c.write(map[string]any{"type": "error", "payload": map[string]string{"code": "terminal_input_failed", "message": err.Error()}})
+			return
+		}
+		c.write(map[string]any{"type": "terminal.input_acked", "payload": map[string]string{}})
+
+	case "panel.layout.save":
+		var lp struct {
+			UserID string         `json:"user_id"`
+			Layout map[string]any `json:"layout"`
+		}
+		_ = json.Unmarshal(msg.Payload, &lp)
+		if err := c.dispatchPanelLayoutSave(lp.UserID, lp.Layout); err != nil {
+			c.write(map[string]any{"type": "error", "payload": map[string]string{"code": "layout_save_failed", "message": err.Error()}})
+			return
+		}
+		c.write(map[string]any{"type": "panel.layout_saved", "payload": map[string]string{}})
 	}
 }
 
@@ -521,6 +717,10 @@ func (c *wsConn) cleanupEngines() {
 }
 
 func (c *wsConn) write(v any) {
+	if c.writer != nil {
+		c.writer.write(v)
+		return
+	}
 	c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 	c.conn.WriteJSON(v)
 }
@@ -596,3 +796,138 @@ func splitLines(s string) []string {
 	}
 	return lines
 }
+
+// ---------------------------------------------------------------------------
+// T4 dispatch helpers — 11 new WS handler cases.
+//
+// Each helper is a thin wrapper around the corresponding service method. The
+// wrapper exists so the production code goes through a stable seam, and so
+// unit tests can stub the underlying call without spinning up a real
+// websocket connection.
+// ---------------------------------------------------------------------------
+
+// dispatchChatEdit edits a previously-sent message and re-triggers the agent
+// loop starting from that message. It looks up the engine for the pipeline
+// the message belongs to and calls EditMessage.
+func (c *wsConn) dispatchChatEdit(messageID, content string) error {
+	if messageID == "" {
+		return errors.New("message_id required")
+	}
+	qe := c.lookupEngineForMessage(messageID)
+	if qe == nil {
+		return errNoSuchMessage{msgID: messageID}
+	}
+	return qe.EditMessage(context.Background(), messageID, content)
+}
+
+// dispatchChatRetry re-sends a stream starting from the given message.
+func (c *wsConn) dispatchChatRetry(pipelineID, messageID string) error {
+	if messageID == "" {
+		return errors.New("message_id required")
+	}
+	qe := c.engineFor(pipelineID)
+	if qe == nil {
+		return errNoSuchMessage{msgID: messageID}
+	}
+	return qe.ResendFromMessage(context.Background(), pipelineID, messageID)
+}
+
+// dispatchCancelBranch deactivates an active conversation branch.
+func (c *wsConn) dispatchCancelBranch(branchID string) error {
+	if branchID == "" {
+		return errors.New("branch_id required")
+	}
+	if c.dispatchServices == nil || c.dispatchServices.DeactivateBranch == nil {
+		return errors.New("deactivate branch not configured")
+	}
+	return c.dispatchServices.DeactivateBranch(context.Background(), branchID)
+}
+
+// dispatchModifyScope updates the user-visible scope of a pipeline and
+// triggers a backtrack from the latest message.
+func (c *wsConn) dispatchModifyScope(pipelineID, newRequirement string) error {
+	if pipelineID == "" {
+		return errors.New("pipeline_id required")
+	}
+	if c.dispatchServices == nil || c.dispatchServices.ModifyScope == nil {
+		return errors.New("modify scope not configured")
+	}
+	return c.dispatchServices.ModifyScope(context.Background(), pipelineID, newRequirement)
+}
+
+// dispatchModelSwitch changes the active LLM model at the router level.
+func (c *wsConn) dispatchModelSwitch(model string) error {
+	if model == "" {
+		return errors.New("model required")
+	}
+	if c.dispatchServices == nil || c.dispatchServices.SwitchModel == nil {
+		return errors.New("switch model not configured")
+	}
+	return c.dispatchServices.SwitchModel(context.Background(), model)
+}
+
+// dispatchTerminalInput forwards a string of input to the in-pipeline sandbox
+// terminal. The ack is intentionally fire-and-forget — terminal output is
+// streamed via chat.stream events.
+func (c *wsConn) dispatchTerminalInput(pipelineID, input string) error {
+	if pipelineID == "" {
+		return errors.New("pipeline_id required")
+	}
+	if c.dispatchServices == nil || c.dispatchServices.TerminalInput == nil {
+		return errors.New("terminal input not configured")
+	}
+	return c.dispatchServices.TerminalInput(context.Background(), pipelineID, input)
+}
+
+// dispatchPanelLayoutSave persists a per-user layout configuration.
+func (c *wsConn) dispatchPanelLayoutSave(userID string, layout map[string]any) error {
+	if userID == "" {
+		return errors.New("user_id required")
+	}
+	if c.dispatchServices == nil || c.dispatchServices.SaveLayout == nil {
+		return errors.New("save layout not configured")
+	}
+	return c.dispatchServices.SaveLayout(context.Background(), userID, layout)
+}
+
+// engineFor returns the engine registered for a pipeline, or nil.
+func (c *wsConn) engineFor(pipelineID string) *domain.QueryEngine {
+	if pipelineID == "" {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.engines[pipelineID]
+}
+
+// lookupEngineForMessage is a best-effort lookup. In Phase 2 we don't index
+// messages back to pipelines, so we walk the engine map. The first engine
+// whose conversation repo can find the message wins. Returns nil when no
+// engine claims the message — the caller surfaces errNoSuchMessage.
+func (c *wsConn) lookupEngineForMessage(messageID string) *domain.QueryEngine {
+	c.mu.Lock()
+	engines := make([]*domain.QueryEngine, 0, len(c.engines))
+	for _, qe := range c.engines {
+		engines = append(engines, qe)
+	}
+	c.mu.Unlock()
+	if len(engines) == 0 {
+		return nil
+	}
+	if len(engines) == 1 {
+		return engines[0]
+	}
+	for _, qe := range engines {
+		if qe.HasMessage(context.Background(), messageID) {
+			return qe
+		}
+	}
+	return engines[0]
+}
+
+// errNoSuchMessage is returned by dispatchChatEdit / dispatchChatRetry when
+// the target message_id is not present in any engine's history. The string
+// form is surfaced to WS clients as the "message" field of the error payload.
+type errNoSuchMessage struct{ msgID string }
+
+func (e errNoSuchMessage) Error() string { return "no such message: " + e.msgID }

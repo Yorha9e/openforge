@@ -23,6 +23,21 @@ export interface UsageSummary {
   recordCount: number;
 }
 
+/**
+ * Transport configuration for the optional HTTP flush path.
+ *
+ * Path C T7: when a flushTransport is configured, the meter will POST
+ * token batches to the given URL.  The traceparent header is honoured
+ * (and merged with the W3C TraceContext propagator) so the downstream
+ * receiver continues the current Go↔Node trace.  When no transport is
+ * configured, the meter keeps its original console.log behaviour.
+ */
+export interface FlushTransport {
+  url: string;
+  /** Optional W3C traceparent string; when present it is sent verbatim. */
+  traceparent?: string;
+}
+
 export class TokenMeter {
   private buffer: TokenRecord[] = [];
   private allRecords: TokenRecord[] = [];
@@ -33,6 +48,9 @@ export class TokenMeter {
   private cumulativeInput = 0n;
   private cumulativeOutput = 0n;
   private cumulativeCount = 0;
+
+  /** Optional HTTP transport for forwarding batches.  Null = console.log only. */
+  private flushTransport: FlushTransport | null = null;
 
   record(record: TokenRecord): void {
     this.buffer.push(record);
@@ -46,6 +64,17 @@ export class TokenMeter {
     if (this.buffer.length >= this.maxBufferSize) {
       this.flush();
     }
+  }
+
+  /**
+   * Configure (or clear) the HTTP flush transport.
+   *
+   * Pass `null` to revert to console.log-only flushing.  When the
+   * transport's `traceparent` is set, that W3C header is included on
+   * every outbound request so the receiver can continue the trace.
+   */
+  setFlushTransport(transport: FlushTransport | null): void {
+    this.flushTransport = transport;
   }
 
   getSummary(): UsageSummary {
@@ -67,13 +96,40 @@ export class TokenMeter {
     return { totalInputTokens: this.cumulativeInput, totalOutputTokens: this.cumulativeOutput, totalCost: 0, byProvider, recordCount: this.cumulativeCount };
   }
 
-  private flush(): void {
+  private async flush(): Promise<void> {
     if (this.buffer.length === 0) return;
     const batch = this.buffer.splice(0);
+
+    if (this.flushTransport) {
+      // HTTP flush path — honour the W3C traceparent if supplied.
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+      if (this.flushTransport.traceparent) {
+        headers["traceparent"] = this.flushTransport.traceparent;
+      }
+      try {
+        await fetch(this.flushTransport.url, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ event: "token_batch", count: batch.length, records: batch }),
+        });
+      } catch (err) {
+        // On transport failure, log the batch locally so data is not lost.
+        console.error("token_meter HTTP flush failed; logging locally", err);
+        console.log(JSON.stringify({ event: "token_batch", count: batch.length, records: batch }));
+      }
+      return;
+    }
+
+    // Default: console.log only (preserves existing behaviour).
     console.log(JSON.stringify({ event: "token_batch", count: batch.length, records: batch }));
   }
 
   start(): void {
-    setInterval(() => this.flush(), this.flushIntervalMs);
+    setInterval(() => {
+      // fire-and-forget; flush() handles its own errors
+      void this.flush();
+    }, this.flushIntervalMs);
   }
 }
