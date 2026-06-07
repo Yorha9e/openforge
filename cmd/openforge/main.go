@@ -76,6 +76,14 @@ func main() {
 
 	fmt.Println("OpenForge CLI — Phase 1 MVP")
 	fmt.Printf("Profile: %s | Model: %s/%s\n", cfg.Profile, llmConfig.Provider, llmConfig.Model)
+	if cfg.Ownership != nil {
+		fmt.Printf("Module ownership: %d entries loaded from %s\n", len(cfg.Ownership.Modules), cfg.ModuleOwnershipPath)
+	} else {
+		fmt.Println("Module ownership: using PG-seeded defaults")
+	}
+	if of.OwnershipRepo != nil {
+		fmt.Println("Ownership repository: PG-backed (module_ownership table)")
+	}
 	fmt.Println("Type /help for commands, /quit to exit.")
 	fmt.Println()
 

@@ -35,6 +35,18 @@ type Config struct {
 	Notifier         string `yaml:"notifier"`
 	CommandExecutor  string `yaml:"command_executor"`
 
+	// ModuleOwnershipPath is an optional path to a module-ownership YAML
+	// file. When set, Load() invokes LoadOwnership() and stores the parsed
+	// result on Config.Ownership. When unset (or the file fails to parse),
+	// Config.Ownership is left nil — callers must treat nil as "no
+	// ownership rules configured" and rely on the PG-seeded defaults.
+	ModuleOwnershipPath string `yaml:"module_ownership_path"`
+
+	// Ownership holds the parsed module-ownership YAML referenced by
+	// ModuleOwnershipPath. Populated by Load() at startup; nil if no
+	// ownership file is configured or parsing fails.
+	Ownership *ModuleOwnershipYAML `yaml:"-"`
+
 	// FeatureFlags: YAML-level defaults for enterprise capability toggles.
 	// Runtime overrides are stored in the feature_flags DB table.
 	FeatureFlags FeatureFlagsConfig `yaml:"feature_flags"`
@@ -269,6 +281,18 @@ func Load(path string, verifySignature bool) (*Config, error) {
 	}
 	if err := cfg.validate(); err != nil {
 		return nil, fmt.Errorf("validate profile: %w", err)
+	}
+	// Optional: load module-ownership YAML if configured. Failures are
+	// logged but not fatal — the system falls back to the PG-seeded
+	// module_ownership rows (see migration 015) when no file is present.
+	if cfg.ModuleOwnershipPath != "" {
+		owner, err := LoadOwnership(cfg.ModuleOwnershipPath)
+		if err != nil {
+			slog.Warn("module-ownership load failed; using PG-seeded defaults",
+				"path", cfg.ModuleOwnershipPath, "err", err)
+		} else {
+			cfg.Ownership = owner
+		}
 	}
 	return &cfg, nil
 }

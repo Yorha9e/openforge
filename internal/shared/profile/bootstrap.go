@@ -16,6 +16,7 @@ import (
 	"openforge/internal/adapter"
 	agentadapter "openforge/internal/agent/adapter"
 	agentapp "openforge/internal/agent/application"
+	agentdomain "openforge/internal/agent/domain"
 	"openforge/internal/agent/domain"
 	"openforge/internal/compliance"
 	"openforge/internal/llm"
@@ -25,6 +26,7 @@ import (
 	"openforge/internal/pipeline/service"
 	"openforge/internal/shared/featureflags"
 	"openforge/internal/shared/kernel"
+	"openforge/internal/terminal"
 )
 
 // OpenForge is the composition root of all 10 capability domains. It is
@@ -87,6 +89,8 @@ type OpenForge struct {
 	DB              *sql.DB
 	DepCache        *adapter.DependencyCache
 	DataLifecycle   *compliance.DataLifecycle // G16: compliance data lifecycle manager
+	TerminalService *terminal.Service        // Path C T4: WS terminal.input handler backend
+	OwnershipRepo   *pipelineadapter.PGOwnershipRepository // T13: PG-backed module ownership
 	Shutdown        func()                    // G16: graceful shutdown callback
 }
 
@@ -232,6 +236,7 @@ func Bootstrap(cfg *Config) (*OpenForge, error) {
 	of.PipelineRepo = pipelineadapter.NewPGRepository(db)
 	of.GateRequestRepo = pipelineadapter.NewPGGateRequestRepository(db)
 	of.FileLockStore = pipelineadapter.NewPGFileLockStore(db)
+	of.OwnershipRepo = pipelineadapter.NewPGOwnershipRepository(db) // T13
 	of.FileLockSvc = service.NewFileLockService(of.FileLockStore)
 	of.SettingsRepo = adapter.NewPGSettingsRepo(db)
 	of.CheckpointRepo = adapter.NewPGCheckpointRepo(db)
