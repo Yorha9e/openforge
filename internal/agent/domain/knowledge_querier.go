@@ -145,6 +145,9 @@ func (kq *KnowledgeQuerier) SetEmbeddingIndex(index EmbeddingIndex) {
 
 // Query queries relevant knowledge and trajectories.
 // Returns empty string when learningEngine is nil (Phase 7: real implementation).
+// When an embeddingIndex is configured, top-K embedding hits are appended to
+// the output so newly learned knowledge surfaces in prompts without needing
+// the full LearningEngine round trip.
 func (kq *KnowledgeQuerier) Query(ctx context.Context, projectID, query string) (string, error) {
 	if kq.learningEngine == nil {
 		return "", nil
@@ -166,8 +169,37 @@ func (kq *KnowledgeQuerier) Query(ctx context.Context, projectID, query string) 
 	})
 
 	content := kq.format(prefs, trajs)
+
+	// Embedding index lookup (Phase 7: in-memory, no async I/O).
+	if kq.embeddingIndex != nil {
+		if hits, err := kq.embeddingIndex.Search(ctx, query, 5); err == nil && len(hits) > 0 {
+			if emb := formatEmbeddingHits(hits); emb != "" {
+				if content == "" {
+					content = emb
+				} else {
+					content = content + "\n" + emb
+				}
+			}
+		}
+	}
+
 	kq.cache.Store(key, &queryCacheEntry{content: content, expiresAt: time.Now().Add(5 * time.Minute)})
 	return content, nil
+}
+
+// formatEmbeddingHits renders the top-K embedding hits as a knowledge block
+// that the LLM can read inline. Returns "" when there are no hits.
+func formatEmbeddingHits(hits []SearchResult) string {
+	if len(hits) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("<embedding_hits>\n")
+	for _, h := range hits {
+		b.WriteString(fmt.Sprintf("<hit id=\"%s\" score=\"%.2f\"/>\n", h.ID, h.Score))
+	}
+	b.WriteString("</embedding_hits>\n")
+	return b.String()
 }
 
 func (kq *KnowledgeQuerier) format(prefs *QueryKnowledgeResponse, trajs *MatchTrajectoryResponse) string {
@@ -245,19 +277,19 @@ func truncateStringWithEllipsis(s string, maxLen int) string {
 
 func isReadOnlyTool(name string) bool {
 	readOnlyTools := map[string]bool{
-		"read_file":             true,
-		"search_content":        true,
-		"search_files":          true,
-		"analyze_topology":      true,
-		"lsp_hover":             true,
-		"lsp_definition":        true,
-		"lsp_references":        true,
-		"lsp_symbols":           true,
-		"list_models":           true,
-		"check_token_budget":    true,
+		"read_file":              true,
+		"search_content":         true,
+		"search_files":           true,
+		"analyze_topology":       true,
+		"lsp_hover":              true,
+		"lsp_definition":         true,
+		"lsp_references":         true,
+		"lsp_symbols":            true,
+		"list_models":            true,
+		"check_token_budget":     true,
 		"query_module_ownership": true,
 		"validate_artifact_hash": true,
-		"generate_artifact_url": true,
+		"generate_artifact_url":  true,
 	}
 	return readOnlyTools[name]
 }

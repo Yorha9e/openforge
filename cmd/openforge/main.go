@@ -56,6 +56,17 @@ func main() {
 	
 	coordinator := domain.NewCoordinator(llmClient, toolReg)
 
+	// Phase 7: wire the in-memory embedding index into the KnowledgeQuerier
+	// and the LearningService so newly learned knowledge surfaces in prompts.
+	embeddingIndex := domain.NewInMemoryEmbeddingIndex()
+	of.EmbeddingIndex = embeddingIndex
+	if of.KnowledgeQuerier != nil {
+		of.KnowledgeQuerier.SetEmbeddingIndex(embeddingIndex.AsEmbeddingIndex())
+	}
+	if of.LearningSvc != nil {
+		of.LearningSvc.SetEmbeddingIndex(embeddingIndex)
+	}
+
 	llmConfig := port.LLMConfig{
 		Provider:    cfg.LLM.DefaultProvider,
 		Model:       cfg.LLM.DefaultModel,

@@ -196,6 +196,9 @@ func RegisterRoutes(of *profile.OpenForge, jwtSvc *service.JWTService, cfg *prof
 		provider := &ofResourceSnapshotProvider{of: of}
 		handler = LoadShedMiddleware(ls, provider, handler)
 	}
+	// OTel HTTP instrumentation: outermost wrapper so it spans the entire
+	// middleware chain.  W3C traceparent headers are extracted here.
+	handler = OTelHTTPMiddleware(handler)
 	return handler
 }
 

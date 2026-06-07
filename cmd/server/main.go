@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"openforge/internal/auth/service"
+	"openforge/internal/observability/adapter"
 	"openforge/internal/server"
 	"openforge/internal/shared/profile"
 )
@@ -22,6 +23,28 @@ func main() {
 		Level: slog.LevelInfo,
 	})
 	slog.SetDefault(slog.New(logHandler))
+
+	// Initialize OpenTelemetry tracing.  OTLP endpoint is read from
+	// OTLP_ENDPOINT (default localhost:4317, plaintext gRPC).  Initialisation
+	// failure is non-fatal: the server still starts, but spans will be dropped
+	// silently.
+	otelEndpoint := os.Getenv("OTLP_ENDPOINT")
+	if otelEndpoint == "" {
+		otelEndpoint = "localhost:4317"
+	}
+	otelShutdown, otelErr := adapter.InitOTelTracer(context.Background(), "openforge-server", otelEndpoint)
+	if otelErr != nil {
+		slog.Warn("OTel init failed; continuing without tracing", "err", otelErr)
+	} else {
+		slog.Info("OTel tracer initialised", "endpoint", otelEndpoint)
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := otelShutdown(shutdownCtx); err != nil {
+				slog.Warn("OTel shutdown failed", "err", err)
+			}
+		}()
+	}
 
 	configPath := flag.String("config", "config/profiles/minimal.yaml", "profile config path")
 	addr := flag.String("addr", ":8030", "listen address")

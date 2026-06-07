@@ -31,47 +31,51 @@ import (
 // constructed by Bootstrap and provides ready-to-use implementations of
 // every interface declared in kernel/interfaces.go.
 type OpenForge struct {
-	Secrets      kernel.SecretStore
-	Container    kernel.ContainerRuntime
-	Object       kernel.ObjectStore
-	TaskQ        kernel.TaskQueue
-	Events       kernel.EventBus
-	Cache        kernel.Cache
-	Telemetry    kernel.Telemetry
-	Registry     kernel.ServiceRegistry
-	DR           kernel.DisasterRecovery
-	LB           kernel.LoadBalancer
-	Notifier     kernel.Notifier
-	CommandExec  kernel.CommandExecutor
-	LLMRouter    *llm.Router
-	LLMRegistry     *llm.Registry
-	Config          *Config
-	FeatureFlags    *featureflags.FeatureFlags   // Phase 10: runtime-overridable enterprise toggles
-	PromptBuilder   *domain.PromptBuilder
-	SkillLoader         *domain.SkillLoader
-	CapabilityInjector  *domain.CapabilityInjector
-	PriorityEngine      *domain.UnifiedPriorityEngine
-	HashRing            *observabilitydomain.HashRing
-	BreakerPool         *observabilitydomain.BreakerPool
-	SLO                 *observabilitydomain.SLOTracker
-	PrometheusExporter  *obsadapter.PrometheusExporter
+	Secrets            kernel.SecretStore
+	Container          kernel.ContainerRuntime
+	Object             kernel.ObjectStore
+	TaskQ              kernel.TaskQueue
+	Events             kernel.EventBus
+	Cache              kernel.Cache
+	Telemetry          kernel.Telemetry
+	Registry           kernel.ServiceRegistry
+	DR                 kernel.DisasterRecovery
+	LB                 kernel.LoadBalancer
+	Notifier           kernel.Notifier
+	CommandExec        kernel.CommandExecutor
+	LLMRouter          *llm.Router
+	LLMRegistry        *llm.Registry
+	Config             *Config
+	FeatureFlags       *featureflags.FeatureFlags // Phase 10: runtime-overridable enterprise toggles
+	PromptBuilder      *domain.PromptBuilder
+	SkillLoader        *domain.SkillLoader
+	CapabilityInjector *domain.CapabilityInjector
+	PriorityEngine     *domain.UnifiedPriorityEngine
+	HashRing           *observabilitydomain.HashRing
+	BreakerPool        *observabilitydomain.BreakerPool
+	SLO                *observabilitydomain.SLOTracker
+	PrometheusExporter *obsadapter.PrometheusExporter
 
 	// Phase 7: Learning engine components
-	PreferenceStore    *agentadapter.PGPreferenceStore
-	TrajectoryStore    *agentadapter.PGTrajectoryStore
-	LLMPriorityQueue   *domain.LLMPriorityQueue
-	RetrospectiveGen   *domain.RetrospectiveGenerator
+	PreferenceStore  *agentadapter.PGPreferenceStore
+	TrajectoryStore  *agentadapter.PGTrajectoryStore
+	LLMPriorityQueue *domain.LLMPriorityQueue
+	RetrospectiveGen *domain.RetrospectiveGenerator
 
 	// Phase 8.4: Learning engine — experiment, retrospective, knowledge snapshot
-	ExperimentStore       *agentadapter.PGExperimentStore
-	RetrospectiveStore    *agentadapter.PGRetrospectiveStore
+	ExperimentStore        *agentadapter.PGExperimentStore
+	RetrospectiveStore     *agentadapter.PGRetrospectiveStore
 	KnowledgeSnapshotStore *agentadapter.PGKnowledgeSnapshotStore
-	LearningSvc           *agentapp.LearningService
+	LearningSvc            *agentapp.LearningService
 
-	PipelineRepo      *pipelineadapter.PGRepository
-	GateRequestRepo  *pipelineadapter.PGGateRequestRepository
-	PipelineSvc       *service.PipelineService
-	GateSvc           *service.GateService
+	// Phase 7: in-memory embedding index used by KnowledgeQuerier for L4
+	// retrieval. Filled by main.go after Bootstrap returns.
+	EmbeddingIndex *agentdomain.InMemoryEmbeddingIndex
+
+	PipelineRepo    *pipelineadapter.PGRepository
+	GateRequestRepo *pipelineadapter.PGGateRequestRepository
+	PipelineSvc     *service.PipelineService
+	GateSvc         *service.GateService
 	SandboxProvider *adapter.SandboxProvider
 	DeploySvc       *service.DeployService
 	TokenCostSvc    *service.TokenCostService
@@ -187,13 +191,13 @@ func Bootstrap(cfg *Config) (*OpenForge, error) {
 	if err != nil {
 		return nil, fmt.Errorf("db: %w", err)
 	}
-	
+
 	// Configure connection pool to prevent connection exhaustion
 	db.SetMaxOpenConns(25)                 // Maximum number of open connections
 	db.SetMaxIdleConns(10)                 // Maximum number of idle connections
 	db.SetConnMaxLifetime(5 * time.Minute) // Maximum lifetime of a connection
 	db.SetConnMaxIdleTime(1 * time.Minute) // Maximum idle time of a connection
-	
+
 	of.DB = db
 
 	// G13: Initialize disaster recovery with DB connection
@@ -271,7 +275,7 @@ func Bootstrap(cfg *Config) (*OpenForge, error) {
 		of.PriorityEngine.Start()
 	}
 
-		// Phase 7: Learning engine components
+	// Phase 7: Learning engine components
 	of.PreferenceStore = agentadapter.NewPGPreferenceStore(db)
 	of.TrajectoryStore = agentadapter.NewPGTrajectoryStore(db)
 	of.LLMPriorityQueue = domain.NewLLMPriorityQueue()
@@ -580,7 +584,7 @@ func (t *stdoutTelemetry) Metric(name string, value float64, tags map[string]str
 
 type noopSpan struct{}
 
-func (s *noopSpan) End()                                    {}
+func (s *noopSpan) End()                                          {}
 func (s *noopSpan) AddEvent(name string, attrs map[string]string) {}
 
 // --- ServiceRegistry -------------------------------------------------------
@@ -668,7 +672,7 @@ func newLoadBalancer(cfg *Config) kernel.LoadBalancer {
 		if cfg.LoadBalancer == "k8s-ingress" {
 			configPath = "" // K8s ingress doesn't need config file
 		}
-		
+
 		lb := adapter.NewNginxLoadBalancer(configPath)
 		if lb != nil {
 			return lb
@@ -693,9 +697,9 @@ func newNotifier(cfg *Config) kernel.Notifier {
 			// If other channels are configured, create multi-channel notifier
 			var channels []kernel.Notifier
 			channels = append(channels, feishu)
-			
+
 			// Future: Add DingTalk, Email, etc. channels here
-			
+
 			if len(channels) > 1 {
 				return adapter.NewMultiChannelNotifier(channels)
 			}
