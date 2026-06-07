@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"os"
@@ -92,6 +93,32 @@ func (upe *UnifiedPriorityEngine) SetTrajectoryStore(store TrajectoryStore) {
 	upe.mu.Lock()
 	defer upe.mu.Unlock()
 	upe.trajStore = store
+}
+
+// LearningFactor returns a 0.5..1.5 multiplier based on the success rate of
+// the project's most recent trajectories (T10). A record with no FailureCodes
+// counts as a success; otherwise it's a failure. Returns 1.0 (neutral) when
+// the store is nil, errors out, or there is no data for the project — this
+// keeps the engine safe to run before the learning loop has produced history.
+func (upe *UnifiedPriorityEngine) LearningFactor(ctx context.Context, projectID string) float64 {
+	upe.mu.Lock()
+	store := upe.trajStore
+	upe.mu.Unlock()
+	if store == nil {
+		return 1.0
+	}
+	traj, err := store.ListByProject(ctx, projectID)
+	if err != nil || len(traj) == 0 {
+		return 1.0
+	}
+	success := 0
+	for _, t := range traj {
+		if len(t.FailureCodes) == 0 {
+			success++
+		}
+	}
+	rate := float64(success) / float64(len(traj))
+	return 0.5 + rate // bounds: 0.5 (all fail) .. 1.5 (all success)
 }
 
 // NewUnifiedPriorityEngine creates a new priority engine.

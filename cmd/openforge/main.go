@@ -67,6 +67,12 @@ func main() {
 		of.LearningSvc.SetEmbeddingIndex(embeddingIndex)
 	}
 
+	// T10: wire the trajectory store into the priority engine so the
+	// LearningFactor can pull per-project success rates.
+	if of.PriorityEngine != nil && of.TrajectoryStore != nil {
+		of.PriorityEngine.SetTrajectoryStore(of.TrajectoryStore)
+	}
+
 	llmConfig := port.LLMConfig{
 		Provider:    cfg.LLM.DefaultProvider,
 		Model:       cfg.LLM.DefaultModel,
