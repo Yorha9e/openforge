@@ -16,6 +16,30 @@ services:
       timeout: 5s
       retries: 5
 
+  # Auxiliary upstream for toxiproxy chaos tests.  toxiproxy listens on
+  # toxiproxy:5432 and forwards to this postgres instance.  Tests reach the
+  # cluster through the admin API (port 8474) and the proxy port.
+  postgres-proxied:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: openforge
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-openforge_dev}
+      POSTGRES_DB: openforge
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U openforge"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.9.0
+    ports:
+      - "8474:8474"
+    networks:
+      - default
+
   nodejs-io:
     build: ./nodejs-io
     ports:
