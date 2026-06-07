@@ -95,6 +95,18 @@ func main() {
 		}
 	}()
 
+	// Path C T1: start gRPC server on :50051 (CoordinatorService +
+	// GateService + ToolRegistryService + LLMRouterService). The handler
+	// is a stub today; full business logic lands in T2 (Coordinator) and
+	// T5 (Gate). ToolRegistry + LLMRouter are owned by the Node.js IO
+	// process and exposed as noop stubs on the Go side for service
+	// discovery / health probes.
+	go func() {
+		if err := server.StartGRPCServer(of, ":50051"); err != nil {
+			slog.Error("gRPC server failed", "addr", ":50051", "error", err)
+		}
+	}()
+
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
