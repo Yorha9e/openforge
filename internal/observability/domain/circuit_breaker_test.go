@@ -2,6 +2,7 @@ package domain
 
 import (
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -171,5 +172,21 @@ func TestBreakerPool_All(t *testing.T) {
 		if s != StateClosed {
 			t.Errorf("breaker %q: expected CLOSED, got %s", name, s)
 		}
+	}
+}
+
+func TestBreakerCallWrap_OpensAfterMaxFailures(t *testing.T) {
+	b := NewBreaker(BreakerConfig{Name: "wrap", MaxFailures: 2, OpenDuration: 100 * time.Millisecond})
+	// 2 consecutive failures
+	for i := 0; i < 2; i++ {
+		err := b.CallWrap(func() error { return fmt.Errorf("fail %d", i) })
+		if err == nil {
+			t.Fatalf("attempt %d: expected error", i)
+		}
+	}
+	// 3rd call should fail-fast with ErrCircuitOpen
+	err := b.CallWrap(func() error { return nil })
+	if !errors.Is(err, ErrCircuitOpen) {
+		t.Fatalf("expected ErrCircuitOpen after 2 failures, got %v", err)
 	}
 }

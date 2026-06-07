@@ -526,15 +526,12 @@ func (c *wsConn) dispatch(msg wsMessage) {
 		}
 		_ = json.Unmarshal(msg.Payload, &ep)
 		if err := c.dispatchChatEdit(ep.MessageID, ep.Content); err != nil {
-			c.write(map[string]any{"type": "error", "payload": map[string]string{"code": "edit_failed", "message": err.Error()}})
+			c.write(map[string]any{"type": "error", "payload": map[string]any{"code": "edit_failed", "message": err.Error()}})
 			return
 		}
-		c.write(map[string]any{"type": "chat.edited", "payload": map[string]string{"message_id": ep.MessageID}})
+		c.write(map[string]any{"type": "chat.edited", "payload": map[string]any{"message_id": ep.MessageID}})
 
 	case "chat.pause":
-		// Path B already implements chat.pause via stream cancel; this case
-		// emits a no-op ack so clients that round-trip the message can rely
-		// on a deterministic response shape.
 		c.write(map[string]any{"type": "chat.paused", "payload": map[string]any{}})
 
 	case "chat.resume":
@@ -547,14 +544,14 @@ func (c *wsConn) dispatch(msg wsMessage) {
 		}
 		_ = json.Unmarshal(msg.Payload, &rp)
 		if rp.MessageID == "" {
-			c.write(map[string]any{"type": "error", "payload": map[string]string{"code": "retry_missing_message_id"}})
+			c.write(map[string]any{"type": "error", "payload": map[string]any{"code": "retry_missing_message_id"}})
 			return
 		}
 		if err := c.dispatchChatRetry(rp.PipelineID, rp.MessageID); err != nil {
-			c.write(map[string]any{"type": "error", "payload": map[string]string{"code": "retry_failed", "message": err.Error()}})
+			c.write(map[string]any{"type": "error", "payload": map[string]any{"code": "retry_failed", "message": err.Error()}})
 			return
 		}
-		c.write(map[string]any{"type": "chat.retry_started", "payload": map[string]string{"message_id": rp.MessageID}})
+		c.write(map[string]any{"type": "chat.retry_started", "payload": map[string]any{"message_id": rp.MessageID}})
 
 	case "chat.cancel_branch":
 		var bp struct {
@@ -601,18 +598,6 @@ func (c *wsConn) dispatch(msg wsMessage) {
 			return
 		}
 		c.write(map[string]any{"type": "terminal.input_acked", "payload": map[string]string{}})
-
-	case "panel.layout.save":
-		var lp struct {
-			UserID string         `json:"user_id"`
-			Layout map[string]any `json:"layout"`
-		}
-		_ = json.Unmarshal(msg.Payload, &lp)
-		if err := c.dispatchPanelLayoutSave(lp.UserID, lp.Layout); err != nil {
-			c.write(map[string]any{"type": "error", "payload": map[string]string{"code": "layout_save_failed", "message": err.Error()}})
-			return
-		}
-		c.write(map[string]any{"type": "panel.layout_saved", "payload": map[string]string{}})
 	}
 }
 

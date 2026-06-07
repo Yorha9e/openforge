@@ -132,6 +132,13 @@ func (b *Breaker) State() State {
 	return b.state
 }
 
+// CallWrap is a Path C T6 alias for Call. It is the public name used by
+// LLM / Vault / Redis / Docker call sites so the intent ("wrap this call
+// in a breaker") reads clearly at the call site.
+func (b *Breaker) CallWrap(fn func() error) error {
+	return b.Call(fn)
+}
+
 // Counters returns the current failure count and last failure time for
 // observability / metrics reporting.
 func (b *Breaker) Counters() (failures int, lastFailTime time.Time) {

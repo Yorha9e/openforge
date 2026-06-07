@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	observabilitydomain "openforge/internal/observability/domain"
 	"openforge/internal/shared/kernel"
 )
 
@@ -42,6 +43,12 @@ type SandboxProvider struct {
 	runtime   kernel.ContainerRuntime // Phase 4+: Docker API; MVP: noop
 	stopCh    chan struct{}
 	closeOnce sync.Once
+	breaker   *observabilitydomain.Breaker
+}
+
+// SetBreaker attaches a circuit breaker to wrap container Create calls.
+func (p *SandboxProvider) SetBreaker(b *observabilitydomain.Breaker) {
+	p.breaker = b
 }
 
 // NewSandboxProvider creates a new SandboxProvider and starts background

@@ -54,3 +54,24 @@ func (r *PGSettingsRepo) Upsert(ctx context.Context, s *UserSettingsRow) error {
 		s.UserID, s.Notifications, s.Layout, s.Language, s.Project)
 	return err
 }
+
+// SaveLayout persists a per-user layout configuration as JSON. Path C T4:
+// minimal implementation that upserts the layout column on the existing
+// user_settings row, falling back to a fresh insert when no row exists.
+func (r *PGSettingsRepo) SaveLayout(ctx context.Context, userID string, layout map[string]any) error {
+	if userID == "" {
+		return nil
+	}
+	payload, err := json.Marshal(layout)
+	if err != nil {
+		return err
+	}
+	_, err = r.db.ExecContext(ctx, `
+		INSERT INTO user_settings (user_id, layout, updated_at)
+		VALUES ($1, $2, now())
+		ON CONFLICT (user_id) DO UPDATE SET
+			layout = EXCLUDED.layout,
+			updated_at = now()
+	`, userID, payload)
+	return err
+}

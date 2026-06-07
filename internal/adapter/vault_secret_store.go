@@ -7,6 +7,7 @@ import (
 	"time"
 
 	vault "github.com/hashicorp/vault/api"
+	observabilitydomain "openforge/internal/observability/domain"
 )
 
 // VaultConfig holds Vault connection parameters (decoupled from profile package).
@@ -27,6 +28,12 @@ type VaultSecretStore struct {
 	timeout time.Duration
 	enabled bool
 	isKVv2  bool
+	breaker *observabilitydomain.Breaker
+}
+
+// SetBreaker attaches a circuit breaker to wrap Vault reads.
+func (v *VaultSecretStore) SetBreaker(b *observabilitydomain.Breaker) {
+	v.breaker = b
 }
 
 // NewVaultSecretStore creates a new Vault-backed secret store.

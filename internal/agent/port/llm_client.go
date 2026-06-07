@@ -16,6 +16,7 @@ type ToolDef struct {
 }
 
 type Message struct {
+	ID      string // T4: optional DB message ID for chat.edit / chat.retry routing
 	Role    string
 	Content string
 }
