@@ -72,7 +72,8 @@ type OpenForge struct {
 
 	// Phase 7: in-memory embedding index used by KnowledgeQuerier for L4
 	// retrieval. Filled by main.go after Bootstrap returns.
-	EmbeddingIndex *agentdomain.InMemoryEmbeddingIndex
+	EmbeddingIndex  *agentdomain.InMemoryEmbeddingIndex
+	KnowledgeQuerier *agentdomain.KnowledgeQuerier
 
 	PipelineRepo    *pipelineadapter.PGRepository
 	GateRequestRepo *pipelineadapter.PGGateRequestRepository
