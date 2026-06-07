@@ -1,0 +1,11 @@
+{
+  "pipeline_id": "p-001",
+  "stage": "STAGE_TYPE_IMPL",
+  "actor": "reviewer@example.com",
+  "checklist": {
+    "code_reviewed": true,
+    "security_checked": true,
+    "license_cleared": true,
+    "coding_standard_met": true
+  }
+}

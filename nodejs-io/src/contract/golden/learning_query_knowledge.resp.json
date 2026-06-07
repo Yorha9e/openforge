@@ -1,0 +1,17 @@
+{
+  "matches": [
+    {
+      "entry": {
+        "type": "preference",
+        "category": "code_style",
+        "description": "Use zod for runtime validation",
+        "confidence": 0.87,
+        "data": "",
+        "source": "pipeline_review"
+      },
+      "similarity_score": 0.84,
+      "knowledge_id": "k-001",
+      "trust_level": "trusted"
+    }
+  ]
+}

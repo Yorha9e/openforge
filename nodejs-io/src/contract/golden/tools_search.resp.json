@@ -1,0 +1,15 @@
+{
+  "matches": [
+    {
+      "tool": {
+        "name": "file_grep",
+        "description": "Search files with regex",
+        "category": "file",
+        "input_schema": "",
+        "is_dynamic": false,
+        "mcp_server_id": ""
+      },
+      "similarity_score": 0.92
+    }
+  ]
+}

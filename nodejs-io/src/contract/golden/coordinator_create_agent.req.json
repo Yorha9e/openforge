@@ -1,0 +1,11 @@
+{
+  "agent_id": "agent-001",
+  "pipeline_id": "p-001",
+  "project_id": "proj-1",
+  "role": "AGENT_ROLE_WORKER",
+  "llm_config": null,
+  "metadata": {
+    "env": "dev",
+    "owner": "team-a"
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "project_id": "proj-1",
+  "query": "how to validate auth tokens",
+  "top_k": 5,
+  "categories": ["code_style", "architecture"],
+  "exclude_untrusted": true
+}

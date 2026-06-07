@@ -1,0 +1,6 @@
+{
+  "msg_seq": 1,
+  "event_type": "CHAT_EVENT_TYPE_DELTA",
+  "delta_text": "Hi",
+  "is_done": false
+}
