@@ -1,0 +1,15 @@
+# Baseline captured on Windows / AMD Ryzen 7 8845H / go1.25.1.
+# Captured with: GOCACHE=.cache/go-build bash scripts/run_bench.sh
+# Note: BenchmarkPipeline_CreateThroughput is SKIPPED here because
+# BENCH_PG_DSN is not set in this environment. The compare script
+# tolerates skipped benches (a bench present in baseline but absent
+# in current is treated as a no-op).
+goos: windows
+goarch: amd64
+pkg: openforge/test/bench
+cpu: AMD Ryzen 7 8845H w/ Radeon 780M Graphics
+BenchmarkCSPChannel_Latency-16           	23433975	        92.11 ns/op	         0 p50-us	         0 p95-us	         0 p99-us	       1 B/op	       1 allocs/op
+BenchmarkEmbedding_QueryP99-16           	    9228	    251483 ns/op	         0 p50-us	      1168 p95-us	      1512 p99-us	       0 B/op	       0 allocs/op
+BenchmarkSandbox_AllocateP99-16          	51776248	        46.25 ns/op	         0 p50-us	         0 p95-us	         0 p99-us	       8 B/op	       1 allocs/op
+PASS
+ok  	openforge/test/bench	8.137s

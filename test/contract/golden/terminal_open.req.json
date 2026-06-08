@@ -1,0 +1,6 @@
+{
+  "pipeline_id": "p-001",
+  "container_id": "ctr-abc",
+  "mode": "TERMINAL_MODE_READ_ONLY",
+  "actor": "user@example.com"
+}

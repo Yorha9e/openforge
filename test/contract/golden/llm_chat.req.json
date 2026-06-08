@@ -1,0 +1,11 @@
+{
+  "pipeline_id": "p-001",
+  "branch_id": "b-main",
+  "messages": [
+    {
+      "role": "CHAT_ROLE_USER",
+      "content": "Hello",
+      "msg_seq": 1
+    }
+  ]
+}

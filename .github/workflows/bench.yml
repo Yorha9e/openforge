@@ -1,0 +1,41 @@
+name: bench
+
+# DESIGN §13.5: 4-category benchmark regression gate.
+# Runs the bench suite on every PR and fails the build if any benchmark
+# in bench/baseline.txt is >20% slower than the recorded baseline.
+# Benches that skip (e.g. BENCH_PG_DSN not set) are ignored by the
+# comparison script so the same workflow works on PRs that don't touch
+# integration infrastructure.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  bench:
+    name: bench regression check
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - name: setup go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: run benchmarks
+        run: bash scripts/run_bench.sh
+
+      - name: compare with baseline (fail if >20% regression)
+        run: python scripts/bench_compare.py
+
+      - name: upload bench result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-result
+          path: bench-result.txt
