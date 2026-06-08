@@ -35,6 +35,7 @@ func NewPrometheusExporter() *PrometheusExporter {
 		counters: map[string]*atomic.Int64{
 			string(domain.MetricPipelineCreated):   new(atomic.Int64),
 			string(domain.MetricLLMCallErrors):     new(atomic.Int64),
+			string(domain.MetricMigrationGateRefused): new(atomic.Int64),
 		},
 		gauges: map[string]*atomic.Int64{
 			string(domain.MetricCircuitBreaker): new(atomic.Int64),

@@ -1,0 +1,24 @@
+# OpenForge Prometheus alert rules
+#
+# This file is loaded by the Prometheus server defined in
+# deployments/prometheus/prometheus.yml. All alert names use the
+# `of_` prefix and labels follow the
+# https://prometheus.io/docs/practices/alerting/ convention.
+
+groups:
+  - name: openforge.alerts
+    rules:
+      # X3 T9 #24: failover Migration Gate refusal.
+      # Fires when the migration runner hits a server in recovery mode
+      # (hot standby being promoted, or stale primary). The gate is
+      # supposed to refuse DDL in that case, but a non-zero rate means
+      # an operator needs to investigate which PG instance is being
+      # targeted and verify failover completed cleanly.
+      - alert: MigrationGateRefused
+        expr: rate(openforge_migration_gate_refused_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Migration gate refused (PG in recovery)"
+          description: "The migration runner refused to apply DDL because the target PostgreSQL reported pg_is_in_recovery() = true. Check the primary/replica topology and verify failover is complete before retrying."

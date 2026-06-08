@@ -32,6 +32,8 @@ database:
   password: ${DB_PASSWORD}
   dbname: openforge
   sslmode: require
+  app_dsn: "postgres://of:of@localhost:5432/openforge?sslmode=require"
+  migration_dsn: "postgres://of_migration:of_migration_dev@localhost:5432/openforge?sslmode=require"
 
 redis:
   host: of-redis

@@ -7,6 +7,14 @@ import (
 	"openforge/internal/pipeline/domain"
 )
 
+// IDGenerator mints new primary-key identifiers. The concrete implementation
+// in internal/shared/uuid produces UUID v7 strings, matching the
+// uuid_generate_v7() SQL function installed by
+// migrations/015_uuid_v7_extension.up.sql.
+type IDGenerator interface {
+	New() string
+}
+
 type PipelineRepository interface {
 	Create(ctx context.Context, p *domain.Pipeline) error
 	GetByID(ctx context.Context, id string) (*domain.Pipeline, error)

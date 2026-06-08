@@ -1,7 +1,7 @@
 -- 004_learning_tables.up.sql — Phase 7 Learning Engine tables
 
 CREATE TABLE preference (
-    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v7(),
     project_id      TEXT NOT NULL REFERENCES project(id),
     key             VARCHAR(128) NOT NULL,
     value           TEXT NOT NULL,
@@ -15,7 +15,7 @@ CREATE TABLE preference (
 CREATE INDEX idx_preference_project ON preference(project_id);
 
 CREATE TABLE trajectory (
-    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v7(),
     project_id      TEXT NOT NULL REFERENCES project(id),
     pipeline_id     TEXT NOT NULL,
     stage_sequence  TEXT[] NOT NULL,
@@ -33,7 +33,7 @@ CREATE TABLE trajectory (
 CREATE INDEX idx_trajectory_project ON trajectory(project_id);
 
 CREATE TABLE knowledge_snapshot (
-    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v7(),
     project_id      TEXT NOT NULL REFERENCES project(id),
     version         INT NOT NULL CHECK (version > 0),
     snapshot_data   JSONB NOT NULL,
@@ -45,7 +45,7 @@ CREATE TABLE knowledge_snapshot (
 );
 
 CREATE TABLE ab_experiment (
-    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v7(),
     knowledge_id    TEXT NOT NULL,
     cohort_a_ratio  DECIMAL(3,2) NOT NULL DEFAULT 0.90
                     CHECK (cohort_a_ratio > 0 AND cohort_a_ratio < 1),
@@ -59,7 +59,7 @@ CREATE TABLE ab_experiment (
 );
 
 CREATE TABLE ab_experiment_assignment (
-    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v7(),
     experiment_id   UUID NOT NULL REFERENCES ab_experiment(id),
     pipeline_id     TEXT NOT NULL REFERENCES pipeline(id),
     cohort          CHAR(1) NOT NULL CHECK (cohort IN ('A','B')),
@@ -68,7 +68,7 @@ CREATE TABLE ab_experiment_assignment (
 );
 
 CREATE TABLE pipeline_retrospective (
-    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v7(),
     pipeline_id     TEXT NOT NULL REFERENCES pipeline(id),
     project_id      TEXT NOT NULL REFERENCES project(id),
     duration_seconds INT,

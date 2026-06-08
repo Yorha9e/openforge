@@ -14,7 +14,7 @@ func TestNewPrometheusExporter(t *testing.T) {
 	}
 
 	counters, gauges := pe.Snapshot()
-	if want := 2; len(counters) != want {
+	if want := 3; len(counters) != want {
 		t.Errorf("expected %d counters, got %d", want, len(counters))
 	}
 	if want := 1; len(gauges) != want {
@@ -27,6 +27,9 @@ func TestNewPrometheusExporter(t *testing.T) {
 	}
 	if _, ok := counters[string(domain.MetricLLMCallErrors)]; !ok {
 		t.Errorf("missing counter %s", domain.MetricLLMCallErrors)
+	}
+	if _, ok := counters[string(domain.MetricMigrationGateRefused)]; !ok {
+		t.Errorf("missing counter %s", domain.MetricMigrationGateRefused)
 	}
 	if _, ok := gauges[string(domain.MetricCircuitBreaker)]; !ok {
 		t.Errorf("missing gauge %s", domain.MetricCircuitBreaker)

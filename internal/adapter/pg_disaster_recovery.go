@@ -18,19 +18,27 @@ import (
 
 // PGDisasterRecovery implements kernel.DisasterRecovery using pg_dump/pg_restore.
 type PGDisasterRecovery struct {
-	db          *sql.DB
-	dsn         string
-	backupDir   string
-	pgToolsPath string // G13: configurable pg_dump path
-	lastBackup  time.Time
-	lastRestore time.Time
-	mu          sync.RWMutex
+	db             *sql.DB
+	dsn            string
+	backupDir      string
+	pgToolsPath    string // G13: configurable pg_dump path
+	passphraseFile string // T6: gpg symmetric passphrase file (empty disables encryption)
+	lastBackup     time.Time
+	lastRestore    time.Time
+	mu             sync.RWMutex
 }
 
 // NewPGDisasterRecovery creates a new PostgreSQL disaster recovery handler.
 // pgToolsPath is the directory containing pg_dump and pg_restore binaries.
 // If empty, assumes they are in PATH.
 func NewPGDisasterRecovery(db *sql.DB, dsn, backupDir, pgToolsPath string) *PGDisasterRecovery {
+	return NewPGDisasterRecoveryWithPassphrase(db, dsn, backupDir, pgToolsPath, "")
+}
+
+// NewPGDisasterRecoveryWithPassphrase is like NewPGDisasterRecovery but also
+// configures a gpg symmetric passphrase file used to encrypt pg_dump output
+// (DESIGN §19.4 #21). An empty passphraseFile disables encryption.
+func NewPGDisasterRecoveryWithPassphrase(db *sql.DB, dsn, backupDir, pgToolsPath, passphraseFile string) *PGDisasterRecovery {
 	if db == nil {
 		slog.Warn("pg disaster recovery disabled: nil db")
 		return &PGDisasterRecovery{}
@@ -46,12 +54,13 @@ func NewPGDisasterRecovery(db *sql.DB, dsn, backupDir, pgToolsPath string) *PGDi
 		return &PGDisasterRecovery{}
 	}
 
-	slog.Info("pg disaster recovery enabled", "backup_dir", backupDir, "pg_tools_path", pgToolsPath)
+	slog.Info("pg disaster recovery enabled", "backup_dir", backupDir, "pg_tools_path", pgToolsPath, "passphrase_file_set", passphraseFile != "")
 	return &PGDisasterRecovery{
-		db:          db,
-		dsn:         dsn,
-		backupDir:   backupDir,
-		pgToolsPath: pgToolsPath,
+		db:             db,
+		dsn:            dsn,
+		backupDir:      backupDir,
+		pgToolsPath:    pgToolsPath,
+		passphraseFile: passphraseFile,
 	}
 }
 
@@ -80,11 +89,23 @@ func (p *PGDisasterRecovery) Backup(ctx context.Context) error {
 		return fmt.Errorf("pg_dump failed: %w", err)
 	}
 
+	// T6 (#21): encrypt the plaintext dump with gpg symmetric encryption
+	// when a passphrase file is configured. The plaintext is removed so
+	// only the .gpg artifact remains on disk.
+	finalFile := backupFile
+	if p.passphraseFile != "" {
+		encrypted, err := p.encryptBackup(ctx, backupFile)
+		if err != nil {
+			return fmt.Errorf("backup encryption failed: %w", err)
+		}
+		finalFile = encrypted
+	}
+
 	p.mu.Lock()
 	p.lastBackup = time.Now()
 	p.mu.Unlock()
 
-	slog.Info("pg backup completed", "file", backupFile, "size", getFileSize(backupFile))
+	slog.Info("pg backup completed", "file", finalFile, "size", getFileSize(finalFile))
 
 	// Cleanup old backups (keep last 7)
 	p.cleanupOldBackups()
@@ -232,6 +253,40 @@ func getFileSize(path string) int64 {
 		return 0
 	}
 	return info.Size()
+}
+
+// encryptBackup encrypts a plaintext pg_dump file with gpg symmetric encryption
+// (DESIGN §19.4 #21). The plaintext file is removed on success and the path of
+// the new .gpg artifact is returned.
+func (p *PGDisasterRecovery) encryptBackup(ctx context.Context, plaintextPath string) (string, error) {
+	encryptedPath := plaintextPath + ".gpg"
+
+	gpgBin := "gpg"
+	cmd := exec.CommandContext(ctx, gpgBin,
+		"--batch",
+		"--yes",
+		"--passphrase-file", p.passphraseFile,
+		"-c",
+		"--output", encryptedPath,
+		plaintextPath,
+	)
+	cmd.Env = append(os.Environ(), "PGSSLMODE=disable")
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		// Best-effort cleanup of a partial encrypted file.
+		_ = os.Remove(encryptedPath)
+		slog.Error("gpg encryption failed", "error", err, "output", string(output))
+		return "", fmt.Errorf("gpg encryption failed: %w", err)
+	}
+
+	if err := os.Remove(plaintextPath); err != nil {
+		// The encrypted artifact exists; surface the cleanup error but
+		// still return the encrypted path so the caller can record it.
+		slog.Warn("failed to remove plaintext after encryption", "file", plaintextPath, "error", err)
+	}
+
+	return encryptedPath, nil
 }
 
 // Close closes the database connection (if owned by this instance).

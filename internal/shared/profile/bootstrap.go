@@ -82,6 +82,7 @@ type OpenForge struct {
 	SettingsRepo    *adapter.PGSettingsRepo
 	CheckpointRepo  *adapter.PGCheckpointRepo
 	DB              *sql.DB
+	RLSDB           *RLSConn // X3 T4 #18: RLS-aware wrapper around DB
 	DepCache        *adapter.DependencyCache
 	DataLifecycle   *compliance.DataLifecycle // G16: compliance data lifecycle manager
 	// AuditLog is the WORM audit logger. After T4 it uses a dedicated
@@ -217,6 +218,11 @@ func Bootstrap(cfg *Config) (*OpenForge, error) {
 	db.SetConnMaxIdleTime(1 * time.Minute) // Maximum idle time of a connection
 	
 	of.DB = db
+
+	// X3 T4 #18: RLS-aware wrapper. Repositories keep their raw *sql.DB
+	// handle (out of scope to rewrite every call site), but callers that
+	// want RLS scoping can route queries through of.RLSDB.
+	of.RLSDB = NewRLSConn(db)
 
 	// G16: Open a separate writer connection for the audit log so that
 	// INSERTs flow through the dedicated of_audit_writer role. The reader
@@ -381,12 +387,26 @@ func Bootstrap(cfg *Config) (*OpenForge, error) {
 	of.SLO = observabilitydomain.NewSLOTracker()
 	of.PrometheusExporter = obsadapter.NewPrometheusExporter()
 
-	// Run database migrations
+	// Run database migrations.
+	// When cfg.Database.MigrationDSN is set, run as the dedicated of_migration
+	// role (DDL-capable). Fall back to the app-user pool when no separate
+	// migration DSN is configured (minimal profiles / dev).
 	migrationsDir := "migrations"
 	if _, err := os.Stat(migrationsDir); err == nil {
-		runner := NewMigrationRunner(db, migrationsDir)
-		if err := runner.Run(context.Background()); err != nil {
-			return nil, fmt.Errorf("migration: %w", err)
+		if cfg.Database.MigrationDSN != "" {
+			migrationRunner, err := NewMigrationRunnerFromDSN(cfg.Database.MigrationDSN, migrationsDir)
+			if err != nil {
+				return nil, fmt.Errorf("migration runner: %w", err)
+			}
+			defer migrationRunner.Close()
+			if err := migrationRunner.Run(context.Background()); err != nil {
+				return nil, fmt.Errorf("migration: %w", err)
+			}
+		} else {
+			runner := NewMigrationRunner(db, migrationsDir)
+			if err := runner.Run(context.Background()); err != nil {
+				return nil, fmt.Errorf("migration: %w", err)
+			}
 		}
 	}
 

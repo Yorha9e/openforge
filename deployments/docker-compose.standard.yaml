@@ -22,6 +22,34 @@ services:
       timeout: 5s
       retries: 5
 
+  # Read-only streaming replica for failover / read scaling.
+  # Boots in hot-standby mode and subscribes to the primary's WAL stream.
+  postgres-replica:
+    image: postgres:16
+    container_name: of-postgres-replica
+    environment:
+      POSTGRES_USER: of_replica
+      POSTGRES_PASSWORD: of_replica_dev
+      POSTGRES_DB: openforge
+    command:
+      - "postgres"
+      - "-c"
+      - "wal_level=replica"
+      - "-c"
+      - "hot_standby=on"
+    ports:
+      - "5433:5432"
+    volumes:
+      - pg-replica-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U of_replica -d openforge"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   redis:
     image: redis:7-alpine
     container_name: of-redis
@@ -84,4 +112,5 @@ services:
 
 volumes:
   pg-data:
+  pg-replica-data:
   dependency-cache:

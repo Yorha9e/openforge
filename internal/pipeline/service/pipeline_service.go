@@ -2,11 +2,10 @@ package service
 
 import (
 	"context"
-	"fmt"
-	"time"
 
 	"openforge/internal/pipeline/domain"
 	"openforge/internal/pipeline/port"
+	idgen "openforge/internal/shared/uuid"
 )
 
 type PipelineService struct {
@@ -86,7 +85,7 @@ func (s *PipelineService) Fork(ctx context.Context, parentID, title, createdBy s
 	if err != nil {
 		return nil, err
 	}
-	childID := "pipe-" + fmt.Sprintf("%d", time.Now().UnixNano())
+	childID := idgen.New()
 	child := parent.Fork(childID, title, createdBy)
 	if err := s.repo.Create(ctx, child); err != nil {
 		return nil, err

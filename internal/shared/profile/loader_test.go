@@ -156,6 +156,59 @@ func TestLoadFileNotFound(t *testing.T) {
 	}
 }
 
+// TestLoadDatabaseAppAndMigrationDSN ensures the new X3 T3 (#19) DSN
+// fields are parsed from YAML and exposed on DatabaseConfig.
+func TestLoadDatabaseAppAndMigrationDSN(t *testing.T) {
+	tmp := t.TempDir()
+	content := `
+profile: standard
+security_tier: prod
+secret_store: envfile
+container_runtime: docker
+object_store: localfs
+task_queue: pg-skip-locked
+event_bus: goroutine-chan
+cache: memory
+telemetry: stdout
+service_registry: static
+disaster_recovery: local-backup
+load_balancer: none
+notifier: stdout
+database:
+  host: of-postgres-primary
+  port: 5432
+  user: openforge
+  password: secret
+  dbname: openforge
+  sslmode: require
+  app_dsn: "postgres://of:of@localhost:5432/openforge?sslmode=require"
+  migration_dsn: "postgres://of_migration:of_migration_dev@localhost:5432/openforge?sslmode=require"
+llm:
+  default_provider: anthropic
+  default_model: claude-sonnet-4-6
+grpc:
+  nodejs_io_addr: localhost:50051
+  coordinator_addr: localhost:50052
+`
+	path := filepath.Join(tmp, "dsn.yaml")
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	cfg, err := Load(path, false)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	wantApp := "postgres://of:of@localhost:5432/openforge?sslmode=require"
+	wantMig := "postgres://of_migration:of_migration_dev@localhost:5432/openforge?sslmode=require"
+	if cfg.Database.AppDSN != wantApp {
+		t.Errorf("Database.AppDSN = %q, want %q", cfg.Database.AppDSN, wantApp)
+	}
+	if cfg.Database.MigrationDSN != wantMig {
+		t.Errorf("Database.MigrationDSN = %q, want %q", cfg.Database.MigrationDSN, wantMig)
+	}
+}
+
 func TestLoadInvalidYAML(t *testing.T) {
 	tmp := t.TempDir()
 	path := filepath.Join(tmp, "invalid.yaml")
