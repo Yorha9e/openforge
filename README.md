@@ -181,6 +181,42 @@ cd frontend && npm run lint
 
 **Use environment variables for all secrets.** See `.env` → `.env.example` pattern.
 
+## 6 路径补完计划（2026-06-06/07）
+
+为响应 DESIGN §19.4 + 8 子代理审计识别的 31 stub（25 P0 + 35 P1 + 30 P2），我们执行了 6 路径补完计划：
+
+| Plan | Tasks | Branch | PR | Status |
+|------|-------|--------|----|----|
+| Path A: Phase 4 数据闭环 | 11 | `feat/path-A-data-closure` | [#3](https://github.com/Yorha9e/openforge/pull/3) | ✅ 完成 |
+| Path B: 安全 + UX 闭环 | 11 | `feat/path-B-security-ux-closure` | [#1](https://github.com/Yorha9e/openforge/pull/1) | ✅ 完成 |
+| Path C: 架构兑现 | 14 | `feat/path-C-architecture-honesty` | [#5](https://github.com/Yorha9e/openforge/pull/5) | ✅ 完成 |
+| Path D: Enterprise 落地 | 11 | `feat/path-D-enterprise-landing` | [#6](https://github.com/Yorha9e/openforge/pull/6) | ✅ 完成 |
+| X3: DB 24 项优化 | 9 | `feat/X3-db-24-optimization` | [#2](https://github.com/Yorha9e/openforge/pull/2) | ✅ 完成 |
+| X4: 契约 + Chaos + Bench | 5 | `feat/X4-proto-fault-bench` | [#4](https://github.com/Yorha9e/openforge/pull/4) | ✅ 完成 |
+
+**关键产物**：
+- 22 个 gRPC RPC 真实启用（Coordinator/Gate/LLM/Tools/Learning/Terminal）
+- Token 数据流端到端真实落库（Node.js → gRPC → PG `token_usage`）
+- WORM 审计链 hourly 扫描 + 链断裂告警
+- 13 metric 全部上报 Prometheus
+- 18 条告警规则 + alertmanager feishu webhook
+- 10 个 Playwright E2E 用例
+- RLS 行级安全 + UUID v7 + 列级加密
+- 4 类 Benchmark 监控 + 5 类 Chaos 故障注入
+- L1-L4 自学习 4 层闭环
+- 6 个 worktree 隔离 + 6 份 subagent dispatch prompt 模板
+
+**计划文档**（`docs/superpowers/plans/`）：
+- `INDEX.md` — 6 计划依赖图
+- `2026-06-06-DESIGN-stub-todo.md` — 总体 stub 清单
+- `2026-06-06-path-{A,B,C,D}-*.md` — 4 路径 plan
+- `2026-06-06-X{3,4}-*.md` — 2 跨路径 plan
+- `2026-06-06-{X3,path-B,path-C,path-D,X4}-dispatch-prompts.md` — 5 份 subagent 派发模板
+
+**审计报告**：
+- 整体完成度 ~51% → ~85% （代码层）+ 7 个 P0 必修 stub 全部关闭
+- 详细 see `2026-06-06-DESIGN-stub-todo.md` 头部 5 段 supersession
+
 ## License
 
 *To be determined*
