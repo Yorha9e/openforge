@@ -1,19 +1,343 @@
-# OpenForge Prometheus alert rules
-#
-# This file is loaded by the Prometheus server defined in
-# deployments/prometheus/prometheus.yml. All alert names use the
-# `of_` prefix and labels follow the
-# https://prometheus.io/docs/practices/alerting/ convention.
+# OpenForge Alert Rules (19 alerts across pipeline / LLM / runtime / infra / migration)
+# Severity convention: critical -> page on-call, warning -> ticket queue.
+# Runbook URL points to internal wiki; replace after the runbook repo is published.
 
 groups:
-  - name: openforge.alerts
+  # =====================================================================
+  # 1) Pipeline execution health
+  # =====================================================================
+  - name: openforge.pipeline
+    interval: 30s
     rules:
-      # X3 T9 #24: failover Migration Gate refusal.
-      # Fires when the migration runner hits a server in recovery mode
-      # (hot standby being promoted, or stale primary). The gate is
-      # supposed to refuse DDL in that case, but a non-zero rate means
-      # an operator needs to investigate which PG instance is being
-      # targeted and verify failover completed cleanly.
+      - alert: PipelineFailureRateHigh
+        expr: |
+          (
+            sum(rate(openforge_pipeline_runs_total{status="failed"}[5m]))
+            /
+            sum(rate(openforge_pipeline_runs_total[5m]))
+          ) > 0.2
+        for: 5m
+        labels:
+          severity: critical
+          team: platform
+          component: pipeline
+        annotations:
+          summary: "Pipeline failure rate >20% for 5m"
+          description: "More than 20% of pipeline runs are failing in the last 5 minutes (value: {{ $value | humanizePercentage }})."
+          runbook: "https://wiki.openforge.internal/runbooks/pipeline-failure-rate"
+
+      - alert: PipelineStuck
+        expr: |
+          max(openforge_pipeline_stage_duration_seconds{status="running"}) > 1800
+        for: 2m
+        labels:
+          severity: warning
+          team: platform
+          component: pipeline
+        annotations:
+          summary: "A pipeline stage has been running >30m"
+          description: "Pipeline stage {{ $labels.stage }} has been in 'running' state for over 30 minutes."
+          runbook: "https://wiki.openforge.internal/runbooks/pipeline-stuck"
+
+  # =====================================================================
+  # 2) LLM provider health & quota
+  # =====================================================================
+  - name: openforge.llm
+    interval: 30s
+    rules:
+      - alert: LLMErrorRateHigh
+        expr: |
+          (
+            sum(rate(openforge_llm_requests_total{status=~"error|timeout"}[5m]))
+            /
+            sum(rate(openforge_llm_requests_total[5m]))
+          ) > 0.1
+        for: 5m
+        labels:
+          severity: critical
+          team: ai
+          component: llm
+        annotations:
+          summary: "LLM error rate >10% for 5m"
+          description: "LLM provider {{ $labels.provider }} error rate is {{ $value | humanizePercentage }} over the last 5 minutes."
+          runbook: "https://wiki.openforge.internal/runbooks/llm-error-rate"
+
+      - alert: TokenQuotaNearLimit
+        expr: |
+          openforge_llm_token_quota_used_ratio > 0.9
+        for: 10m
+        labels:
+          severity: warning
+          team: ai
+          component: llm
+        annotations:
+          summary: "LLM token quota >90% used"
+          description: "Provider {{ $labels.provider }} token quota is at {{ $value | humanizePercentage }} — risk of throttle."
+          runbook: "https://wiki.openforge.internal/runbooks/llm-token-quota"
+
+  # =====================================================================
+  # 3) Resilience patterns
+  # =====================================================================
+  - name: openforge.resilience
+    interval: 30s
+    rules:
+      - alert: CircuitBreakerOpen
+        expr: openforge_circuit_breaker_state{service=~".+"} == 2
+        for: 1m
+        labels:
+          severity: critical
+          team: platform
+          component: resilience
+        annotations:
+          summary: "Circuit breaker is OPEN for {{ $labels.service }}"
+          description: "Circuit breaker for service '{{ $labels.service }}' has been OPEN for more than 1 minute. Downstream calls are being short-circuited."
+          runbook: "https://wiki.openforge.internal/runbooks/circuit-breaker-open"
+
+      - alert: GoroutineLeak
+        expr: |
+          delta(openforge_go_goroutines_count[10m]) > 500
+        for: 10m
+        labels:
+          severity: warning
+          team: platform
+          component: runtime
+        annotations:
+          summary: "Goroutine count grew by >500 in 10m"
+          description: "Goroutine count increased by {{ $value }} over the last 10 minutes — possible leak."
+          runbook: "https://wiki.openforge.internal/runbooks/goroutine-leak"
+
+  # =====================================================================
+  # 4) Sandbox & Gate approval
+  # =====================================================================
+  - name: openforge.sandbox_gate
+    interval: 30s
+    rules:
+      - alert: SandboxPoolExhausted
+        expr: |
+          (openforge_sandbox_pool_in_use / openforge_sandbox_pool_size) > 0.95
+        for: 5m
+        labels:
+          severity: critical
+          team: platform
+          component: sandbox
+        annotations:
+          summary: "Sandbox pool >95% utilized"
+          description: "Sandbox pool is {{ $value | humanizePercentage }} utilized — new runs will queue or fail."
+          runbook: "https://wiki.openforge.internal/runbooks/sandbox-pool-exhausted"
+
+      - alert: GateApprovalLatency
+        expr: |
+          histogram_quantile(0.95, sum(rate(openforge_gate_approval_duration_seconds_bucket[5m]))) > 300
+        for: 10m
+        labels:
+          severity: warning
+          team: product
+          component: gate
+        annotations:
+          summary: "Gate approval p95 latency >5m"
+          description: "Gate approval p95 latency is {{ $value | humanizeDuration }} over the last 5 minutes."
+          runbook: "https://wiki.openforge.internal/runbooks/gate-approval-latency"
+
+  # =====================================================================
+  # 5) Concurrency primitives
+  # =====================================================================
+  - name: openforge.concurrency
+    interval: 30s
+    rules:
+      - alert: LockContentionHigh
+        expr: |
+          sum(rate(openforge_lock_wait_seconds_sum[5m]))
+          /
+          sum(rate(openforge_lock_wait_seconds_count[5m]))
+          > 1
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+          component: concurrency
+        annotations:
+          summary: "Lock contention avg wait >1s"
+          description: "Average lock wait time is {{ $value }}s over the last 5 minutes — consider sharding or reducing critical sections."
+          runbook: "https://wiki.openforge.internal/runbooks/lock-contention"
+
+      - alert: BacktrackRateHigh
+        expr: |
+          (
+            sum(rate(openforge_agent_backtracks_total[5m]))
+            /
+            sum(rate(openforge_agent_steps_total[5m]))
+          ) > 0.3
+        for: 10m
+        labels:
+          severity: warning
+          team: ai
+          component: agent
+        annotations:
+          summary: "Agent backtrack rate >30%"
+          description: "More than 30% of agent steps triggered a backtrack in the last 5 minutes — prompt quality may be degraded."
+          runbook: "https://wiki.openforge.internal/runbooks/agent-backtrack-rate"
+
+  # =====================================================================
+  # 6) Realtime / WebSocket
+  # =====================================================================
+  - name: openforge.realtime
+    interval: 30s
+    rules:
+      - alert: WSConnectionSurge
+        expr: |
+          delta(openforge_ws_active_connections[5m]) > 1000
+        for: 2m
+        labels:
+          severity: warning
+          team: platform
+          component: realtime
+        annotations:
+          summary: "WebSocket connections surged by >1000 in 5m"
+          description: "Active WebSocket connections grew by {{ $value }} over the last 5 minutes — verify it is organic."
+          runbook: "https://wiki.openforge.internal/runbooks/ws-connection-surge"
+
+      - alert: RateLimitHit
+        expr: |
+          sum(rate(openforge_rate_limit_hits_total[5m])) > 100
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+          component: api
+        annotations:
+          summary: "Global rate limit hits >100/s"
+          description: "Rate limit hits averaging {{ $value }}/s over the last 5 minutes."
+          runbook: "https://wiki.openforge.internal/runbooks/rate-limit-hit"
+
+      - alert: RateLimitHitPerProject
+        expr: |
+          sum by (project) (rate(openforge_rate_limit_hits_per_project_total[5m])) > 20
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+          component: api
+        annotations:
+          summary: "Project '{{ $labels.project }}' rate limit hits >20/s"
+          description: "Project '{{ $labels.project }}' is hitting rate limits at {{ $value }}/s — talk to the project owner."
+          runbook: "https://wiki.openforge.internal/runbooks/rate-limit-hit-per-project"
+
+  # =====================================================================
+  # 7) Runtime / process
+  # =====================================================================
+  - name: openforge.runtime
+    interval: 30s
+    rules:
+      - alert: MemoryHigh
+        expr: |
+          (
+            process_resident_memory_bytes{job="openforge"}
+            /
+            openforge_process_memory_limit_bytes{job="openforge"}
+          ) > 0.85
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+          component: runtime
+        annotations:
+          summary: "openforge process memory >85% of limit"
+          description: "OpenForge process is using {{ $value | humanizePercentage }} of its memory limit."
+          runbook: "https://wiki.openforge.internal/runbooks/memory-high"
+
+  # =====================================================================
+  # 8) Database
+  # =====================================================================
+  - name: openforge.db
+    interval: 30s
+    rules:
+      - alert: DBConnectionPoolExhausted
+        expr: |
+          (
+            openforge_db_pool_in_use
+            /
+            openforge_db_pool_max
+          ) > 0.9
+        for: 5m
+        labels:
+          severity: critical
+          team: platform
+          component: db
+        annotations:
+          summary: "DB connection pool >90% utilized"
+          description: "DB connection pool for '{{ $labels.pool }}' is {{ $value | humanizePercentage }} utilized — new queries will block."
+          runbook: "https://wiki.openforge.internal/runbooks/db-connection-pool-exhausted"
+
+  # =====================================================================
+  # 9) Kubernetes pod health (kept for parity; no-op in plain Docker)
+  # =====================================================================
+  - name: openforge.k8s
+    interval: 30s
+    rules:
+      - alert: K8sPodRestart
+        expr: |
+          increase(kube_pod_container_status_restarts_total{namespace="openforge"}[15m]) > 3
+        for: 0m
+        labels:
+          severity: warning
+          team: platform
+          component: k8s
+        annotations:
+          summary: "Pod {{ $labels.pod }} restarted >3 times in 15m"
+          description: "Container in pod '{{ $labels.pod }}' restarted {{ $value }} times in the last 15 minutes — check container logs."
+          runbook: "https://wiki.openforge.internal/runbooks/k8s-pod-restart"
+
+  # =====================================================================
+  # 10) Redis & CSP / profile loader
+  # =====================================================================
+  - name: openforge.cache_profile
+    interval: 30s
+    rules:
+      - alert: RedisDisconnect
+        expr: |
+          openforge_redis_connected == 0
+        for: 1m
+        labels:
+          severity: critical
+          team: platform
+          component: cache
+        annotations:
+          summary: "Redis is disconnected"
+          description: "OpenForge lost its connection to Redis — cache misses and rate-limiter fallback engaged."
+          runbook: "https://wiki.openforge.internal/runbooks/redis-disconnect"
+
+      - alert: CSPWalOverflow
+        expr: |
+          openforge_csp_wal_pending_bytes > 104857600
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+          component: csp
+        annotations:
+          summary: "CSP WAL pending bytes >100MiB"
+          description: "CSP Write-Ahead-Log has {{ $value | humanize1024 }}B pending — risk of slowdown or lost progress on restart."
+          runbook: "https://wiki.openforge.internal/runbooks/csp-wal-overflow"
+
+      - alert: ProfileLoaderSigFail
+        expr: |
+          increase(openforge_profile_loader_signature_failures_total[10m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+          team: security
+          component: profile
+        annotations:
+          summary: "Profile loader signature verification failed"
+          description: "{{ $value }} profile signature verification failures in the last 10 minutes — possible supply-chain compromise."
+          runbook: "https://wiki.openforge.internal/runbooks/profile-loader-sig-fail"
+
+  # =====================================================================
+  # 11) Migration failover gate (X3 T9 #24)
+  # =====================================================================
+  - name: openforge.migration
+    interval: 30s
+    rules:
       - alert: MigrationGateRefused
         expr: rate(openforge_migration_gate_refused_total[5m]) > 0
         for: 1m

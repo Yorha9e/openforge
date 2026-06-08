@@ -199,6 +199,14 @@ func RegisterRoutes(of *profile.OpenForge, jwtSvc *service.JWTService, cfg *prof
 		mux.Handle("GET "+grpcPath, grpcHandler)
 	}
 
+	// Debug / Replay / REPL (Path D T6 + T7)
+	mux.HandleFunc("GET /api/debug/trace/{id}", requireAuth(handleGetDebugTrace(of, jwtSvc), jwtSvc))
+	mux.HandleFunc("GET /api/pipelines/{id}/replay", requireAuth(handleReplayPipeline(of), jwtSvc))
+	mux.HandleFunc("POST /api/pipelines/{id}/repl", withRole("admin", handleReplCommand(of)))
+
+	// Compliance reports (Path D T8) — admin only.
+	mux.HandleFunc("GET /api/admin/compliance/reports/{month}", withRole("admin", handleGetComplianceReports(of)))
+
 	// Static files
 	mux.HandleFunc("GET /", handleStatic())
 

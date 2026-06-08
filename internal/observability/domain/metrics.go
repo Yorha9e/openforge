@@ -16,4 +16,10 @@ const (
 	MetricGoroutineCount       MetricName = "of_coordinator_goroutine_count"
 	MetricCircuitBreaker       MetricName = "of_circuit_breaker_state"
 	MetricMigrationGateRefused MetricName = "openforge_migration_gate_refused_total"
+	// Added in Path-D T1: 3 missing metric names to round out the 13-metric
+	// observability set. Each must be registered in the exporter and wired
+	// up at an actual call site.
+	MetricSandboxPool         MetricName = "of_sandbox_pool_size"
+	MetricLearningFallback    MetricName = "of_learning_fallback_total"
+	MetricTokenQuotaRemaining MetricName = "of_token_quota_remaining"
 )

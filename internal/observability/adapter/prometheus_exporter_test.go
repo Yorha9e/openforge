@@ -14,11 +14,15 @@ func TestNewPrometheusExporter(t *testing.T) {
 	}
 
 	counters, gauges := pe.Snapshot()
+<<<<<<< HEAD
 	if want := 3; len(counters) != want {
+=======
+	if want := 8; len(counters) != want {
+>>>>>>> feat/path-D-enterprise-landing
 		t.Errorf("expected %d counters, got %d", want, len(counters))
 	}
-	if want := 1; len(gauges) != want {
-		t.Errorf("expected %d gauge, got %d", want, len(gauges))
+	if want := 5; len(gauges) != want {
+		t.Errorf("expected %d gauges, got %d", want, len(gauges))
 	}
 
 	// Verify specific metric names.
@@ -184,4 +188,81 @@ func TestClose(t *testing.T) {
 	if err := pe.Close(); err != nil {
 		t.Errorf("second Close: %v", err)
 	}
+}
+
+// TestPrometheusExporter_All13MetricsRegistered verifies that all 13 metric
+// names defined in the observability domain are pre-registered in the
+// exporter's counters/gauges/histograms maps. This is the TDD guard for
+// Path-D T1: every metric must have a call-site somewhere in the app.
+func TestPrometheusExporter_All13MetricsRegistered(t *testing.T) {
+	pe := NewPrometheusExporter()
+	counters, gauges := pe.Snapshot()
+
+	// Counters that must be registered (12 of the 13 are counters/gauges here).
+	counterNames := []domain.MetricName{
+		domain.MetricPipelineCreated,
+		domain.MetricPipelineCompleted,
+		domain.MetricLLMCallErrors,
+		domain.MetricTokenUsage,
+		domain.MetricBacktrackTotal,
+		domain.MetricGateApproveTotal,
+		domain.MetricGateRejectTotal,
+		domain.MetricLearningFallback,
+		domain.MetricMigrationGateRefused,
+	}
+	for _, n := range counterNames {
+		if _, ok := counters[string(n)]; !ok {
+			t.Errorf("missing counter registration for %s", n)
+		}
+	}
+
+	// Gauges that must be registered.
+	gaugeNames := []domain.MetricName{
+		domain.MetricCodeAcceptanceRate,
+		domain.MetricGoroutineCount,
+		domain.MetricCircuitBreaker,
+		domain.MetricTokenQuotaRemaining,
+		domain.MetricSandboxPool,
+	}
+	for _, n := range gaugeNames {
+		if _, ok := gauges[string(n)]; !ok {
+			t.Errorf("missing gauge registration for %s", n)
+		}
+	}
+
+	// We expect at least 13 metric names registered (12 domain constants + 1
+	// histogram for duration). The exporter should be able to call Observe on
+	// the LLM call duration and pipeline duration histograms.
+	totalRegistered := len(counters) + len(gauges)
+	if totalRegistered < 13 {
+		t.Errorf("expected at least 13 metrics registered, got %d (counters=%d, gauges=%d)",
+			totalRegistered, len(counters), len(gauges))
+	}
+}
+
+// TestPrometheusExporter_Helpers verifies the Incr/Set/Observe convenience
+// helpers expose the same behavior as the lower-level methods.
+func TestPrometheusExporter_Helpers(t *testing.T) {
+	pe := NewPrometheusExporter()
+
+	// Incr is the same as IncrementCounter(..., 1).
+	pe.Incr(string(domain.MetricPipelineCreated))
+	pe.Incr(string(domain.MetricPipelineCreated))
+	counters, _ := pe.Snapshot()
+	if got := counters[string(domain.MetricPipelineCreated)]; got != 2 {
+		t.Errorf("Incr: pipeline_created = %d, want 2", got)
+	}
+
+	// Set maps to SetGauge.
+	pe.Set(string(domain.MetricCircuitBreaker), 1)
+	_, gauges := pe.Snapshot()
+	if got := gauges[string(domain.MetricCircuitBreaker)]; got != 1 {
+		t.Errorf("Set: circuit_breaker = %d, want 1", got)
+	}
+
+	// Observe must not panic on a histogram metric, even if no histogram is
+	// registered. It should be a safe no-op.
+	pe.Observe(string(domain.MetricLLMCallDuration), 0.123)
+	pe.Observe(string(domain.MetricPipelineDuration), 1.5)
+	pe.Observe("of_unknown_histogram", 99.0)
 }

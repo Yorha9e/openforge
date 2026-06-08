@@ -72,5 +72,39 @@ services:
       nodejs-io:
         condition: service_started
 
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: of-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./deployments/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deployments/prometheus/rules:/etc/prometheus/rules:ro
+      - prom-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.enable-lifecycle"
+    depends_on:
+      - openforge
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    container_name: of-alertmanager
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./deployments/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - am-data:/alertmanager
+    environment:
+      OF_FEISHU_WEBHOOK_URL: ${OF_FEISHU_WEBHOOK_URL:-http://example.invalid/webhook}
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--storage.path=/alertmanager"
+    depends_on:
+      - prometheus
+
 volumes:
   pgdata:
+  prom-data:
+  am-data:

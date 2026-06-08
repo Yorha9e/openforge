@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "types": ["@playwright/test", "node"],
+    "lib": ["ES2022", "DOM"]
+  },
+  "include": ["./**/*.ts"],
+  "exclude": ["node_modules", "../src", "../node_modules", "../dist"]
+}
