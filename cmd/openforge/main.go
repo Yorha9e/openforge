@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	_ "github.com/lib/pq"
 
@@ -102,6 +103,23 @@ func main() {
 	
 	coordinator := domain.NewCoordinator(llmClient, toolReg)
 
+	// Phase 7: wire the in-memory embedding index into the KnowledgeQuerier
+	// and the LearningService so newly learned knowledge surfaces in prompts.
+	embeddingIndex := domain.NewInMemoryEmbeddingIndex()
+	of.EmbeddingIndex = embeddingIndex
+	if of.KnowledgeQuerier != nil {
+		of.KnowledgeQuerier.SetEmbeddingIndex(embeddingIndex.AsEmbeddingIndex())
+	}
+	if of.LearningSvc != nil {
+		of.LearningSvc.SetEmbeddingIndex(embeddingIndex)
+	}
+
+	// T10: wire the trajectory store into the priority engine so the
+	// LearningFactor can pull per-project success rates.
+	if of.PriorityEngine != nil && of.TrajectoryStore != nil {
+		of.PriorityEngine.SetTrajectoryStore(of.TrajectoryStore)
+	}
+
 	llmConfig := port.LLMConfig{
 		Provider:    cfg.LLM.DefaultProvider,
 		Model:       cfg.LLM.DefaultModel,
@@ -111,11 +129,25 @@ func main() {
 
 	fmt.Println("OpenForge CLI — Phase 1 MVP")
 	fmt.Printf("Profile: %s | Model: %s/%s\n", cfg.Profile, llmConfig.Provider, llmConfig.Model)
+	if cfg.Ownership != nil {
+		fmt.Printf("Module ownership: %d entries loaded from %s\n", len(cfg.Ownership.Modules), cfg.ModuleOwnershipPath)
+	} else {
+		fmt.Println("Module ownership: using PG-seeded defaults")
+	}
+	if of.OwnershipRepo != nil {
+		fmt.Println("Ownership repository: PG-backed (module_ownership table)")
+	}
 	fmt.Println("Type /help for commands, /quit to exit.")
 	fmt.Println()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// T12: periodic Ed25519 profile revalidation (every 24h).
+	// Failures are logged; the process is intentionally not terminated because
+	// operators are expected to respond to alerts and the running config is
+	// still trusted until a restart.
+	cfg.StartPeriodicRevalidation(ctx, 24*time.Hour, nil)
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)

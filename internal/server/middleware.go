@@ -15,6 +15,8 @@ import (
 	"openforge/internal/auth/service"
 	observabilitydomain "openforge/internal/observability/domain"
 	"openforge/internal/shared/profile"
+
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 type ResourceSnapshotProvider interface {
@@ -122,6 +124,15 @@ func SecurityHeadersMiddleware(next http.Handler) http.Handler {
 
 func SecurityHeaders(next http.Handler) http.Handler {
 	return SecurityHeadersMiddleware(next)
+}
+
+// OTelHTTPMiddleware wraps a handler chain with OpenTelemetry HTTP instrumentation.
+// The W3C TraceContext propagator (installed by InitOTelTracer) extracts
+// traceparent from incoming requests, so child handlers see the upstream
+// trace context automatically.  Span names are derived from the request method
+// and route, e.g. "GET /api/projects".
+func OTelHTTPMiddleware(next http.Handler) http.Handler {
+	return otelhttp.NewHandler(next, "openforge-http")
 }
 
 func LoggingMiddleware(next http.Handler) http.Handler {

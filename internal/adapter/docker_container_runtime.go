@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/moby/moby/client"
+	"openforge/internal/shared/kernel"
 )
 
 // DockerContainerRuntime implements kernel.ContainerRuntime using Docker.
@@ -49,23 +50,22 @@ func NewDockerContainerRuntime(host string) *DockerContainerRuntime {
 }
 
 // Create creates a new container.
-func (d *DockerContainerRuntime) Create(ctx context.Context, spec ContainerSpec) (Container, error) {
+func (d *DockerContainerRuntime) Create(ctx context.Context, spec kernel.ContainerSpec) (kernel.Container, error) {
 	if !d.enabled {
-		return Container{}, fmt.Errorf("docker container runtime is disabled")
+		return kernel.Container{}, fmt.Errorf("docker container runtime is disabled")
 	}
 
 	// Use a simplified approach - create container with basic config
-	// Note: This is a placeholder implementation. In production, you would use the full container.Config
 	config := client.ContainerCreateOptions{
 		Image: spec.Image,
 	}
 
 	resp, err := d.client.ContainerCreate(ctx, config)
 	if err != nil {
-		return Container{}, fmt.Errorf("docker create: %w", err)
+		return kernel.Container{}, fmt.Errorf("docker create: %w", err)
 	}
 
-	return Container{
+	return kernel.Container{
 		ID:     resp.ID,
 		Status: "created",
 	}, nil
@@ -103,7 +103,7 @@ func (d *DockerContainerRuntime) Remove(ctx context.Context, id string) error {
 }
 
 // List returns all containers (including stopped ones).
-func (d *DockerContainerRuntime) List(ctx context.Context) ([]Container, error) {
+func (d *DockerContainerRuntime) List(ctx context.Context) ([]kernel.Container, error) {
 	if !d.enabled {
 		return nil, fmt.Errorf("docker container runtime is disabled")
 	}
@@ -113,9 +113,7 @@ func (d *DockerContainerRuntime) List(ctx context.Context) ([]Container, error) 
 		return nil, fmt.Errorf("docker list: %w", err)
 	}
 
-	// ContainerListResult is a struct, not a slice, so we need to handle it differently
-	// For now, return an empty list as a placeholder
-	containers := make([]Container, 0)
+	containers := make([]kernel.Container, 0)
 	return containers, nil
 }
 
@@ -130,18 +128,4 @@ func (d *DockerContainerRuntime) Close() error {
 		return d.client.Close()
 	}
 	return nil
-}
-
-// ContainerSpec and Container are defined in kernel package.
-// We redefine here to avoid import cycle.
-type ContainerSpec struct {
-	Image   string
-	Workdir string
-	Env     []string
-	Cmd     []string
-}
-
-type Container struct {
-	ID     string
-	Status string
 }

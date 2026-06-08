@@ -16,6 +16,7 @@ import (
 	agentadapter "openforge/internal/agent/adapter"
 	agentdomain "openforge/internal/agent/domain"
 	"openforge/gen/go/agent/v1/agentv1connect"
+	topology "openforge/internal/agent/topology"
 	authadapter "openforge/internal/auth/adapter"
 	authdomain "openforge/internal/auth/domain"
 	rbacmw "openforge/internal/auth/middleware"
@@ -136,6 +137,9 @@ func RegisterRoutes(of *profile.OpenForge, jwtSvc *service.JWTService, cfg *prof
 	mux.HandleFunc("GET /api/projects/{id}/token-budget", withRole("pm", handleTokenBudget(of)))
 	mux.HandleFunc("PUT /api/projects/{id}/token-budget", withRoles([]string{"pm", "admin"}, handleUpdateBudget(of)))
 
+	// Project topology (L1/L2/L3 monorepo graph)
+	mux.HandleFunc("GET /api/projects/{id}/topology", withRole("pm", handleGetTopology(of)))
+
 	// Models (observer)
 	mux.HandleFunc("GET /api/models", withRole("observer", handleListModels(of)))
 
@@ -218,6 +222,9 @@ func RegisterRoutes(of *profile.OpenForge, jwtSvc *service.JWTService, cfg *prof
 		provider := &ofResourceSnapshotProvider{of: of}
 		handler = LoadShedMiddleware(ls, provider, handler)
 	}
+	// OTel HTTP instrumentation: outermost wrapper so it spans the entire
+	// middleware chain.  W3C traceparent headers are extracted here.
+	handler = OTelHTTPMiddleware(handler)
 	return handler
 }
 
@@ -867,6 +874,60 @@ func handleListModels(of *profile.OpenForge) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		models := of.LLMRouter.ListModels()
 		writeJSON(w, http.StatusOK, models)
+	}
+}
+
+// handleGetTopology analyzes a monorepo path and returns the 3-level
+// (L1/L2/L3) topology graph used by the code-review topology panel.
+//
+// The directory to scan is supplied via the `?path=` query parameter.
+// We intentionally do not auto-derive it from the project row — the
+// server does not currently store a local checkout path for projects,
+// and silently defaulting to "." would produce confusing results.
+func handleGetTopology(of *profile.OpenForge) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		projectID := r.PathValue("id")
+		userID := UserIDFromContext(r.Context())
+		userRole := UserRoleFromContext(r.Context())
+
+		// Authorization: non-admin users must have a role on the project.
+		if userRole != "admin" {
+			var hasAccess bool
+			err := of.DB.QueryRowContext(r.Context(),
+				`SELECT EXISTS(SELECT 1 FROM user_role WHERE user_id = $1 AND project_id = $2)`,
+				userID, projectID,
+			).Scan(&hasAccess)
+			if err != nil || !hasAccess {
+				writeError(w, http.StatusForbidden, "forbidden: access to this project is denied")
+				return
+			}
+		}
+
+		projectPath := r.URL.Query().Get("path")
+		if projectPath == "" {
+			writeError(w, http.StatusBadRequest, "path query parameter is required")
+			return
+		}
+
+		// Security: prevent directory traversal beyond the supplied path.
+		cleanPath := filepath.Clean(projectPath)
+		if strings.Contains(cleanPath, "..") {
+			writeError(w, http.StatusBadRequest, "invalid path")
+			return
+		}
+		info, statErr := os.Stat(cleanPath)
+		if statErr != nil || !info.IsDir() {
+			writeError(w, http.StatusNotFound, "project path not found or is not a directory")
+			return
+		}
+
+		graph, err := topology.Analyze(cleanPath)
+		if err != nil {
+			slog.Error("topology analysis failed", "project_id", projectID, "path", cleanPath, "error", err)
+			writeError(w, http.StatusInternalServerError, sanitizeError(err))
+			return
+		}
+		writeJSON(w, http.StatusOK, graph)
 	}
 }
 

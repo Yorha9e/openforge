@@ -16,6 +16,7 @@ import (
 	"openforge/internal/adapter"
 	agentadapter "openforge/internal/agent/adapter"
 	agentapp "openforge/internal/agent/application"
+	agentdomain "openforge/internal/agent/domain"
 	"openforge/internal/agent/domain"
 	"openforge/internal/compliance"
 	"openforge/internal/llm"
@@ -26,53 +27,64 @@ import (
 	policyadapter "openforge/internal/policy/adapter"
 	"openforge/internal/shared/featureflags"
 	"openforge/internal/shared/kernel"
+	"openforge/internal/terminal"
+	"openforge/internal/tool"
 )
 
 // OpenForge is the composition root of all 10 capability domains. It is
 // constructed by Bootstrap and provides ready-to-use implementations of
 // every interface declared in kernel/interfaces.go.
 type OpenForge struct {
-	Secrets      kernel.SecretStore
-	Container    kernel.ContainerRuntime
-	Object       kernel.ObjectStore
-	TaskQ        kernel.TaskQueue
-	Events       kernel.EventBus
-	Cache        kernel.Cache
-	Telemetry    kernel.Telemetry
-	Registry     kernel.ServiceRegistry
-	DR           kernel.DisasterRecovery
-	LB           kernel.LoadBalancer
-	Notifier     kernel.Notifier
-	CommandExec  kernel.CommandExecutor
-	LLMRouter    *llm.Router
-	LLMRegistry     *llm.Registry
-	Config          *Config
-	FeatureFlags    *featureflags.FeatureFlags   // Phase 10: runtime-overridable enterprise toggles
-	PromptBuilder   *domain.PromptBuilder
-	SkillLoader         *domain.SkillLoader
-	CapabilityInjector  *domain.CapabilityInjector
-	PriorityEngine      *domain.UnifiedPriorityEngine
-	HashRing            *observabilitydomain.HashRing
-	BreakerPool         *observabilitydomain.BreakerPool
-	SLO                 *observabilitydomain.SLOTracker
-	PrometheusExporter  *obsadapter.PrometheusExporter
+	Secrets            kernel.SecretStore
+	Container          kernel.ContainerRuntime
+	Object             kernel.ObjectStore
+	TaskQ              kernel.TaskQueue
+	Events             kernel.EventBus
+	Cache              kernel.Cache
+	Telemetry          kernel.Telemetry
+	Registry           kernel.ServiceRegistry
+	DR                 kernel.DisasterRecovery
+	LB                 kernel.LoadBalancer
+	Notifier           kernel.Notifier
+	CommandExec        kernel.CommandExecutor
+	LLMRouter          *llm.Router
+	LLMRegistry        *llm.Registry
+	Config             *Config
+	FeatureFlags       *featureflags.FeatureFlags // Phase 10: runtime-overridable enterprise toggles
+	PromptBuilder      *domain.PromptBuilder
+	SkillLoader        *domain.SkillLoader
+	CapabilityInjector *domain.CapabilityInjector
+	PriorityEngine     *domain.UnifiedPriorityEngine
+	HashRing           *observabilitydomain.HashRing
+	BreakerPool        *observabilitydomain.BreakerPool
+	SLO                *observabilitydomain.SLOTracker
+	PrometheusExporter *obsadapter.PrometheusExporter
 
 	// Phase 7: Learning engine components
-	PreferenceStore    *agentadapter.PGPreferenceStore
-	TrajectoryStore    *agentadapter.PGTrajectoryStore
-	LLMPriorityQueue   *domain.LLMPriorityQueue
-	RetrospectiveGen   *domain.RetrospectiveGenerator
+	PreferenceStore  *agentadapter.PGPreferenceStore
+	TrajectoryStore  *agentadapter.PGTrajectoryStore
+	LLMPriorityQueue *domain.LLMPriorityQueue
+	RetrospectiveGen *domain.RetrospectiveGenerator
 
 	// Phase 8.4: Learning engine — experiment, retrospective, knowledge snapshot
-	ExperimentStore       *agentadapter.PGExperimentStore
-	RetrospectiveStore    *agentadapter.PGRetrospectiveStore
+	ExperimentStore        *agentadapter.PGExperimentStore
+	RetrospectiveStore     *agentadapter.PGRetrospectiveStore
 	KnowledgeSnapshotStore *agentadapter.PGKnowledgeSnapshotStore
-	LearningSvc           *agentapp.LearningService
+	LearningSvc            *agentapp.LearningService
 
-	PipelineRepo      *pipelineadapter.PGRepository
-	GateRequestRepo  *pipelineadapter.PGGateRequestRepository
-	PipelineSvc       *service.PipelineService
-	GateSvc           *service.GateService
+	// Phase 7: in-memory embedding index used by KnowledgeQuerier for L4
+	// retrieval. Filled by main.go after Bootstrap returns.
+	EmbeddingIndex  *agentdomain.InMemoryEmbeddingIndex
+	KnowledgeQuerier *agentdomain.KnowledgeQuerier
+
+	// Path C T2: real LocalShellExecutor + Coordinator fields.
+	LocalExecutor *tool.LocalShellExecutor
+	Coordinator   *agentdomain.AgentCoordinator
+
+	PipelineRepo    *pipelineadapter.PGRepository
+	GateRequestRepo *pipelineadapter.PGGateRequestRepository
+	PipelineSvc     *service.PipelineService
+	GateSvc         *service.GateService
 	SandboxProvider *adapter.SandboxProvider
 	DeploySvc       *service.DeployService
 	TokenCostSvc    *service.TokenCostService
@@ -92,7 +104,9 @@ type OpenForge struct {
 
 	// Path-D T6: Debug trace store.  Optional, may be nil — debug handler
 	// returns 503 in that case.  Default is an in-memory store.
-	TraceStore domain.TraceStore
+	TraceStore      agentdomain.TraceStore   // Path C T5: WS sync.request/replay store (nil = not configured)
+	TerminalService *terminal.Service        // Path C T4: WS terminal.input handler backend
+	OwnershipRepo   *pipelineadapter.PGOwnershipRepository // T13: PG-backed module ownership
 }
 
 // Bootstrap creates a new OpenForge composition root from the given profile
@@ -214,13 +228,13 @@ func Bootstrap(cfg *Config) (*OpenForge, error) {
 	if err != nil {
 		return nil, fmt.Errorf("db: %w", err)
 	}
-	
+
 	// Configure connection pool to prevent connection exhaustion
 	db.SetMaxOpenConns(25)                 // Maximum number of open connections
 	db.SetMaxIdleConns(10)                 // Maximum number of idle connections
 	db.SetConnMaxLifetime(5 * time.Minute) // Maximum lifetime of a connection
 	db.SetConnMaxIdleTime(1 * time.Minute) // Maximum idle time of a connection
-	
+
 	of.DB = db
 
 	// X3 T4 #18: RLS-aware wrapper. Repositories keep their raw *sql.DB
@@ -331,6 +345,7 @@ func Bootstrap(cfg *Config) (*OpenForge, error) {
 	of.PipelineRepo = pipelineadapter.NewPGRepository(db)
 	of.GateRequestRepo = pipelineadapter.NewPGGateRequestRepository(db)
 	of.FileLockStore = pipelineadapter.NewPGFileLockStore(db)
+	of.OwnershipRepo = pipelineadapter.NewPGOwnershipRepository(db) // T13
 	of.FileLockSvc = service.NewFileLockService(of.FileLockStore)
 	of.SettingsRepo = adapter.NewPGSettingsRepo(db)
 	of.CheckpointRepo = adapter.NewPGCheckpointRepo(db)
@@ -374,7 +389,7 @@ func Bootstrap(cfg *Config) (*OpenForge, error) {
 		of.PriorityEngine.Start()
 	}
 
-		// Phase 7: Learning engine components
+	// Phase 7: Learning engine components
 	of.PreferenceStore = agentadapter.NewPGPreferenceStore(db)
 	of.TrajectoryStore = agentadapter.NewPGTrajectoryStore(db)
 	of.LLMPriorityQueue = domain.NewLLMPriorityQueue()
@@ -580,7 +595,14 @@ func newSecretStore(cfg *Config) kernel.SecretStore {
 func newContainerRuntime(cfg *Config) kernel.ContainerRuntime {
 	switch cfg.ContainerRuntime {
 	case "docker":
-		slog.Info("container_runtime: docker selected (adapter pending Phase 5)")
+		if cfg.Docker.Host == "" {
+			slog.Warn("container_runtime: docker selected but host empty, falling back to Noop")
+			return &kernel.NoopContainerRuntime{}
+		}
+		return adapter.NewDockerContainerRuntime(cfg.Docker.Host)
+	case "k8s-pod":
+		// Phase 5: real K8s adapter pending. Fall back to Noop for now.
+		slog.Warn("container_runtime: k8s-pod adapter pending, falling back to Noop")
 		return &kernel.NoopContainerRuntime{}
 	default:
 		return &kernel.NoopContainerRuntime{}
@@ -735,7 +757,7 @@ func (t *stdoutTelemetry) Metric(name string, value float64, tags map[string]str
 
 type noopSpan struct{}
 
-func (s *noopSpan) End()                                    {}
+func (s *noopSpan) End()                                          {}
 func (s *noopSpan) AddEvent(name string, attrs map[string]string) {}
 
 // --- ServiceRegistry -------------------------------------------------------
@@ -823,7 +845,7 @@ func newLoadBalancer(cfg *Config) kernel.LoadBalancer {
 		if cfg.LoadBalancer == "k8s-ingress" {
 			configPath = "" // K8s ingress doesn't need config file
 		}
-		
+
 		lb := adapter.NewNginxLoadBalancer(configPath)
 		if lb != nil {
 			return lb
@@ -848,9 +870,9 @@ func newNotifier(cfg *Config) kernel.Notifier {
 			// If other channels are configured, create multi-channel notifier
 			var channels []kernel.Notifier
 			channels = append(channels, feishu)
-			
+
 			// Future: Add DingTalk, Email, etc. channels here
-			
+
 			if len(channels) > 1 {
 				return adapter.NewMultiChannelNotifier(channels)
 			}

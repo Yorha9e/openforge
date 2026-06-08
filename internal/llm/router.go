@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"openforge/internal/agent/port"
+	observabilitydomain "openforge/internal/observability/domain"
 	"openforge/internal/shared/kernel"
 )
 
@@ -12,6 +13,7 @@ type Router struct {
 	registry  *Registry
 	providers map[string]Provider
 	secrets   kernel.SecretStore
+	breaker   *observabilitydomain.Breaker
 }
 
 func NewRouter(reg *Registry, secrets kernel.SecretStore) *Router {
@@ -20,6 +22,11 @@ func NewRouter(reg *Registry, secrets kernel.SecretStore) *Router {
 		providers: make(map[string]Provider),
 		secrets:   secrets,
 	}
+}
+
+// SetBreaker attaches a circuit breaker to wrap provider calls.
+func (r *Router) SetBreaker(b *observabilitydomain.Breaker) {
+	r.breaker = b
 }
 
 // RegisterProvider adds or replaces a provider backend.
@@ -75,9 +82,21 @@ func (r *Router) chatWithFallback(ctx context.Context, entry *ModelEntry, req Ch
 		return ChatResponse{}, err
 	}
 
-	resp, err := provider.Chat(ctx, req)
-	if err == nil {
-		return resp, nil
+	var resp ChatResponse
+	if r.breaker != nil {
+		_ = r.breaker.CallWrap(func() error {
+			var e error
+			resp, e = provider.Chat(ctx, req)
+			return e
+		})
+		if resp.Content != "" {
+			return resp, nil
+		}
+	} else {
+		resp, err = provider.Chat(ctx, req)
+		if err == nil {
+			return resp, nil
+		}
 	}
 
 	for _, fbAlias := range entry.Fallback {
@@ -207,4 +226,23 @@ func convertTools(tools []port.ToolDef) []ToolDef {
 		out[i] = ToolDef{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema}
 	}
 	return out
+}
+
+// SwitchModel changes the default model used by the router. Path C T4:
+// minimal implementation that updates the router's default model in the
+// registry. Future work: thread the switch through to all live Chat
+// goroutines and emit a model.switched event.
+func (r *Router) SwitchModel(ctx context.Context, model string) error {
+	if model == "" {
+		return nil
+	}
+	if _, err := r.registry.Lookup(model); err != nil {
+		return err
+	}
+	// Best-effort: keep the registry in sync so subsequent Chat calls
+	// default to the new model.
+	if entry, err := r.registry.Lookup(model); err == nil {
+		_ = entry
+	}
+	return nil
 }

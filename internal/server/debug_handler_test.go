@@ -26,15 +26,15 @@ func seedTrace(t *testing.T, store *agentdomain.MemTraceStore, pipelineID string
 	t.Helper()
 	now := time.Now()
 	for i := range n {
+		payload, _ := json.Marshal(map[string]any{"round": i})
 		ev := agentdomain.TraceEvent{
 			PipelineID: pipelineID,
-			Stage:      "implementation",
-			Event:      "llm_call_start",
-			Payload:    map[string]any{"round": i},
+			Event:      "implementation.llm_call_start",
+			Payload:    payload,
 			Timestamp:  now.Add(-time.Duration(n-i) * time.Minute),
 		}
-		if err := store.Append(context.Background(), ev); err != nil {
-			t.Fatalf("seed Append: %v", err)
+		if _, err := store.Record(context.Background(), ev); err != nil {
+			t.Fatalf("seed Record: %v", err)
 		}
 	}
 }
@@ -107,7 +107,7 @@ func TestDebugTraceHandler_ReturnsEventsSinceTimestamp(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("event count = %d, want 1 (body=%s)", len(got), rec.Body.String())
 	}
-	if got[0].PipelineID != "pipe-2" || got[0].Event != "llm_call_start" {
+	if got[0].PipelineID != "pipe-2" || got[0].Event != "implementation.llm_call_start" {
 		t.Fatalf("unexpected event: %+v", got[0])
 	}
 }
@@ -119,11 +119,11 @@ func TestDebugTraceHandler_DefaultsTo30Days(t *testing.T) {
 	store := agentdomain.NewMemTraceStore()
 	now := time.Now()
 	for i, ts := range []time.Time{now, now.Add(-10 * 24 * time.Hour), now.Add(-40 * 24 * time.Hour)} {
-		_ = store.Append(context.Background(), agentdomain.TraceEvent{
+		payload, _ := json.Marshal(map[string]any{"i": i})
+		_, _ = store.Record(context.Background(), agentdomain.TraceEvent{
 			PipelineID: "pipe-3",
-			Stage:      "implementation",
-			Event:      "llm_call_start",
-			Payload:    map[string]any{"i": i},
+			Event:      "implementation.llm_call_start",
+			Payload:    payload,
 			Timestamp:  ts,
 		})
 	}

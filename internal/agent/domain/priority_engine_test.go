@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -142,5 +143,70 @@ func TestDefaultSkillEngineConfig(t *testing.T) {
 	}
 	if cfg.Skill.Priority.MinVersionFactor != 0.05 {
 		t.Errorf("expected MinVersionFactor=0.05, got %.2f", cfg.Skill.Priority.MinVersionFactor)
+	}
+}
+
+// TestPriorityEngine_LearningFactor_ReflectsSuccessRate verifies that the
+// LearningFactor (T10) correctly computes a 0.5..1.5 range from the project's
+// trajectory success rate (TrajectoryRecord with empty FailureCodes counts as
+// success; non-empty counts as failure).
+func TestPriorityEngine_LearningFactor_ReflectsSuccessRate(t *testing.T) {
+	store := NewMemTrajectoryStore()
+	ctx := context.Background()
+	// p-good: 3 success + 1 failure → rate 0.75 → factor 1.25
+	if err := store.Record(ctx, TrajectoryRecord{ProjectID: "p-good", PipelineID: "g1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Record(ctx, TrajectoryRecord{ProjectID: "p-good", PipelineID: "g2"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Record(ctx, TrajectoryRecord{ProjectID: "p-good", PipelineID: "g3"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Record(ctx, TrajectoryRecord{ProjectID: "p-good", PipelineID: "g4", FailureCodes: []string{"x"}}); err != nil {
+		t.Fatal(err)
+	}
+	// p-bad: 2 failures → rate 0.0 → factor 0.5
+	if err := store.Record(ctx, TrajectoryRecord{ProjectID: "p-bad", PipelineID: "b1", FailureCodes: []string{"x"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Record(ctx, TrajectoryRecord{ProjectID: "p-bad", PipelineID: "b2", FailureCodes: []string{"y"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	upe := NewUnifiedPriorityEngine(nil, nil)
+	upe.SetTrajectoryStore(store)
+
+	gotGood := upe.LearningFactor(ctx, "p-good")
+	if gotGood < 1.24 || gotGood > 1.26 {
+		t.Errorf("p-good LearningFactor: got %.3f, want ≈1.25", gotGood)
+	}
+	gotBad := upe.LearningFactor(ctx, "p-bad")
+	if gotBad < 0.49 || gotBad > 0.51 {
+		t.Errorf("p-bad LearningFactor: got %.3f, want ≈0.50", gotBad)
+	}
+}
+
+// TestPriorityEngine_LearningFactor_NoTrajectories verifies an empty store
+// returns the neutral factor 1.0 (no data → no adjustment).
+func TestPriorityEngine_LearningFactor_NoTrajectories(t *testing.T) {
+	store := NewMemTrajectoryStore()
+	upe := NewUnifiedPriorityEngine(nil, nil)
+	upe.SetTrajectoryStore(store)
+
+	got := upe.LearningFactor(context.Background(), "unknown-project")
+	if got != 1.0 {
+		t.Errorf("empty store: got %.3f, want 1.0", got)
+	}
+}
+
+// TestPriorityEngine_LearningFactor_NilStore verifies a nil trajectory store
+// returns the neutral factor 1.0 (defensive default).
+func TestPriorityEngine_LearningFactor_NilStore(t *testing.T) {
+	upe := NewUnifiedPriorityEngine(nil, nil)
+	// Intentionally do not call SetTrajectoryStore — upe.trajStore remains nil.
+	got := upe.LearningFactor(context.Background(), "any-project")
+	if got != 1.0 {
+		t.Errorf("nil store: got %.3f, want 1.0", got)
 	}
 }

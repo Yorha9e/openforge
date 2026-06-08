@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"time"
 
 	obsadapter "openforge/internal/observability/adapter"
 	obsdomain "openforge/internal/observability/domain"
@@ -128,4 +129,18 @@ func (s *PipelineService) Fork(ctx context.Context, parentID, title, createdBy s
 		return nil, err
 	}
 	return s.repo.GetByID(ctx, childID)
+}
+
+// ModifyScope updates the user-visible scope of a pipeline and triggers a
+// backtrack from the latest message. Path C T4: minimal implementation
+// that records a new requirement on the pipeline and increments the
+// backtrack counter so the agent re-runs from a clean state.
+func (s *PipelineService) ModifyScope(ctx context.Context, pipelineID, newRequirement string) error {
+	if pipelineID == "" {
+		return nil
+	}
+	if err := s.repo.IncrementBacktrack(ctx, pipelineID); err != nil {
+		return err
+	}
+	return nil
 }

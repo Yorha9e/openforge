@@ -147,11 +147,22 @@ func (qe *QueryEngine) appendTrace(event string, payload map[string]any) {
 	if ts == nil || pid == "" {
 		return
 	}
-	_ = ts.Append(context.Background(), TraceEvent{
+	// Marshal the payload to JSON bytes to match the TraceStore
+	// interface (TraceEvent.Payload is []byte in the active
+	// implementation, with Stage serialized into the event name as a
+	// fallback for consumers that want the stage label).
+	eventName := event
+	if stage != "" {
+		eventName = stage + "." + event
+	}
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	_, _ = ts.Record(context.Background(), TraceEvent{
 		PipelineID: pid,
-		Stage:      stage,
-		Event:      event,
-		Payload:    payload,
+		Event:      eventName,
+		Payload:    payloadBytes,
 		Timestamp:  time.Now(),
 	})
 }
@@ -167,9 +178,9 @@ func NewQueryEngine(llmClient agentport.LLMRouterClient, config agentport.LLMCon
 		toolRegistry:   make(ToolRegistry),
 		activeBranchID: "main",
 		// Initialize message buffer
-		messageBuffer:  NewMessageBuffer(100),  // Buffer up to 100 messages
-		done:           make(chan struct{}),
-		flushInterval:  5 * time.Second,  // Flush every 5 seconds
+		messageBuffer: NewMessageBuffer(100), // Buffer up to 100 messages
+		done:          make(chan struct{}),
+		flushInterval: 5 * time.Second, // Flush every 5 seconds
 	}
 }
 
@@ -318,18 +329,18 @@ func (qe *QueryEngine) flushMessages() {
 func (qe *QueryEngine) StopFlushLoop() {
 	qe.mu.Lock()
 	defer qe.mu.Unlock()
-	
+
 	// Prevent double-close panic
 	if qe.done == nil {
 		return
 	}
-	
+
 	if qe.flushTicker != nil {
 		qe.flushTicker.Stop()
 	}
 	close(qe.done)
 	qe.done = nil // Mark as stopped
-	
+
 	// Final flush of remaining messages
 	if qe.convRepo != nil {
 		messages := qe.messageBuffer.Flush()
@@ -350,7 +361,7 @@ func (qe *QueryEngine) SetConversationRepo(repo pipelineport.ConversationReposit
 	qe.mu.Lock()
 	defer qe.mu.Unlock()
 	qe.convRepo = repo
-	
+
 	// Start flush loop when repository is set
 	if repo != nil {
 		qe.startFlushLoop()
@@ -363,7 +374,7 @@ func (qe *QueryEngine) saveMessage(msgSeq int, role, msgType, content string) {
 	if qe.convRepo == nil {
 		return
 	}
-	
+
 	msg := &pipelineport.DBMessage{
 		PipelineID: qe.pipelineCtx.PipelineID,
 		BranchID:   qe.activeBranchID,
@@ -372,7 +383,7 @@ func (qe *QueryEngine) saveMessage(msgSeq int, role, msgType, content string) {
 		MsgType:    msgType,
 		Content:    content,
 	}
-	
+
 	// Try to add to buffer
 	if !qe.messageBuffer.Add(msg) {
 		// Buffer full, flush immediately and retry
@@ -959,3 +970,60 @@ func (qe *QueryEngine) LoadMessages(msgs []agentport.Message) {
 	qe.tokenCount = tokens
 	qe.state = QueryStateAwaitingUser
 }
+
+// EditMessage replaces the content of an existing user message identified by
+// its DB message ID and resets the engine state to re-run the agent loop
+// from that point. Path C T4: minimal in-memory implementation.
+func (qe *QueryEngine) EditMessage(ctx context.Context, messageID, content string) error {
+	qe.mu.Lock()
+	defer qe.mu.Unlock()
+	idx := qe.messageIndexLocked(messageID)
+	if idx < 0 {
+		return errNoSuchMessage{msgID: messageID}
+	}
+	qe.messages[idx] = agentport.Message{
+		ID:      messageID,
+		Role:    "user",
+		Content: content,
+	}
+	qe.state = QueryStateAwaitingLLM
+	return nil
+}
+
+// ResendFromMessage re-runs the agent loop from a given message. Path C T4
+// minimal implementation: marks the engine as ready to stream from that point.
+func (qe *QueryEngine) ResendFromMessage(ctx context.Context, pipelineID, messageID string) error {
+	qe.mu.Lock()
+	defer qe.mu.Unlock()
+	if qe.messageIndexLocked(messageID) < 0 {
+		return errNoSuchMessage{msgID: messageID}
+	}
+	qe.state = QueryStateAwaitingLLM
+	return nil
+}
+
+// HasMessage reports whether the engine's in-memory history contains a
+// message with the given ID. Used by the WS dispatcher to route
+// chat.edit / chat.retry to the right engine.
+func (qe *QueryEngine) HasMessage(ctx context.Context, messageID string) bool {
+	qe.mu.Lock()
+	defer qe.mu.Unlock()
+	return qe.messageIndexLocked(messageID) >= 0
+}
+
+// messageIndexLocked returns the index of the message with the given ID, or
+// -1 if not found. Caller must hold qe.mu.
+func (qe *QueryEngine) messageIndexLocked(messageID string) int {
+	for i, m := range qe.messages {
+		if m.ID == messageID {
+			return i
+		}
+	}
+	return -1
+}
+
+// errNoSuchMessage is returned by EditMessage / ResendFromMessage when the
+// target message_id is not in the in-memory history.
+type errNoSuchMessage struct{ msgID string }
+
+func (e errNoSuchMessage) Error() string { return "no such message: " + e.msgID }

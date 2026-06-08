@@ -37,11 +37,20 @@ func handleReplayPipeline(of *profile.OpenForge) http.HandlerFunc {
 		}
 
 		since := time.Now().Add(-90 * 24 * time.Hour)
-		events, err := of.TraceStore.ListSince(r.Context(), pid, since)
+		// TraceStore.ListSince is sequence-number based; pull all events
+		// (lastSeq=0) and filter to the requested time window client-side.
+		all, err := of.TraceStore.ListSince(r.Context(), pid, 0)
 		if err != nil {
 			slog.Error("replay: list trace events failed", "pipeline_id", pid, "error", err)
 			writeError(w, http.StatusInternalServerError, "failed to load trace events")
 			return
+		}
+		events := make([]agentdomain.TraceEvent, 0, len(all))
+		for _, ev := range all {
+			if ev.Timestamp.Before(since) {
+				continue
+			}
+			events = append(events, ev)
 		}
 		if events == nil {
 			events = []agentdomain.TraceEvent{}

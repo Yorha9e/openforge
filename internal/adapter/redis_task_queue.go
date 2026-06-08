@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	observabilitydomain "openforge/internal/observability/domain"
 	"openforge/internal/shared/kernel"
 )
 
@@ -25,6 +26,13 @@ type RedisTaskQueue struct {
 
 	mu     sync.Mutex
 	queues map[string]chan kernel.Message
+
+	breaker *observabilitydomain.Breaker
+}
+
+// SetBreaker attaches a circuit breaker to wrap Enqueue calls.
+func (q *RedisTaskQueue) SetBreaker(b *observabilitydomain.Breaker) {
+	q.breaker = b
 }
 
 // NewRedisTaskQueue creates a RedisTaskQueue. If addr is empty, it reads
@@ -101,17 +109,23 @@ func (q *RedisTaskQueue) getOrCreateChan(topic string) chan kernel.Message {
 // Enqueue adds a message to the queue. The priority is stored in msg.Priority
 // for future use by the Redis-backed implementation.
 func (q *RedisTaskQueue) Enqueue(ctx context.Context, topic string, msg kernel.Message, priority int) error {
-	if q.redisOK {
-		// TODO(phase-8): use go-redis XAdd with priority in message fields.
+	doEnqueue := func() error {
+		if q.redisOK {
+			// TODO(phase-8): use go-redis XAdd with priority in message fields.
+		}
+		msg.Priority = priority
+		ch := q.getOrCreateChan(topic)
+		select {
+		case ch <- msg:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
-	msg.Priority = priority
-	ch := q.getOrCreateChan(topic)
-	select {
-	case ch <- msg:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
+	if q.breaker != nil {
+		return q.breaker.CallWrap(doEnqueue)
 	}
+	return doEnqueue()
 }
 
 // Dequeue blocks until a message is available for the given topic.

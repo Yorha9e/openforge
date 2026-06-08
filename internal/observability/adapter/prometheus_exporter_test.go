@@ -14,11 +14,7 @@ func TestNewPrometheusExporter(t *testing.T) {
 	}
 
 	counters, gauges := pe.Snapshot()
-<<<<<<< HEAD
-	if want := 3; len(counters) != want {
-=======
-	if want := 8; len(counters) != want {
->>>>>>> feat/path-D-enterprise-landing
+	if want := 9; len(counters) != want {
 		t.Errorf("expected %d counters, got %d", want, len(counters))
 	}
 	if want := 5; len(gauges) != want {

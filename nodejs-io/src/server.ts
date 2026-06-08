@@ -11,6 +11,53 @@ import { createClient, type Client } from "@connectrpc/connect";
 import { create } from "@bufbuild/protobuf";
 import { timestampFromDate } from "@bufbuild/protobuf/wkt";
 
+// Path C T7: OpenTelemetry Node SDK + W3C traceparent propagation.
+// Must be imported BEFORE any instrumented module so the auto-instrumentation
+// can patch http, connectrpc, etc.  The OTLP/gRPC exporter sends spans to
+// the same collector the Go server exports to, allowing the full Go↔Node
+// trace to be assembled in a single backend.
+import { NodeSDK } from "@opentelemetry/sdk-node";
+import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-grpc";
+import { resourceFromAttributes } from "@opentelemetry/resources";
+import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
+import { HttpInstrumentation } from "@opentelemetry/instrumentation-http";
+import { diag, DiagConsoleLogger, DiagLogLevel } from "@opentelemetry/api";
+
+if (process.env.OTEL_DEBUG === "1") {
+  diag.setLogger(new DiagConsoleLogger(), DiagLogLevel.INFO);
+}
+
+const otlpEndpoint = process.env.OTLP_ENDPOINT ?? "localhost:4317";
+const nodeSDK = new NodeSDK({
+  resource: resourceFromAttributes({
+    [ATTR_SERVICE_NAME]: "openforge-nodejs-io",
+  }),
+  traceExporter: new OTLPTraceExporter({ url: `http://${otlpEndpoint}` }),
+  instrumentations: [
+    // Auto-instrument incoming HTTP so traceparent is extracted from the
+    // Go client's ConnectRPC requests and outgoing fetch calls (e.g. the
+    // token_meter transport) carry an injected traceparent.
+    new HttpInstrumentation(),
+  ],
+});
+try {
+  nodeSDK.start();
+} catch (err) {
+  console.error("OTel NodeSDK start failed; continuing without tracing", err);
+}
+
+const shutdownOTel = (): void => {
+  try {
+    nodeSDK.shutdown().catch((err) => {
+      console.error("OTel NodeSDK shutdown failed", err);
+    });
+  } catch (err) {
+    console.error("OTel NodeSDK shutdown threw", err);
+  }
+};
+process.on("SIGTERM", shutdownOTel);
+process.on("SIGINT", shutdownOTel);
+
 import { AnthropicProvider } from "./llm/providers/anthropic.js";
 import { DeepSeekProvider } from "./llm/providers/deepseek.js";
 import { OpenAIProvider } from "./llm/providers/openai.js";
@@ -30,6 +77,39 @@ import {
   RecordTokenUsageRequestSchema,
   TokenUsageRecordSchema,
 } from "./gen/agent/v1/llm_pb.js";
+import {
+  CoordinatorService,
+  CreateAgentResponseSchema,
+  DestroyAgentResponseSchema,
+  ExecuteStageEventSchema,
+  ChatEventSchema,
+  EditMessageResponseSchema,
+  StopGenerationResponseSchema,
+  PauseGenerationResponseSchema,
+  GetPipelineResponseSchema,
+  CancelPipelineResponseSchema,
+  ModifyPipelineScopeResponseSchema,
+  TokenUsageAckSchema,
+  HealthResponseSchema,
+} from "./gen/agent/v1/coordinator_pb.js";
+import {
+  GateService,
+  GateApproveResponseSchema,
+  GateRejectResponseSchema,
+  GateClaimResponseSchema,
+  GateGetInboxResponseSchema,
+} from "./gen/agent/v1/gate_pb.js";
+import {
+  ToolRegistryService,
+  SearchToolsResponseSchema,
+  CallToolResponseSchema,
+  CallToolStreamChunkSchema,
+  RegisterToolResponseSchema,
+  UnregisterToolResponseSchema,
+  ListAllToolsResponseSchema,
+  RebuildIndexResponseSchema,
+  GetIndexStatusResponseSchema,
+} from "./gen/agent/v1/tools_pb.js";
 
 /** Strip "[Nm]" / "[Nk]" suffix from a model name before sending to the API. */
 function stripSuffix(model: string): string {
@@ -296,6 +376,98 @@ const handler = connectNodeAdapter({
           })),
         });
       },
+    });
+
+    // Path C T1: Wire CoordinatorService + GateService +
+    // ToolRegistryService on the Node.js IO process. Each RPC returns
+    // a shape-correct stub — real Node-side business logic for the
+    // IO layer is scoped to T2 (Coordinator) and T5 (Gate).
+    // ToolRegistryService is owned by the Dynamic Tool Hub (T8).
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    router.service(CoordinatorService as any, {
+      createAgent: async (req: any) =>
+        create(CreateAgentResponseSchema, {
+          agentId: req.agentId,
+          status: "stub",
+        }),
+      destroyAgent: async () =>
+        create(DestroyAgentResponseSchema, { success: true }),
+      executeStage: async function* () {
+        yield create(ExecuteStageEventSchema, { eventType: "done" });
+      },
+      chat: async function* () {
+        yield create(ChatEventSchema, { eventType: 1, isDone: true });
+      },
+      editMessage: async (req: any) =>
+        create(EditMessageResponseSchema, {
+          success: true,
+          newBranchId: req.branchId + "-stub",
+        }),
+      stopGeneration: async () =>
+        create(StopGenerationResponseSchema, { success: true }),
+      pauseGeneration: async () =>
+        create(PauseGenerationResponseSchema, {
+          success: true,
+          checkpointSeq: 0,
+        }),
+      resumeGeneration: async function* () {
+        yield create(ChatEventSchema, { eventType: 1, isDone: true });
+      },
+      regenerateFrom: async function* () {
+        yield create(ChatEventSchema, { eventType: 1, isDone: true });
+      },
+      getPipeline: async (req: any) =>
+        create(GetPipelineResponseSchema, { pipelineId: req.pipelineId }),
+      cancelPipeline: async () =>
+        create(CancelPipelineResponseSchema, {
+          success: true,
+          finalStatus: 8,
+        }),
+      modifyPipelineScope: async () =>
+        create(ModifyPipelineScopeResponseSchema, { success: true }),
+      pushTokenUsage: async () =>
+        create(TokenUsageAckSchema, { success: true }),
+      health: async () =>
+        create(HealthResponseSchema, { serving: true }),
+    });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    router.service(GateService as any, {
+      approve: async () =>
+        create(GateApproveResponseSchema, { success: true, nextStatus: 2 }),
+      reject: async () =>
+        create(GateRejectResponseSchema, { success: true }),
+      claim: async () =>
+        create(GateClaimResponseSchema, { success: true }),
+      getInbox: async () =>
+        create(GateGetInboxResponseSchema, { items: [], nextPageToken: "" }),
+    });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    router.service(ToolRegistryService as any, {
+      searchTools: async () =>
+        create(SearchToolsResponseSchema, { matches: [] }),
+      callTool: async (req: any) =>
+        create(CallToolResponseSchema, { toolName: req.toolName }),
+      callToolStream: async function* () {
+        yield create(CallToolStreamChunkSchema, {
+          eventType: "done",
+          isDone: true,
+        });
+      },
+      registerTool: async (req: any) =>
+        create(RegisterToolResponseSchema, {
+          success: true,
+          toolName: req.tool?.name ?? "",
+        }),
+      unregisterTool: async () =>
+        create(UnregisterToolResponseSchema, { success: true }),
+      listAllTools: async () =>
+        create(ListAllToolsResponseSchema, { tools: [], totalCount: 0 }),
+      rebuildIndex: async () =>
+        create(RebuildIndexResponseSchema, { success: true, status: "queued" }),
+      getIndexStatus: async () =>
+        create(GetIndexStatusResponseSchema, { status: "ready" }),
     });
   },
 });

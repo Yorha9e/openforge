@@ -1,9 +1,11 @@
 package profile
 
 import (
+	"context"
 	"crypto/ed25519"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"os"
 	"regexp"
 	"time"
@@ -13,6 +15,10 @@ import (
 
 // Config represents the full profile configuration loaded from a YAML file.
 type Config struct {
+	// path records the on-disk location the Config was loaded from, so that
+	// periodic revalidation can re-read and re-verify the file.
+	path string
+
 	Profile      string `yaml:"profile"`
 	SecurityTier string `yaml:"security_tier"`
 
@@ -28,6 +34,18 @@ type Config struct {
 	LoadBalancer     string `yaml:"load_balancer"`
 	Notifier         string `yaml:"notifier"`
 	CommandExecutor  string `yaml:"command_executor"`
+
+	// ModuleOwnershipPath is an optional path to a module-ownership YAML
+	// file. When set, Load() invokes LoadOwnership() and stores the parsed
+	// result on Config.Ownership. When unset (or the file fails to parse),
+	// Config.Ownership is left nil — callers must treat nil as "no
+	// ownership rules configured" and rely on the PG-seeded defaults.
+	ModuleOwnershipPath string `yaml:"module_ownership_path"`
+
+	// Ownership holds the parsed module-ownership YAML referenced by
+	// ModuleOwnershipPath. Populated by Load() at startup; nil if no
+	// ownership file is configured or parsing fails.
+	Ownership *ModuleOwnershipYAML `yaml:"-"`
 
 	// FeatureFlags: YAML-level defaults for enterprise capability toggles.
 	// Runtime overrides are stored in the feature_flags DB table.
@@ -65,14 +83,14 @@ type FeatureFlagsConfig struct {
 
 // VaultConfig holds HashiCorp Vault connection parameters.
 type VaultConfig struct {
-	Addr         string `yaml:"addr"`          // "http://vault:8200"
-	RoleID       string `yaml:"role_id"`       // AppRole
-	SecretID     string `yaml:"secret_id"`
-	AutoUnseal   bool   `yaml:"auto_unseal"`
-	Token        string `yaml:"token"`         // dev mode
-	EnginePath   string `yaml:"engine_path"`   // default "secret"
+	Addr          string `yaml:"addr"`           // "http://vault:8200"
+	RoleID        string `yaml:"role_id"`        // AppRole
+	SecretID      string `yaml:"secret_id"`
+	AutoUnseal    bool   `yaml:"auto_unseal"`
+	Token         string `yaml:"token"`          // dev mode
+	EnginePath    string `yaml:"engine_path"`    // default "secret"
 	EngineVersion string `yaml:"engine_version"` // G14: "v1" or "v2", empty = auto-detect
-	TimeoutSec   int    `yaml:"timeout_sec"`   // default 3
+	TimeoutSec    int    `yaml:"timeout_sec"`    // default 3
 }
 
 // EnginePathOrDefault returns the engine path or default "secret".
@@ -266,12 +284,24 @@ func Load(path string, verifySignature bool) (*Config, error) {
 		}
 	}
 	expanded := expandEnvSafe(string(data))
-	var cfg Config
+	cfg := Config{path: path}
 	if err := yaml.Unmarshal([]byte(expanded), &cfg); err != nil {
 		return nil, fmt.Errorf("parse profile: %w", err)
 	}
 	if err := cfg.validate(); err != nil {
 		return nil, fmt.Errorf("validate profile: %w", err)
+	}
+	// Optional: load module-ownership YAML if configured. Failures are
+	// logged but not fatal — the system falls back to the PG-seeded
+	// module_ownership rows (see migration 015) when no file is present.
+	if cfg.ModuleOwnershipPath != "" {
+		owner, err := LoadOwnership(cfg.ModuleOwnershipPath)
+		if err != nil {
+			slog.Warn("module-ownership load failed; using PG-seeded defaults",
+				"path", cfg.ModuleOwnershipPath, "err", err)
+		} else {
+			cfg.Ownership = owner
+		}
 	}
 	return &cfg, nil
 }
@@ -309,4 +339,57 @@ func (c *Config) validate() error {
 		return fmt.Errorf("unknown security_tier: %s", c.SecurityTier)
 	}
 	return nil
+}
+
+// RevalidationObserver is invoked on each periodic revalidation tick.
+// err is nil on success and non-nil on verification failure.
+type RevalidationObserver func(path string, err error)
+
+// StartPeriodicRevalidation spawns a goroutine that re-reads the on-disk
+// profile file on the given interval and re-verifies its Ed25519 signature.
+// Each tick invokes observer (if non-nil) with the profile path and the
+// verification error (nil on success). The goroutine exits when ctx is
+// cancelled. The verifier is intentionally non-fatal: failures are reported
+// to the observer / log but do not terminate the process — operators are
+// expected to respond to alerts.
+func (c *Config) StartPeriodicRevalidation(ctx context.Context, interval time.Duration, observer RevalidationObserver) {
+	if c.path == "" {
+		// No path recorded (e.g. Config built without Load) — nothing to revalidate.
+		slog.Warn("StartPeriodicRevalidation: no profile path recorded; ticker not started")
+		return
+	}
+	if interval <= 0 {
+		interval = 24 * time.Hour
+	}
+	path := c.path
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				data, err := os.ReadFile(path)
+				if err != nil {
+					slog.Error("periodic profile revalidation read failed", "path", path, "err", err)
+					if observer != nil {
+						observer(path, err)
+					}
+					continue
+				}
+				if err := verifyEd25519Signature(path, data); err != nil {
+					slog.Error("periodic profile revalidation failed", "path", path, "err", err)
+					if observer != nil {
+						observer(path, err)
+					}
+				} else {
+					slog.Info("periodic profile revalidation OK", "path", path)
+					if observer != nil {
+						observer(path, nil)
+					}
+				}
+			}
+		}
+	}()
 }

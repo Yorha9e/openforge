@@ -510,3 +510,19 @@ func (r *PGRepository) ListBranches(ctx context.Context, pipelineID string) ([]*
 	}
 	return branches, nil
 }
+
+// DeactivateBranch marks a conversation_branch row as no longer the active
+// branch for a pipeline. Path C T4: minimal implementation that flips the
+// status column. A fuller implementation that also forks the active branch
+// to a new "main" belongs to a later task.
+func (r *PGRepository) DeactivateBranch(ctx context.Context, branchID string) error {
+	if branchID == "" {
+		return nil
+	}
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE conversation_branch
+		SET status = 'inactive'
+		WHERE id = $1
+	`, branchID)
+	return err
+}

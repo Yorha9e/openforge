@@ -31,11 +31,11 @@ func TestReplayPipeline_ReturnsTraceEvents(t *testing.T) {
 	now := time.Now()
 	store := agentdomain.NewMemTraceStore()
 	for i := 0; i < 3; i++ {
-		_ = store.Append(context.Background(), agentdomain.TraceEvent{
+		payload, _ := json.Marshal(map[string]any{"i": i})
+		_, _ = store.Record(context.Background(), agentdomain.TraceEvent{
 			PipelineID: "p-1",
-			Stage:      "plan",
 			Event:      []string{"stage.start", "llm.delta", "stage.end"}[i],
-			Payload:    map[string]any{"i": i},
+			Payload:    payload,
 			Timestamp:  now.Add(time.Duration(i) * time.Second),
 		})
 	}

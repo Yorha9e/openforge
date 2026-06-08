@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	agentport "openforge/internal/agent/port"
@@ -43,6 +44,9 @@ func (t *BashTool) IsConcurrencySafe() bool { return false }
 func (t *BashTool) IsReadOnly() bool        { return false }
 
 func (t *BashTool) Execute(ctx context.Context, input BashInput) (kernel.ExecOutput, error) {
+	if t.executor == nil {
+		return kernel.ExecOutput{}, fmt.Errorf("bash tool: executor not configured")
+	}
 	return t.executor.Execute(ctx, input.Command, kernel.ExecOptions{
 		WorkDir: input.WorkDir,
 		Timeout: time.Duration(input.TimeoutMs) * time.Millisecond,
@@ -50,6 +54,9 @@ func (t *BashTool) Execute(ctx context.Context, input BashInput) (kernel.ExecOut
 }
 
 func (t *BashTool) ExecuteStream(ctx context.Context, input BashInput) (<-chan agentport.ToolStreamChunk[kernel.ExecOutput], error) {
+	if t.executor == nil {
+		return nil, fmt.Errorf("bash tool: executor not configured")
+	}
 	ch, err := t.executor.ExecuteStream(ctx, input.Command, kernel.ExecOptions{
 		WorkDir: input.WorkDir,
 		Timeout: time.Duration(input.TimeoutMs) * time.Millisecond,

@@ -68,13 +68,19 @@ func handleGetDebugTrace(of *profile.OpenForge, jwtSvc *service.JWTService) http
 			writeError(w, http.StatusServiceUnavailable, "trace store not configured")
 			return
 		}
-		events, err := of.TraceStore.ListSince(r.Context(), pipelineID, since)
+		// TraceStore.ListSince is sequence-number based; pull all events
+		// (lastSeq=0) and filter to the requested time window client-side.
+		all, err := of.TraceStore.ListSince(r.Context(), pipelineID, 0)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		if events == nil {
-			events = []agentdomain.TraceEvent{}
+		events := make([]agentdomain.TraceEvent, 0, len(all))
+		for _, ev := range all {
+			if ev.Timestamp.Before(since) {
+				continue
+			}
+			events = append(events, ev)
 		}
 		writeJSON(w, http.StatusOK, events)
 	}

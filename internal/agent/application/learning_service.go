@@ -15,12 +15,14 @@ import (
 // generation, LLM-driven lesson extraction, and A/B experiment assignment
 // for every completed pipeline (§3.12, Phase 8.4).
 type LearningService struct {
-	trajStore  domain.TrajectoryStore
-	retroStore domain.RetrospectiveStore
-	prefStore  domain.PreferenceStore
-	expStore   domain.ExperimentStore
-	llmRouter  *llm.Router
-	retroGen   *domain.RetrospectiveGenerator
+	trajStore    domain.TrajectoryStore
+	retroStore   domain.RetrospectiveStore
+	prefStore    domain.PreferenceStore
+	expStore     domain.ExperimentStore
+	llmRouter    *llm.Router
+	retroGen     *domain.RetrospectiveGenerator
+	embeddingIdx *domain.InMemoryEmbeddingIndex
+	layers       *domain.LearningLayers
 }
 
 // NewLearningService creates a LearningService with all required dependencies.
@@ -42,6 +44,13 @@ func NewLearningService(
 	}
 }
 
+// SetEmbeddingIndex attaches an in-memory embedding index so the service
+// can append newly learned knowledge to the index used by KnowledgeQuerier.
+func (s *LearningService) SetEmbeddingIndex(idx *domain.InMemoryEmbeddingIndex) {
+	s.embeddingIdx = idx
+	s.layers = domain.NewLearningLayers(s.trajStore, nil, s.prefStore, idx)
+}
+
 // HandlePipelineCompleted is the async callback triggered when a pipeline
 // finishes execution (status = completed/rejected/cancelled). It spawns a
 // goroutine to:
@@ -49,7 +58,9 @@ func NewLearningService(
 //  2. Generate a rule-based retrospective via RetrospectiveGenerator.
 //  3. If an LLM router is available, enhance the lessons through LLM analysis.
 //  4. Persist LLM-derived lessons as preferences for future pipelines.
-func (s *LearningService) HandlePipelineCompleted(ctx context.Context, pipelineID string) {
+//  5. Run the L1-L4 self-learning layers (T9) and append a knowledge
+//     snapshot to the embedding index for future KnowledgeQuerier calls.
+func (s *LearningService) HandlePipelineCompleted(ctx context.Context, pipelineID string, diff string) {
 	go func() {
 		bgCtx := context.Background()
 
@@ -86,6 +97,27 @@ func (s *LearningService) HandlePipelineCompleted(ctx context.Context, pipelineI
 					Source:    "auto_detect",
 				})
 			}
+		}
+
+		// Step 3: Run the L1-L4 self-learning layers when wired. L1
+		// extracts explicit function signatures from the supplied diff;
+		// L2 diffs the old vs new line sets; L3 reads the trajectory
+		// record to summarise tool frequency and step count; L4 indexes
+		// the snapshot text for future embedding-level recall.
+		if s.layers != nil {
+			_ = s.layers.ExtractL1(pipelineID, diff)
+			_ = s.layers.ExtractL2(pipelineID, diff, diff)
+			_ = s.layers.ExtractL3(pipelineID)
+			_ = s.layers.ExtractL4(buildTrajectorySnapshotText(traj))
+		}
+
+		// Step 4: Append a knowledge snapshot to the embedding index so that
+		// future KnowledgeQuerier.Query calls can surface it for similar
+		// prompts. We build a flat text from the trajectory summary.
+		if s.embeddingIdx != nil {
+			snapshotText := buildTrajectorySnapshotText(traj)
+			snapshotID := fmt.Sprintf("snapshot-%s", traj.PipelineID)
+			s.embeddingIdx.Add(snapshotID, snapshotText)
 		}
 	}()
 }
@@ -210,6 +242,35 @@ func buildTrajectoryAnalysisPrompt(t *domain.TrajectoryRecord) string {
 	sb.WriteString("\n请返回 JSON 格式：\n")
 	sb.WriteString(`{"lessons_learned": ["教训1", "教训2"], "improvement_actions": ["行动1", "行动2"]}`)
 	sb.WriteString("\n请只返回 JSON，不要包含其他文本。")
+	return sb.String()
+}
+
+// buildTrajectorySnapshotText flattens a TrajectoryRecord into a single
+// text blob suitable for indexing in the in-memory embedding index.
+func buildTrajectorySnapshotText(t *domain.TrajectoryRecord) string {
+	if t == nil {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString(t.RequirementSummary)
+	sb.WriteString(" ")
+	sb.WriteString(strings.Join(t.StageSequence, " "))
+	if len(t.SuccessfulPatterns) > 0 {
+		sb.WriteString(" patterns ")
+		sb.WriteString(strings.Join(t.SuccessfulPatterns, " "))
+	}
+	if len(t.FailureCodes) > 0 {
+		sb.WriteString(" failures ")
+		sb.WriteString(strings.Join(t.FailureCodes, " "))
+	}
+	if len(t.ToolsUsed) > 0 {
+		sb.WriteString(" tools ")
+		sb.WriteString(strings.Join(t.ToolsUsed, " "))
+	}
+	if len(t.SkillsMatched) > 0 {
+		sb.WriteString(" skills ")
+		sb.WriteString(strings.Join(t.SkillsMatched, " "))
+	}
 	return sb.String()
 }
 

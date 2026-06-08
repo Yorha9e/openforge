@@ -4,6 +4,8 @@ import (
 	"context"
 	"os"
 	"testing"
+
+	"openforge/internal/shared/kernel"
 )
 
 func dockerAvailable(t *testing.T) {
@@ -20,7 +22,7 @@ func TestDockerContainerRuntime_Disabled_EmptyHost(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	_, err := runtime.Create(ctx, ContainerSpec{Image: "alpine"})
+	_, err := runtime.Create(ctx, kernel.ContainerSpec{Image: "alpine"})
 	if err == nil {
 		t.Error("Create should return error when disabled")
 	}
@@ -66,7 +68,7 @@ func TestDockerContainerRuntime_CreateStartStop(t *testing.T) {
 	ctx := context.Background()
 
 	// Create a simple container
-	container, err := runtime.Create(ctx, ContainerSpec{
+	container, err := runtime.Create(ctx, kernel.ContainerSpec{
 		Image: "alpine:latest",
 		Cmd:   []string{"echo", "hello"},
 	})
