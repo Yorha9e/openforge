@@ -15,7 +15,7 @@ const availableSkills: SkillOption[] = [
 
 export function MessageInput() {
   const [input, setInput] = useState('');
-  const { pipelineId, send, cancel, connected, thinking, streaming } = useChat();
+  const { pipelineId, send, cancel, pause, resume, connected, thinking, streaming, paused } = useChat();
   const [inputFocused, setInputFocused] = useState(false);
   const [btnHovered, setBtnHovered] = useState(false);
   const [showSkills, setShowSkills] = useState(false);
@@ -126,6 +126,44 @@ export function MessageInput() {
             </div>
           )}
         </div>
+        {generating && !paused && (
+          <button
+            type="button"
+            onClick={() => pause(pipelineId)}
+            disabled={!connected}
+            aria-label="Pause"
+            title="Pause generation"
+            style={{
+              padding: '8px 12px', background: 'transparent',
+              border: `1px solid ${tokens.border}`,
+              borderRadius: 4, cursor: connected ? 'pointer' : 'default',
+              opacity: connected ? 1 : 0.5, alignSelf: 'flex-end',
+              color: tokens.text, fontSize: 14, fontFamily: tokens.fontBody,
+              transition: tokens.transition,
+            }}
+          >
+            Pause
+          </button>
+        )}
+        {paused && (
+          <button
+            type="button"
+            onClick={() => resume(pipelineId)}
+            disabled={!connected}
+            aria-label="Resume"
+            title="Resume generation"
+            style={{
+              padding: '8px 12px', background: 'transparent',
+              border: `1px solid ${tokens.border}`,
+              borderRadius: 4, cursor: connected ? 'pointer' : 'default',
+              opacity: connected ? 1 : 0.5, alignSelf: 'flex-end',
+              color: tokens.text, fontSize: 14, fontFamily: tokens.fontBody,
+              transition: tokens.transition,
+            }}
+          >
+            Resume
+          </button>
+        )}
         <button
           type="submit"
           disabled={!connected || (!input.trim() && !generating)}

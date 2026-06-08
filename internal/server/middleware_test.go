@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	observabilitydomain "openforge/internal/observability/domain"
 )
 
@@ -148,4 +150,32 @@ func TestSecurityHeadersMiddleware(t *testing.T) {
 	if got := rec.Header().Get("Referrer-Policy"); got == "" {
 		t.Fatal("Referrer-Policy header is required")
 	}
+}
+
+func TestRateLimitMiddleware_IPAndProject(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })
+	h := RateLimitMiddleware(100 /*ipPerSec*/, 50 /*projectPerSec*/)(next)
+
+	// IP 维度：50 个不同 IP 的请求不会互相触发限制（远低于 ipPerSec=100）
+	for i := 0; i < 50; i++ {
+		r := httptest.NewRequest("GET", "/x", nil)
+		r.RemoteAddr = fmt.Sprintf("1.2.3.%d:80", i)
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, r)
+		require.Equal(t, 200, rr.Code)
+	}
+
+	// project 维度：同 IP 不同 project 50 个请求全通；第 51 个 429
+	r := httptest.NewRequest("GET", "/x", nil)
+	r.RemoteAddr = "5.6.7.8:80"
+	r.Header.Set("X-Project-ID", "p-1")
+	for i := 0; i < 50; i++ {
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, r)
+		require.Equal(t, 200, rr.Code)
+	}
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, r)
+	require.Equal(t, 429, rr.Code)
+	require.Equal(t, "60", rr.Header().Get("Retry-After")) // WARNING 水位
 }

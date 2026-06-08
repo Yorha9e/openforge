@@ -17,11 +17,51 @@ interface BranchNode extends Branch {
   depth: number;
 }
 
+// Minimal shape required by canActivateBranch — keeps the helper unit-testable
+// without dragging in the full Branch type.
+export type BranchLike = Pick<Branch, 'id' | 'status'>;
+
+export const MAX_ACTIVE_BRANCHES = 3;
+
+export interface ActivationCheck {
+  allowed: boolean;
+  reason?: string;
+}
+
+/**
+ * Decide whether `targetId` may be activated given the current set of
+ * branches. Blocks activation when the user already has MAX_ACTIVE_BRANCHES
+ * active branches; the user must deactivate one first.
+ */
+export function canActivateBranch(
+  branches: BranchLike[],
+  targetId: string,
+): ActivationCheck {
+  const activeCount = branches.filter((b) => b.status === 'active').length;
+  const target = branches.find((b) => b.id === targetId);
+  // If the target is unknown, do not block — let downstream logic handle it.
+  if (!target) {
+    return { allowed: true };
+  }
+  // Clicking an already-active branch is always a no-op, not a violation.
+  if (target.status === 'active') {
+    return { allowed: true };
+  }
+  if (activeCount >= MAX_ACTIVE_BRANCHES) {
+    return {
+      allowed: false,
+      reason: `You already have ${MAX_ACTIVE_BRANCHES} active branches (max ${MAX_ACTIVE_BRANCHES}). Deactivate one before activating a new branch.`,
+    };
+  }
+  return { allowed: true };
+}
+
 export function ChatHistoryPanel() {
   const { pipelineId, activeBranchId, setActiveBranchId } = useProMode();
   const [branches, setBranches] = useState<Branch[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [branchAlert, setBranchAlert] = useState<string | null>(null);
 
   useEffect(() => {
     if (!pipelineId) return;
@@ -76,6 +116,14 @@ export function ChatHistoryPanel() {
   const tree = buildTree(branches);
 
   const handleBranchClick = (branchId: string) => {
+    const check = canActivateBranch(branches, branchId);
+    if (!check.allowed) {
+      setBranchAlert(check.reason ?? 'Cannot activate branch.');
+      // Auto-dismiss the alert after a short delay so it does not stick.
+      window.setTimeout(() => setBranchAlert(null), 5000);
+      return;
+    }
+    setBranchAlert(null);
     setActiveBranchId(branchId);
   };
 
@@ -165,6 +213,21 @@ export function ChatHistoryPanel() {
           {branches.length} branches
         </span>
       </div>
+      {branchAlert && (
+        <div
+          role="alert"
+          style={{
+            padding: '8px 12px',
+            background: '#3d1f1f',
+            color: '#ff7b72',
+            borderBottom: '1px solid #5a2a2a',
+            fontSize: 12,
+            lineHeight: 1.4,
+          }}
+        >
+          {branchAlert}
+        </div>
+      )}
       <div style={{
         flex: 1,
         overflow: 'auto',

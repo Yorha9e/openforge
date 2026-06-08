@@ -2,12 +2,20 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"testing"
 	"time"
 
 	"openforge/internal/pipeline/domain"
 )
+
+// sha256Hex is a small helper used by TOCTOU tests to pre-compute artifact hashes.
+func sha256Hex(b []byte) string {
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}
 
 // mockGateRepo implements port.GateRepository for testing.
 type mockGateRepo struct {
@@ -454,5 +462,122 @@ func TestGateService_PrevHashChaining(t *testing.T) {
 	}
 	if gateMock.events[1].PrevHash != firstHash {
 		t.Errorf("second event prevHash = %q, want %q (should chain from first)", gateMock.events[1].PrevHash, firstHash)
+	}
+}
+
+// mockGateAuditor captures audit entries for assertion in tests.
+type mockGateAuditor struct {
+	entries []gateAuditEntry
+}
+
+type gateAuditEntry struct {
+	EventID string
+	Actor   string
+	Action  string
+	Details string
+}
+
+func (m *mockGateAuditor) Log(_ context.Context, ev GateAuditEvent) {
+	m.entries = append(m.entries, gateAuditEntry{
+		EventID: ev.EventID,
+		Actor:   ev.Actor,
+		Action:  ev.Action,
+		Details: ev.Details,
+	})
+}
+
+// fakeAdvancer records AdvanceAfterGate invocations.
+type fakeAdvancer struct {
+	calls   int
+	lastID  string
+	lastStg string
+	err     error
+}
+
+func (f *fakeAdvancer) AdvanceAfterGate(_ context.Context, pipelineID, stage string) error {
+	f.calls++
+	f.lastID = pipelineID
+	f.lastStg = stage
+	return f.err
+}
+
+func TestGateApproveAndAdvance_TamperArtifact_BlocksDownstream(t *testing.T) {
+	gateMock := &mockGateRepo{}
+	pipeMock := &mockPipelineRepo{
+		pipelines: map[string]*domain.Pipeline{
+			"p1": newL3PipelineAtReview("p1"),
+		},
+	}
+	auditor := &mockGateAuditor{}
+	advancer := &fakeAdvancer{}
+	svc := NewGateService(gateMock, pipeMock).WithAuditor(auditor).WithAdvancer(advancer)
+
+	// Simulate a gate_event already recorded with an artifact hash (representing
+	// the prior review/submission that the gate is approving).
+	gateMock.events = append(gateMock.events, &domain.GateEvent{
+		PipelineID:   "p1",
+		Stage:        "impl",
+		Event:        "submitted",
+		Actor:        "alice",
+		Decision:     "pending",
+		ArtifactHash: "1111111111111111111111111111111111111111111111111111111111111111",
+	})
+
+	// Approver provides tampered content whose sha256 will not match the stored hash.
+	tamperedContent := []byte("different content")
+
+	err := svc.ApproveAndAdvance(context.Background(), "p1", "impl", "u-1", "ok", tamperedContent)
+	if err == nil {
+		t.Fatal("expected ArtifactVerifyError, got nil")
+	}
+	if _, ok := err.(*domain.ArtifactVerifyError); !ok {
+		t.Fatalf("expected *domain.ArtifactVerifyError, got %T: %v", err, err)
+	}
+	if advancer.calls != 0 {
+		t.Errorf("Advancer should NOT be called when artifact hash mismatches; calls=%d", advancer.calls)
+	}
+	if len(auditor.entries) == 0 {
+		t.Error("expected audit entry to be recorded on TOCTOU block")
+	} else {
+		if auditor.entries[0].Action != "gate_toctou_blocked" {
+			t.Errorf("audit action = %q, want %q", auditor.entries[0].Action, "gate_toctou_blocked")
+		}
+	}
+}
+
+func TestGateApproveAndAdvance_MatchingArtifact_AdvancesDownstream(t *testing.T) {
+	gateMock := &mockGateRepo{}
+	pipeMock := &mockPipelineRepo{
+		pipelines: map[string]*domain.Pipeline{
+			"p1": newL3PipelineAtReview("p1"),
+		},
+	}
+	auditor := &mockGateAuditor{}
+	advancer := &fakeAdvancer{}
+	svc := NewGateService(gateMock, pipeMock).WithAuditor(auditor).WithAdvancer(advancer)
+
+	// Compute expected hash from "good content" and seed the event with it.
+	goodContent := []byte("good content")
+	expectedHash := sha256Hex(goodContent)
+	gateMock.events = append(gateMock.events, &domain.GateEvent{
+		PipelineID:   "p1",
+		Stage:        "impl",
+		Event:        "submitted",
+		Actor:        "alice",
+		Decision:     "pending",
+		ArtifactHash: expectedHash,
+	})
+
+	if err := svc.ApproveAndAdvance(context.Background(), "p1", "impl", "u-1", "ok", goodContent); err != nil {
+		t.Fatalf("ApproveAndAdvance() unexpected error: %v", err)
+	}
+	if advancer.calls != 1 {
+		t.Errorf("Advancer should be called once when artifact hash matches; calls=%d", advancer.calls)
+	}
+	if advancer.lastID != "p1" || advancer.lastStg != "impl" {
+		t.Errorf("Advancer called with (%q,%q), want (p1,impl)", advancer.lastID, advancer.lastStg)
+	}
+	if len(auditor.entries) != 0 {
+		t.Errorf("no audit entries should be written on success; got %d", len(auditor.entries))
 	}
 }

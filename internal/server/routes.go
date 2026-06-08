@@ -31,8 +31,8 @@ import (
 func RegisterRoutes(of *profile.OpenForge, jwtSvc *service.JWTService, cfg *profile.Config) http.Handler {
 	mux := http.NewServeMux()
 
-	// Rate limiting (100 req/s per IP)
-	rateLimit := RateLimitMiddleware(100)
+	// Rate limiting (100 req/s per IP, 50 req/s per project)
+	rateLimit := RateLimitMiddleware(100, 50)
 
 	// Multi-tenant project access isolation.
 	authRepo := authadapter.NewPGAuthRepository(of.DB)

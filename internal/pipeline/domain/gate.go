@@ -1,6 +1,11 @@
 package domain
 
-import "time"
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"time"
+)
 
 type GateChecklist struct {
 	CodeReviewed      bool `json:"code_reviewed"`
@@ -29,4 +34,41 @@ type GateEvent struct {
 	PrevHash        string         `json:"prev_hash"`
 	ContentHash     string         `json:"content_hash"`
 	CreatedAt       time.Time      `json:"created_at"`
+}
+
+// ArtifactVerifyError is returned by GateEvent.VerifyArtifactHash when the
+// recomputed sha256 of the artifact contents does not match the hash recorded
+// on the gate event. This guards against TOCTOU tampering of an artifact
+// between submission and downstream-stage advancement.
+type ArtifactVerifyError struct {
+	PipelineID   string
+	Stage        string
+	ExpectedHash string
+	ActualHash   string
+}
+
+func (e *ArtifactVerifyError) Error() string {
+	return fmt.Sprintf("artifact hash mismatch for %s/%s: stored=%s computed=%s",
+		e.PipelineID, e.Stage, e.ExpectedHash, e.ActualHash)
+}
+
+// VerifyArtifactHash recomputes the sha256 of contentBytes and compares it to
+// the ArtifactHash recorded on the gate event. An empty stored hash is treated
+// as a legacy event (no hash to verify) and returns nil so old flows are not
+// regressed.
+func (g *GateEvent) VerifyArtifactHash(contentBytes []byte) error {
+	if g.ArtifactHash == "" {
+		return nil
+	}
+	sum := sha256.Sum256(contentBytes)
+	computed := hex.EncodeToString(sum[:])
+	if computed != g.ArtifactHash {
+		return &ArtifactVerifyError{
+			PipelineID:   g.PipelineID,
+			Stage:        g.Stage,
+			ExpectedHash: g.ArtifactHash,
+			ActualHash:   computed,
+		}
+	}
+	return nil
 }

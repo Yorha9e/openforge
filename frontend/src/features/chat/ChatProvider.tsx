@@ -7,6 +7,7 @@ import type { ToolStatus } from './ToolCallCard';
 interface Message {
   id: string;
   role: 'user' | 'agent' | 'system' | 'tool';
+  kind?: 'text' | 'failure';
   content: string;
   timestamp: number;
   // Tool-specific fields (only when role === 'tool')
@@ -17,6 +18,10 @@ interface Message {
   toolStatus?: ToolStatus;
   toolDurationMs?: number;
   toolError?: string;
+  // Failure-card fields (only when kind === 'failure')
+  failureCode?: string;
+  rawMessage?: string;
+  errorId?: string;
 }
 
 interface PipelineStageInfo {
@@ -32,20 +37,24 @@ interface ChatState {
   messages: Message[];
   streaming: string;
   thinking: boolean;
+  paused: boolean;
   connected: boolean;
   pipelineStage: PipelineStageInfo | null;
   tokenUsed: number;
   tokenBudget: number;
   send: (pipelineId: string, content: string) => void;
   cancel: () => void;
+  pause: (pipelineId: string) => void;
+  resume: (pipelineId: string) => void;
+  editAndResend: (messageId: string, content: string) => void;
   clear: () => void;
 }
 
 const ChatContext = createContext<ChatState>({
   pipelineId: 'default',
-  messages: [], streaming: '', thinking: false, connected: false, pipelineStage: null,
+  messages: [], streaming: '', thinking: false, paused: false, connected: false, pipelineStage: null,
   tokenUsed: 0, tokenBudget: 0,
-  send: () => {}, cancel: () => {}, clear: () => {},
+  send: () => {}, cancel: () => {}, pause: () => {}, resume: () => {}, editAndResend: () => {}, clear: () => {},
 });
 
 export function ChatProvider({ pipelineId, branchId, children, onLogEntry }: { pipelineId: string; branchId?: string; children: ReactNode; onLogEntry?: (entry: any) => void }) {
@@ -54,6 +63,7 @@ export function ChatProvider({ pipelineId, branchId, children, onLogEntry }: { p
   const [messages, setMessages] = useState<Message[]>([]);
   const [streaming, setStreaming] = useState('');
   const [thinking, setThinking] = useState(false);
+  const [paused, setPaused] = useState(false);
   const [pipelineStage, setPipelineStage] = useState<PipelineStageInfo | null>(null);
   const [tokenUsed, setTokenUsed] = useState(0);
   const [tokenBudget, setTokenBudget] = useState(0);
@@ -65,6 +75,7 @@ export function ChatProvider({ pipelineId, branchId, children, onLogEntry }: { p
     setMessages([]);
     setStreaming('');
     setThinking(false);
+    setPaused(false);
     streamingRef.current = '';
     idCounter.current = 0;
 
@@ -114,9 +125,20 @@ export function ChatProvider({ pipelineId, branchId, children, onLogEntry }: { p
     });
     const unsub3 = subscribe('error', (p: any) => {
       setThinking(false);
+      const code = (p?.failure_code as string) || 'UNKNOWN';
+      const raw = (p?.message as string) ?? '';
+      const errId = (p?.error_id as string) ?? (typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `err-${Date.now()}-${++idCounter.current}`);
       setMessages(prev => [...prev, {
-        id: `err-${++idCounter.current}`, role: 'system',
-        content: `Error: ${p?.message || 'Unknown error'}`, timestamp: Date.now(),
+        id: `err-${++idCounter.current}`,
+        role: 'system',
+        kind: 'failure',
+        content: raw || code,
+        failureCode: code,
+        rawMessage: raw,
+        errorId: errId,
+        timestamp: Date.now(),
       }]);
       setStreaming('');
       streamingRef.current = '';
@@ -156,6 +178,14 @@ export function ChatProvider({ pipelineId, branchId, children, onLogEntry }: { p
     });
     const unsub11 = subscribe('pipeline.finished', (p: any) => {
       setPipelineStage(prev => prev ? { ...prev, status: p?.status || 'completed' } : null);
+    });
+    // Server-echoed pause/resume state. Lets the UI reflect a pause triggered
+    // out-of-band (e.g. gate approval pending) without re-querying.
+    const unsub12 = subscribe('chat.paused', (_p: any) => {
+      setPaused(true);
+    });
+    const unsub13 = subscribe('chat.resumed', (_p: any) => {
+      setPaused(false);
     });
 
     // Tool execution events
@@ -290,7 +320,7 @@ export function ChatProvider({ pipelineId, branchId, children, onLogEntry }: { p
       });
     });
 
-    return () => { unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); unsub6(); unsub7(); unsub8(); unsub9(); unsub10(); unsub11(); };
+    return () => { unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); unsub6(); unsub7(); unsub8(); unsub9(); unsub10(); unsub11(); unsub12(); unsub13(); };
   }, [subscribe]);
 
   const send = useCallback((_pid: string, content: string) => {
@@ -317,12 +347,44 @@ export function ChatProvider({ pipelineId, branchId, children, onLogEntry }: { p
     wsSend('chat.stop', {});
   }, [wsSend, status]);
 
+  const pause = useCallback((targetPipelineId: string) => {
+    setPaused(true);
+    if (status !== 'open') return;
+    wsSend('chat.pause', { pipeline_id: targetPipelineId });
+  }, [wsSend, status]);
+
+  const resume = useCallback((targetPipelineId: string) => {
+    setPaused(false);
+    if (status !== 'open') return;
+    wsSend('chat.resume', { pipeline_id: targetPipelineId });
+  }, [wsSend, status]);
+
+  const editAndResend = useCallback((messageId: string, content: string) => {
+    if (status !== 'open') {
+      setMessages(prev => [...prev, {
+        id: `err-${++idCounter.current}`, role: 'system',
+        content: 'Cannot edit & resend: WebSocket is not connected. Please wait for reconnection...',
+        timestamp: Date.now(),
+      }]);
+      return;
+    }
+    // Two-step: tell the server to drop the previous turn (correlated by
+    // message_id), then send the new content as a fresh chat.send.
+    wsSend('chat.edit', { message_id: messageId, content });
+    setMessages(prev => [...prev, {
+      id: `user-${++idCounter.current}`, role: 'user',
+      content, timestamp: Date.now(),
+    }]);
+    const workDir = localStorage.getItem('openforge_work_dir') || '';
+    wsSend('chat.send', { pipeline_id: pipelineId, message: content, work_dir: workDir });
+  }, [wsSend, pipelineId, status]);
+
   const clear = useCallback(() => {
-    setMessages([]); setStreaming(''); setThinking(false); streamingRef.current = '';
+    setMessages([]); setStreaming(''); setThinking(false); setPaused(false); streamingRef.current = '';
   }, []);
 
   return (
-    <ChatContext.Provider value={{ pipelineId, messages, streaming, thinking, connected: status === 'open', pipelineStage, tokenUsed, tokenBudget, send, cancel, clear }}>
+    <ChatContext.Provider value={{ pipelineId, messages, streaming, thinking, paused, connected: status === 'open', pipelineStage, tokenUsed, tokenBudget, send, cancel, pause, resume, editAndResend, clear }}>
       {children}
     </ChatContext.Provider>
   );

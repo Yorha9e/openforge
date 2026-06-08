@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useParams } from 'react-router-dom';
 import { useAuth, useCanAccess, useRole } from './shared/auth';
 import { api, FeatureFlags } from './shared/api';
 import { LoginPage } from './features/login/LoginPage';
@@ -8,6 +8,7 @@ import { InviteRoute } from './features/invite/InviteRoute';
 import { DashboardPage } from './features/dashboard/DashboardPage';
 import { ProjectPage } from './features/project/ProjectPage';
 import { ChatPanel } from './features/chat/ChatPanel';
+import { SimpleModePage, viewModeFromSettings, ViewMode } from './features/code-review/SimpleModePage';
 
 const ProModePage = lazy(() => import('./features/code-review/ProModePage'));
 const CostDashboardPage = lazy(() => import('./features/cost-dashboard/CostDashboardPage'));
@@ -58,6 +59,33 @@ function LoadingFallback() {
   );
 }
 
+// Shunts the project chat route to either SimpleMode (default) or the
+// legacy ProMode chat panel based on the user's defaultViewMode setting.
+function SimpleOrProModeRouter() {
+  const { id } = useParams<{ id: string }>();
+  const [viewMode, setViewMode] = useState<ViewMode>('simple');
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getSettings()
+      .then((s) => {
+        if (!cancelled) setViewMode(viewModeFromSettings(s));
+      })
+      .catch(() => {
+        if (!cancelled) setViewMode('simple');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (!id) return <Navigate to="/" replace />;
+  return viewMode === 'pro'
+    ? <ChatPanel />
+    : <SimpleModePage projectId={id} />;
+}
+
 export function App() {
   const [featureFlags, setFeatureFlags] = useState<FeatureFlags | null>(null);
   const [isElectron, setIsElectron] = useState(false);
@@ -99,7 +127,7 @@ export function App() {
       <Route path="/invite" element={<InviteRoute />} />
       <Route path="/" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
       <Route path="/project/:id" element={<ProtectedRoute><ProjectPage /></ProtectedRoute>} />
-      <Route path="/project/:id/chat" element={<ProtectedRoute><ChatPanel /></ProtectedRoute>} />
+      <Route path="/project/:id/chat" element={<ProtectedRoute><SimpleOrProModeRouter /></ProtectedRoute>} />
       <Route path="/project/:id/pipeline/:pid" element={
         <ProtectedRoute><Suspense fallback={<LoadingFallback />}><ProModePage /></Suspense></ProtectedRoute>
       } />
