@@ -310,6 +310,104 @@ func (r *PGRepository) GetCurrentMonthUsage(ctx context.Context, projectID strin
 	return tokens, cost, err
 }
 
+// --- RecordTokenUsage ---
+
+// RecordTokenUsage 写入单条 token_usage 记录。
+// 注：DB 中 id 列为 BIGSERIAL（与 created_at 组成复合主键，无单独 UNIQUE 约束）；
+//     因此不使用 ON CONFLICT，调用方需自行保证幂等。rec.ID 仅用于日志/回执关联。
+func (r *PGRepository) RecordTokenUsage(ctx context.Context, rec port.TokenUsageRecord) error {
+	if r == nil || r.db == nil {
+		return fmt.Errorf("pipeline repository database is not configured")
+	}
+	const q = `
+		INSERT INTO token_usage
+			(pipeline_id, project_id, provider, model,
+			 prompt_tokens, completion_tokens, estimated_cost, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	`
+	_, err := r.db.ExecContext(ctx, q,
+		rec.PipelineID, rec.ProjectID, rec.Provider, rec.Model,
+		rec.PromptTokens, rec.CompletionTokens, rec.EstimatedCost, rec.CreatedAt)
+	return err
+}
+
+// BatchRecordTokenUsage 在单个事务内批量写入；空切片为 no-op。
+func (r *PGRepository) BatchRecordTokenUsage(ctx context.Context, recs []port.TokenUsageRecord) error {
+	if len(recs) == 0 {
+		return nil
+	}
+	if r == nil || r.db == nil {
+		return fmt.Errorf("pipeline repository database is not configured")
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() // safe; Commit 后 no-op
+
+	const q = `
+		INSERT INTO token_usage
+			(pipeline_id, project_id, provider, model,
+			 prompt_tokens, completion_tokens, estimated_cost, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	`
+	stmt, err := tx.PrepareContext(ctx, q)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for _, rec := range recs {
+		if _, err := stmt.ExecContext(ctx,
+			rec.PipelineID, rec.ProjectID, rec.Provider, rec.Model,
+			rec.PromptTokens, rec.CompletionTokens, rec.EstimatedCost, rec.CreatedAt,
+		); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// --- Cost Quota ---
+
+// GetBudget 读 cost_quota 中给定 project 的月度预算（美元）。0 表示无限制。
+//
+// TODO(Path-A schema gap): 现有 cost_quota schema 没有 monthly_usd 列，PK 也不是
+// project_id 单列。T10 集成验证时需要先补迁移（012_cost_quota_monthly_usd.up.sql）。
+func (r *PGRepository) GetBudget(ctx context.Context, projectID string) (float64, error) {
+	if r == nil || r.db == nil {
+		return 0, fmt.Errorf("pipeline repository database is not configured")
+	}
+	var b sql.NullFloat64
+	err := r.db.QueryRowContext(ctx, `SELECT monthly_usd FROM cost_quota WHERE project_id = $1`, projectID).Scan(&b)
+	if err == sql.ErrNoRows {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	if !b.Valid {
+		return 0, nil
+	}
+	return b.Float64, nil
+}
+
+// SetBudget 覆盖写 cost_quota 行（PK = project_id）。monthlyUSD=0 表示清空。
+//
+// TODO(Path-A schema gap): 现有 cost_quota schema 没有 monthly_usd / updated_at 列，
+// 且 UNIQUE 约束是 (project_id, month) 而非 project_id 单列。T10 集成验证时需要
+// 先补迁移并决定是用 (project_id) 单列还是 (project_id, month='all') 行。
+func (r *PGRepository) SetBudget(ctx context.Context, projectID string, monthlyUSD float64) error {
+	if r == nil || r.db == nil {
+		return fmt.Errorf("pipeline repository database is not configured")
+	}
+	_, err := r.db.ExecContext(ctx, `
+		INSERT INTO cost_quota (project_id, monthly_usd, updated_at)
+		VALUES ($1, $2, NOW())
+		ON CONFLICT (project_id) DO UPDATE SET monthly_usd = EXCLUDED.monthly_usd, updated_at = NOW()
+	`, projectID, monthlyUSD)
+	return err
+}
+
 func nextMonthReset() time.Time {
 	now := time.Now()
 	return time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()).AddDate(0, 1, 0)

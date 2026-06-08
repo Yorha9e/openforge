@@ -13,7 +13,9 @@ import (
 	"time"
 
 	"openforge/internal/adapter"
+	agentadapter "openforge/internal/agent/adapter"
 	agentdomain "openforge/internal/agent/domain"
+	"openforge/gen/go/agent/v1/agentv1connect"
 	authadapter "openforge/internal/auth/adapter"
 	authdomain "openforge/internal/auth/domain"
 	rbacmw "openforge/internal/auth/middleware"
@@ -132,6 +134,7 @@ func RegisterRoutes(of *profile.OpenForge, jwtSvc *service.JWTService, cfg *prof
 	// Token/Cost (pm)
 	mux.HandleFunc("GET /api/projects/{id}/token-usage", withRole("pm", handleTokenUsage(of)))
 	mux.HandleFunc("GET /api/projects/{id}/token-budget", withRole("pm", handleTokenBudget(of)))
+	mux.HandleFunc("PUT /api/projects/{id}/token-budget", withRoles([]string{"pm", "admin"}, handleUpdateBudget(of)))
 
 	// Models (observer)
 	mux.HandleFunc("GET /api/models", withRole("observer", handleListModels(of)))
@@ -184,6 +187,17 @@ func RegisterRoutes(of *profile.OpenForge, jwtSvc *service.JWTService, cfg *prof
 
 	// WebSocket (auth via first-frame protocol, not HTTP header)
 	mux.HandleFunc("GET /ws/chat", handleChatWS(of, jwtSvc))
+
+	// T2: gRPC server for Node.js IO layer → Go (LLMRouterService.RecordTokenUsage).
+	// The other 5 RPCs return CodeUnimplemented (their production handlers live
+	// in Node.js on :50051). Mounted as a path prefix to avoid colliding with
+	// the static file handler below.
+	if of.PipelineRepo != nil {
+		llmServer := agentadapter.NewLLMRouterGRPCServer(of.PipelineRepo)
+		grpcPath, grpcHandler := agentv1connect.NewLLMRouterServiceHandler(llmServer)
+		mux.Handle("POST "+grpcPath, grpcHandler)
+		mux.Handle("GET "+grpcPath, grpcHandler)
+	}
 
 	// Static files
 	mux.HandleFunc("GET /", handleStatic())
@@ -816,6 +830,28 @@ func handleTokenBudget(of *profile.OpenForge) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusOK, b)
+	}
+}
+
+func handleUpdateBudget(of *profile.OpenForge) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		projectID := r.PathValue("id")
+		var body struct {
+			MonthlyUSD float64 `json:"monthly_usd"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeError(w, 400, "invalid body")
+			return
+		}
+		if body.MonthlyUSD < 0 {
+			writeError(w, 400, "monthly_usd must be >= 0")
+			return
+		}
+		if err := of.PipelineRepo.SetBudget(r.Context(), projectID, body.MonthlyUSD); err != nil {
+			writeError(w, 500, err.Error())
+			return
+		}
+		writeJSON(w, 200, map[string]any{"project_id": projectID, "monthly_usd": body.MonthlyUSD})
 	}
 }
 

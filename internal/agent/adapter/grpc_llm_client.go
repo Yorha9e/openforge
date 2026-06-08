@@ -61,6 +61,19 @@ func (c *LLMClient) ChatStream(ctx context.Context, req port.ChatRequest) (<-cha
 	return ch, nil
 }
 
+// RecordTokenUsage is a typed wrapper around the generated client's
+// RecordTokenUsage RPC. Used by the Go coordinate layer when it needs to
+// persist its own in-process token-usage records via the Node LLM router.
+// For the Node → Go direction (TokenMeter.flush → token_usage table), use
+// LLMRouterGRPCServer's RecordTokenUsage method directly.
+func (c *LLMClient) RecordTokenUsage(ctx context.Context, recs []*agentv1.TokenUsageRecord) (inserted, skipped int32, err error) {
+	resp, err := c.client.RecordTokenUsage(ctx, connect.NewRequest(&agentv1.RecordTokenUsageRequest{Records: recs}))
+	if err != nil {
+		return 0, 0, err
+	}
+	return resp.Msg.GetInserted(), resp.Msg.GetSkipped(), nil
+}
+
 // Close releases idle HTTP connections.
 func (c *LLMClient) Close() error {
 	c.httpClient.CloseIdleConnections()

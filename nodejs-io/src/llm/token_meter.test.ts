@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { TokenMeter } from "./token_meter.js";
 
 describe("TokenMeter", () => {
@@ -51,3 +51,29 @@ describe("TokenMeter", () => {
     expect(s.byProvider.length).toBe(2);
   });
 });
+
+describe("TokenMeter.flushNow()", () => {
+  it("calls injected transport with buffered records", async () => {
+    const sentPayloads: unknown[][] = [];
+    const transport = vi.fn(async (batch) => {
+      sentPayloads.push([...batch]);
+    });
+    const m = new TokenMeter(transport);
+    m.record({ pipelineId: "p1", projectId: "pr1", provider: "anthropic", model: "claude-sonnet-4-6", inputTokens: 10, outputTokens: 20, timestamp: new Date() });
+    m.record({ pipelineId: "p1", projectId: "pr1", provider: "anthropic", model: "claude-sonnet-4-6", inputTokens: 30, outputTokens: 40, timestamp: new Date() });
+
+    await m.flushNow();
+
+    expect(transport).toHaveBeenCalledTimes(1);
+    expect(sentPayloads).toHaveLength(1);
+    expect(sentPayloads[0]).toHaveLength(2);
+  });
+
+  it("is no-op when buffer empty", async () => {
+    const transport = vi.fn(async () => {});
+    const m = new TokenMeter(transport);
+    await m.flushNow();
+    expect(transport).not.toHaveBeenCalled();
+  });
+});
+

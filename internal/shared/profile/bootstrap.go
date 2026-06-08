@@ -23,6 +23,7 @@ import (
 	observabilitydomain "openforge/internal/observability/domain"
 	pipelineadapter "openforge/internal/pipeline/adapter"
 	"openforge/internal/pipeline/service"
+	policyadapter "openforge/internal/policy/adapter"
 	"openforge/internal/shared/featureflags"
 	"openforge/internal/shared/kernel"
 )
@@ -83,6 +84,9 @@ type OpenForge struct {
 	DB              *sql.DB
 	DepCache        *adapter.DependencyCache
 	DataLifecycle   *compliance.DataLifecycle // G16: compliance data lifecycle manager
+	// AuditLog is the WORM audit logger. After T4 it uses a dedicated
+	// of_audit_writer connection (cfg.AuditWriterDSN) for INSERTs.
+	AuditLog        *policyadapter.AuditLogger
 	Shutdown        func()                    // G16: graceful shutdown callback
 }
 
@@ -137,7 +141,25 @@ func Bootstrap(cfg *Config) (*OpenForge, error) {
 	of := &OpenForge{Config: cfg}
 	of.Secrets = newSecretStore(cfg)
 	of.Container = newContainerRuntime(cfg)
-	of.Object = newObjectStore(cfg)
+	objStore := newObjectStore(cfg)
+	of.Object = objStore
+
+	// T7: After constructing the MinIO store, apply bucket-level object
+	// lock in GOVERNANCE mode with 365-day default retention. This closes
+	// the WORM-at-S3-level loop: combined with T4 (audit_log DB-level
+	// REVOKE) and T5 (VerifyChain), the audit trail is triple-protected.
+	// We only attempt this when the store is the real MinIO implementation
+	// AND IsEnabled() is true; otherwise the bucket isn't reachable and
+	// any RPC would fail. Failure is logged but non-fatal — the bucket may
+	// already have the lock applied, or a follow-up bootstrap can re-try.
+	if ms, ok := objStore.(*adapter.MinioObjectStore); ok && ms.IsEnabled() {
+		if err := ms.SetBucketObjectLock(context.Background(), kernel.ObjectLockConfig{
+			Mode: kernel.ObjectLockModeGovernance,
+			Days: 365,
+		}); err != nil {
+			slog.Warn("minio object lock not applied", "err", err, "bucket", cfg.Minio.Bucket)
+		}
+	}
 	of.TaskQ = newTaskQueue(cfg)
 	of.Events = newEventBus(cfg)
 	of.Cache = newCache(cfg)
@@ -195,6 +217,61 @@ func Bootstrap(cfg *Config) (*OpenForge, error) {
 	db.SetConnMaxIdleTime(1 * time.Minute) // Maximum idle time of a connection
 	
 	of.DB = db
+
+	// G16: Open a separate writer connection for the audit log so that
+	// INSERTs flow through the dedicated of_audit_writer role. The reader
+	// side keeps using the application DSN (openforge), which after
+	// migration 012 only has SELECT on audit_log. When the writer DSN is
+	// not configured we keep the legacy single-DSN behavior.
+	if cfg.AuditWriterDSN != "" {
+		auditWriter, err := sql.Open("postgres", cfg.AuditWriterDSN)
+		if err != nil {
+			return nil, fmt.Errorf("audit writer db: %w", err)
+		}
+		auditWriter.SetMaxOpenConns(5)
+		auditWriter.SetMaxIdleConns(2)
+		auditWriter.SetConnMaxLifetime(5 * time.Minute)
+		of.AuditLog = policyadapter.NewWithWriter(db, auditWriter)
+	} else {
+		of.AuditLog = policyadapter.NewAuditLogger(db)
+	}
+
+	// T5: WORM audit chain hourly scanner. Every hour, re-walk the
+	// prev_hash/content_hash chain for the last three months of partitions
+	// and surface any break to the operator via the configured notifier.
+	// This complements T4's DB-level REVOKE: T4 stops future tampering
+	// at the role boundary, this ticker catches tampering that already
+	// happened (e.g. via a compromised operator session or direct PG
+	// superuser access). The goroutine lives for the lifetime of the
+	// process; it is not registered with the shutdown callback because a
+	// ticker that exits on shutdown is harmless and the audit chain check
+	// is read-only.
+	auditScanCtx, auditScanCancel := context.WithCancel(context.Background())
+	go func() {
+		ticker := time.NewTicker(1 * time.Hour)
+		defer ticker.Stop()
+		// Run an initial scan at startup so a freshly-bootstrapped
+		// process surfaces any pre-existing chain break within seconds
+		// rather than waiting an hour.
+		runAuditScan(auditScanCtx, of)
+		for {
+			select {
+			case <-ticker.C:
+				runAuditScan(auditScanCtx, of)
+			case <-auditScanCtx.Done():
+				return
+			}
+		}
+	}()
+	// Roll the cancel into the shutdown callback so a graceful stop
+	// terminates the ticker.
+	prevShutdown := of.Shutdown
+	of.Shutdown = func() {
+		auditScanCancel()
+		if prevShutdown != nil {
+			prevShutdown()
+		}
+	}
 
 	// G13: Initialize disaster recovery with DB connection
 	of.DR = newDisasterRecovery(cfg, db)
@@ -346,6 +423,34 @@ func Bootstrap(cfg *Config) (*OpenForge, error) {
 // Minimal / stub implementations — one per kernel interface.
 // ---------------------------------------------------------------------------
 
+// runAuditScan executes one pass of the WORM audit chain scanner and
+// surfaces any break to the configured notifier. The error is always
+// logged; the notifier is a best-effort escalation path. This function is
+// called by the hourly ticker started in Bootstrap and also once at
+// startup so a freshly-bootstrapped process surfaces pre-existing breaks
+// without waiting an hour.
+func runAuditScan(ctx context.Context, of *OpenForge) {
+	if of.AuditLog == nil {
+		return
+	}
+	err := of.AuditLog.ScanFullChain(ctx)
+	if err == nil {
+		return
+	}
+	slog.Error("audit chain scan failed", "err", err)
+	if of.Notifier != nil {
+		// Best-effort: we don't propagate the notification error because
+		// the scan already failed and the operator has the log line. A
+		// failing notifier is a separate problem.
+		_ = of.Notifier.Send(ctx, kernel.Target{}, kernel.Notification{
+			Level:     "critical",
+			Title:     "audit-chain-break",
+			Body:      err.Error(),
+			ActionURL: "",
+		})
+	}
+}
+
 // --- SecretStore -----------------------------------------------------------
 // ChainSecretStore tries each store in order and returns the first successful
 // result. If all stores fail, the last error is returned. This enables the
@@ -445,11 +550,15 @@ type noopObjectStore struct{}
 func newObjectStore(cfg *Config) kernel.ObjectStore {
 	switch cfg.ObjectStore {
 	case "minio":
-		slog.Info("object_store: minio selected (adapter pending Phase 5)")
-		return &noopObjectStore{}
-	case "s3":
-		slog.Info("object_store: s3 selected (adapter pending Phase 5)")
-		return &noopObjectStore{}
+		return adapter.NewMinioObjectStore(adapter.MinioConfig{
+			Endpoint:        cfg.Minio.Endpoint,
+			AccessKeyID:     cfg.Minio.AccessKeyID,
+			SecretAccessKey: cfg.Minio.SecretAccessKey,
+			Bucket:          cfg.Minio.Bucket,
+			UseSSL:          cfg.Minio.UseSSL,
+			Region:          cfg.Minio.Region,
+			Timeout:         cfg.Minio.TimeoutOrDefault(),
+		})
 	default:
 		return &noopObjectStore{}
 	}
@@ -466,6 +575,15 @@ func (s *noopObjectStore) Delete(_ context.Context, key string) error {
 }
 func (s *noopObjectStore) List(_ context.Context, prefix string) ([]string, error) {
 	return nil, nil
+}
+func (s *noopObjectStore) SetBucketObjectLock(_ context.Context, _ kernel.ObjectLockConfig) error {
+	return nil
+}
+func (s *noopObjectStore) GetBucketObjectLock(_ context.Context) (kernel.ObjectLockConfig, error) {
+	return kernel.ObjectLockConfig{}, nil
+}
+func (s *noopObjectStore) SetObjectRetention(_ context.Context, _ string, _ kernel.RetentionConfig) error {
+	return nil
 }
 
 // --- TaskQueue -------------------------------------------------------------

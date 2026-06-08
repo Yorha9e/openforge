@@ -3,11 +3,15 @@ package main
 import (
 	"bufio"
 	"context"
+	"database/sql"
 	"fmt"
+	"log"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
+
+	_ "github.com/lib/pq"
 
 	"openforge/internal/agent/domain"
 	"openforge/internal/agent/port"
@@ -16,6 +20,49 @@ import (
 )
 
 func main() {
+	// Subcommand dispatch (T8): `openforge migrate profile <from> <to>`
+	// runs the profile backend migration and exits without entering the
+	// interactive REPL. Handled before the bootstrap so the operator
+	// can run the migration on a host that has a profile config but
+	// is otherwise not ready to start the daemon.
+	if len(os.Args) >= 4 && os.Args[1] == "migrate" && os.Args[2] == "profile" {
+		from, to := os.Args[3], os.Args[4]
+		configPath := os.Getenv("OF_PROFILE")
+		if configPath == "" {
+			configPath = "config/profiles/minimal.yaml"
+		}
+		// Allow `--config` to override the env-derived path.
+		for i := 5; i < len(os.Args); i++ {
+			if os.Args[i] == "--config" && i+1 < len(os.Args) {
+				configPath = os.Args[i+1]
+			}
+		}
+
+		cfg, err := profile.Load(configPath, false)
+		if err != nil {
+			log.Fatalf("migrate profile: load profile %s: %v", configPath, err)
+		}
+		db, err := sql.Open("postgres", cfg.Database.DSN())
+		if err != nil {
+			log.Fatalf("migrate profile: open db: %v", err)
+		}
+		defer db.Close()
+
+		res, err := profile.MigrateProfileBackend(context.Background(), db, from, to)
+		if err != nil {
+			log.Fatalf("migrate profile %s → %s: %v", from, to, err)
+		}
+		for _, s := range res.Steps {
+			log.Printf("step: %s", s)
+		}
+		for _, w := range res.Warnings {
+			log.Printf("WARN: %s", w)
+		}
+		fmt.Printf("profile migration %s → %s complete (%d steps, %d warnings)\n",
+			res.From, res.To, len(res.Steps), len(res.Warnings))
+		return
+	}
+
 	configPath := "config/profiles/minimal.yaml"
 	for i := 1; i < len(os.Args); i++ {
 		if os.Args[i] == "--config" && i+1 < len(os.Args) {
